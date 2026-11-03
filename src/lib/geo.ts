@@ -37,6 +37,23 @@ export function centroid(poly: XZ[]): XZ {
   return [cx / (3 * a), cz / (3 * a)];
 }
 
+// 多角形を直線で切って、片側だけを残す（Sutherland–Hodgman）。
+// 残すのは、点 p を通り向き (dx, dz) の直線の左側（dx * (z - pz) - dz * (x - px) >= 0 の側）
+export function clipHalf(poly: XZ[], [px, pz]: XZ, [dx, dz]: XZ): XZ[] {
+  const side = ([x, z]: XZ) => dx * (z - pz) - dz * (x - px);
+  const out: XZ[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const sa = side(a), sb = side(b);
+    if (sa >= 0) out.push(a);
+    if (sa >= 0 !== sb >= 0) {
+      const t = sa / (sa - sb);
+      out.push([Math.round((a[0] + (b[0] - a[0]) * t) * 10) / 10, Math.round((a[1] + (b[1] - a[1]) * t) * 10) / 10]);
+    }
+  }
+  return out;
+}
+
 function hull(points: XZ[]): XZ[] {
   const p = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const cross = (o: XZ, a: XZ, b: XZ) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);

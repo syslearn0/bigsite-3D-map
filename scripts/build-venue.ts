@@ -3,7 +3,7 @@
 // 南展示棟は OSM に外形1つ（ホール＋西展示棟へつなぐ通路）しかないので、ホールの部分を切り出して「形は概略」とする。
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { project, type XZ } from "../src/lib/geo";
+import { centroid, clipHalf, minAreaRect, project, type XZ } from "../src/lib/geo";
 
 type El = { type: string; id: number; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[]; lat?: number; lon?: number };
 const osm = JSON.parse(readFileSync("data/osm/bigsight.json", "utf8")) as { fetchedAt: string; elements: El[] };
@@ -39,8 +39,20 @@ const south = byName("南展示場");
 const sp = poly(south);
 const southHall: XZ[] = [...sp.slice(0, 5), sp.at(-1)!];
 const southPassage: XZ[] = sp.slice(4);
-halls.push({ id: "S12", name: "南1・2ホール", building: "南", level: 1, poly: southHall, rough: true, osm: `${south.type}/${south.id}` });
-halls.push({ id: "S34", name: "南3・4ホール", building: "南", level: 4, poly: southHall, rough: true, osm: `${south.type}/${south.id}` });
+// ホールの部分を長い向きに2つに分ける（南1と南2は可動の間仕切りで隣り合う）。
+// 西展示棟に近い側が南1（4F は南3）。分け目の位置は半分にした概略で、図面の形はなぞっていない
+const rect = minAreaRect(southHall);
+const axis: XZ = [Math.cos(rect.angle), Math.sin(rect.angle)];
+const halfA = clipHalf(southHall, rect.center, [-axis[1], axis[0]].map((v) => -v) as XZ);
+const halfB = clipHalf(southHall, rect.center, [-axis[1], axis[0]] as XZ);
+const west = centroid(poly(byName("西展示棟")));
+const dist = (p: XZ[]) => Math.hypot(centroid(p)[0] - west[0], centroid(p)[1] - west[1]);
+const [nearWest, farWest] = dist(halfA) < dist(halfB) ? [halfA, halfB] : [halfB, halfA];
+const s = `${south.type}/${south.id}`;
+halls.push({ id: "S1", name: "南1ホール", building: "南", level: 1, poly: nearWest, rough: true, osm: s });
+halls.push({ id: "S2", name: "南2ホール", building: "南", level: 1, poly: farWest, rough: true, osm: s });
+halls.push({ id: "S3", name: "南3ホール", building: "南", level: 4, poly: nearWest, rough: true, osm: s });
+halls.push({ id: "S4", name: "南4ホール", building: "南", level: 4, poly: farWest, rough: true, osm: s });
 
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[] };
