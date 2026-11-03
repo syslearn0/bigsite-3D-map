@@ -6,7 +6,7 @@ import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
-import { centroid, type XZ } from "@/lib/geo";
+import { centroid, pointInPolygon, type XZ } from "@/lib/geo";
 import { DESK_D, DESK_L, expandBooths, parseCode, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -134,6 +134,8 @@ export function VenueView() {
     }
   });
   const [listOpen, setListOpen] = useState(false);
+  const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
+  const onHere = useRef(setHere);
 
   useEffect(() => {
     try {
@@ -162,8 +164,12 @@ export function VenueView() {
 
     // 階ごとの入れ物。選んでいない階は床を薄くし、机・壁・文字を隠す
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
-    // ホールの名前：上から全体を見ているときにも読めるよう、引くほど大きくする（元の大きさを覚えておく）
-    const hallLabels: { s: THREE.Sprite; base: THREE.Vector3 }[] = [];
+    // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
+    // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
+    type LabelKind = "hall" | "area" | "wc" | "block";
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, block: 15 };
+    const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
+    const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
     const levels = new Map<number, LevelParts>();
     const partsOf = (lv: number) => {
       if (!levels.has(lv)) levels.set(lv, { floors: [], solid: [] });
@@ -181,6 +187,7 @@ export function VenueView() {
       label.position.set(cx, y + 3, cz);
       scene.add(label);
       partsOf(a.level).solid.push(label);
+      addLabel(label, "area");
     }
     for (const h of venue.halls) {
       const y = floorY(h.level);
@@ -196,7 +203,7 @@ export function VenueView() {
       label.position.set(cx, y + 14, cz);
       scene.add(label);
       partsOf(h.level).solid.push(label);
-      hallLabels.push({ s: label, base: label.scale.clone() });
+      addLabel(label, "hall");
     }
     for (const t of venue.toilets) {
       const lv = t.level ?? 1;
@@ -204,6 +211,7 @@ export function VenueView() {
       m.position.set(t.at[0], floorY(lv) + 3, t.at[1]);
       scene.add(m);
       partsOf(lv).solid.push(m);
+      addLabel(m, "wc");
     }
 
     // 机（スペース＝机半分）。階ごとに InstancedMesh
@@ -237,6 +245,7 @@ export function VenueView() {
       s.position.set(l.start[0] - Math.cos(l.angle) * 1.5, floorY(h.level) + 3.2, l.start[1] - Math.sin(l.angle) * 1.5);
       scene.add(s);
       partsOf(h.level).solid.push(s);
+      addLabel(s, "block");
     }
     // 選んだ机の印
     const pin = new THREE.Group();
@@ -343,9 +352,12 @@ export function VenueView() {
           mat.depthWrite = on;
           m.visible = on || !walk;
         }
-        for (const o of p.solid) o.visible = on;
+        // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める
+        for (const o of p.solid) {
+          if (o instanceof THREE.Sprite) o.userData.levelOn = on;
+          else o.visible = on;
+        }
       }
-      for (const { s } of hallLabels) if (walk) s.visible = false;
       pin.visible = pinOn && !walk;
     };
     const setFloor = (f: Floor) => {
@@ -483,6 +495,39 @@ export function VenueView() {
     addEventListener("keydown", onKey);
     addEventListener("keyup", onKey);
 
+    // 1m が画面の何 px か（その場所で）
+    const pxPerM = (at: THREE.Vector3) => {
+      const h = el.clientHeight;
+      if (current === "top") return (h * ortho.zoom) / (2 * 160);
+      return h / (2 * Math.max(0.1, camera.position.distanceTo(at)) * Math.tan((persp.fov * Math.PI) / 360));
+    };
+    let hereName = "";
+    const placeLabels = () => {
+      const walk = current === "walk";
+      for (const { s, kind, base } of labels) {
+        let show = s.userData.levelOn !== false;
+        if (walk) {
+          s.scale.copy(base);
+          if (kind === "hall") show = false;
+        } else {
+          const ppm = pxPerM(s.position);
+          s.scale.copy(base).multiplyScalar(LABEL_PX[kind] / (base.y * ppm));
+          if (kind === "hall" && ppm >= 3.5) show = false;
+          if (kind === "block" && ppm < 2.2) show = false;
+          if (kind === "area" && ppm < 0.9) show = false;
+        }
+        s.visible = show;
+      }
+      // 近づいてホールの名前を消したときは、画面の真ん中（歩くときは自分の足元）のホールの名前を隅に出す
+      const near = walk || pxPerM(focus) >= 3.5;
+      const h = near ? venue.halls.find((x) => floorOf(x.level) === currentFloor && pointInPolygon([focus.x, focus.z], x.poly)) : undefined;
+      const name = h ? h.name + (h.level >= 4 ? "（4F）" : "") : "";
+      if (name !== hereName) {
+        hereName = name;
+        onHere.current(name);
+      }
+    };
+
     // ---- 毎フレーム ----
     let raf = 0;
     let last = performance.now();
@@ -507,8 +552,7 @@ export function VenueView() {
       } else controls?.update();
       if (controls) focus.set(controls.target.x, focus.y, controls.target.z);
       else if (current === "walk") focus.set(persp.position.x, focus.y, persp.position.z);
-      const grow = current === "top" ? Math.min(4, Math.max(1, 1.6 / ortho.zoom)) : 1;
-      for (const { s, base } of hallLabels) s.scale.copy(base).multiplyScalar(grow);
+      placeLabels();
       renderer.render(scene, camera);
       raf = requestAnimationFrame(loop);
     };
@@ -645,6 +689,7 @@ export function VenueView() {
             ))}
           </div>
         )}
+        {here && <div style={{ ...OVER, top: 8, right: 8, fontWeight: 700 }}>{here}</div>}
         {view === "walk" && (
           <div style={{ position: "absolute", right: 12, bottom: sel ? 150 : 40, display: "flex", flexDirection: "column", gap: 8 }}>
             {(
