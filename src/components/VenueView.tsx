@@ -372,6 +372,7 @@ export function VenueView() {
         const c = new MapControls(ortho, renderer.domElement);
         c.enableRotate = false;
         c.screenSpacePanning = false;
+        c.zoomToCursor = true;
         c.minZoom = 0.2;
         c.maxZoom = 40;
         c.target.copy(focus);
@@ -384,6 +385,10 @@ export function VenueView() {
         persp.position.copy(focus).add(new THREE.Vector3(-0.35, 0.7, 0.62).normalize().multiplyScalar(d));
         const c = new OrbitControls(persp, renderer.domElement);
         c.maxPolarAngle = Math.PI * 0.47;
+        // 動かすときは床に沿って（画面に沿って動かすと、回転の中心が空中や床下へ行き、そこへ向かって拡大してしまう）。
+        // 拡大は指・カーソルの場所へ向かって
+        c.screenSpacePanning = false;
+        c.zoomToCursor = true;
         c.minDistance = 5;
         c.maxDistance = 1200;
         c.target.copy(focus);
@@ -669,7 +674,15 @@ export function VenueView() {
         persp.position.z += (fz * fwd + fx * side) * WALK_SPEED * dt;
         persp.position.y = eyeY();
         persp.rotation.set(pitch, yaw, 0, "YXZ");
-      } else controls?.update();
+      } else if (controls) {
+        // 回転の中心は、いつも選んでいる階の床の上に（カーソルへの拡大で少しずれても戻す）
+        if (current === "orbit" && !fly && Math.abs(controls.target.y - focus.y) > 0.01) {
+          const dy = focus.y - controls.target.y;
+          controls.target.y += dy;
+          camera.position.y += dy;
+        }
+        controls.update();
+      }
       if (controls) focus.set(controls.target.x, focus.y, controls.target.z);
       else if (current === "walk") focus.set(persp.position.x, focus.y, persp.position.z);
       placeLabels();
