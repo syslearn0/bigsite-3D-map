@@ -219,6 +219,12 @@ export function VenueView() {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     el.appendChild(renderer.domElement);
+    // 机の配置番号を書く透明な板（上からの見方で、拡大したときだけ）。3D の上に重ね、押すのは下の 3D に通す
+    const codeLayer = document.createElement("canvas");
+    codeLayer.style.cssText = "position:absolute;inset:0;pointer-events:none";
+    // 先頭に入れる：後ろにある凡例や下の帯（同じく position: absolute）が、この板より上に描かれるように
+    el.insertBefore(codeLayer, el.firstChild);
+    const codeCtx = codeLayer.getContext("2d")!;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xe9ece9);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a80, 2.2));
@@ -294,20 +300,33 @@ export function VenueView() {
       byLevel.get(lv)!.push(i);
     });
     const tmp = new THREE.Object3D();
+    // 机の置き方。上から見るときは、押しやすいよう机をサークルの座る側（いすの所）までのばして描く（奥行き 0.45m → TOP_DESK_D）。
+    // 3D・歩くでは実物の大きさ。並びの向きにのばすと隣の机と重なるので、のばすのは奥行きだけ
+    const TOP_DESK_D = 1.4;
+    const placeDesks = (top: boolean) => {
+      for (const [lv, { mesh, index }] of deskMeshes) {
+        index.forEach((bi, k) => {
+          const b = booths[bi];
+          // 島の中心線から外へ（サークルの座る側へ）ずらす
+          const out = top ? (b.side * (TOP_DESK_D - DESK_D)) / 2 : 0;
+          tmp.position.set(b.at[0] - Math.sin(b.angle) * out, floorY(lv) + 0.35, b.at[1] + Math.cos(b.angle) * out);
+          tmp.rotation.set(0, -b.angle, 0);
+          tmp.scale.set(1, 1, top ? TOP_DESK_D / DESK_D : 1);
+          tmp.updateMatrix();
+          mesh.setMatrixAt(k, tmp.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.computeBoundingSphere();
+      }
+    };
     for (const [lv, index] of byLevel) {
       const mesh = new THREE.InstancedMesh(deskGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), index.length);
-      index.forEach((bi, k) => {
-        const b = booths[bi];
-        tmp.position.set(b.at[0], floorY(lv) + 0.35, b.at[1]);
-        tmp.rotation.set(0, -b.angle, 0);
-        tmp.updateMatrix();
-        mesh.setMatrixAt(k, tmp.matrix);
-        mesh.setColorAt(k, new THREE.Color(DESK_COLOR));
-      });
+      index.forEach((_, k) => mesh.setColorAt(k, new THREE.Color(DESK_COLOR)));
       scene.add(mesh);
       partsOf(lv).solid.push(mesh);
       deskMeshes.set(lv, { mesh, index });
     }
+    placeDesks(true);
     // 列の名前（ブロック）。会場の札のように、列の端の頭の上に
     for (const l of lines) {
       const h = hallById.get(l.hall)!;
@@ -362,6 +381,12 @@ export function VenueView() {
       ortho.top = half;
       ortho.bottom = -half;
       ortho.updateProjectionMatrix();
+      const dpr = Math.min(devicePixelRatio, 2);
+      codeLayer.width = w * dpr;
+      codeLayer.height = h * dpr;
+      codeLayer.style.width = `${w}px`;
+      codeLayer.style.height = `${h}px`;
+      codeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     size();
     const ro = new ResizeObserver(size);
@@ -410,6 +435,7 @@ export function VenueView() {
         persp.position.set(focus.x, eyeY(), focus.z);
         pitch = 0;
       }
+      placeDesks(v === "top");
       applyVisibility();
     };
 
@@ -434,7 +460,7 @@ export function VenueView() {
           else o.visible = on;
         }
       }
-      pin.visible = pinOn && !walk;
+      pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
       currentFloor = f;
@@ -455,7 +481,8 @@ export function VenueView() {
       if (current === "top") {
         startFly(p.clone(), new THREE.Vector3(p.x, 600, p.z + 0.01));
         if (close) {
-          ortho.zoom = Math.max(ortho.zoom, 4);
+          // 机を探したときは、1スペース（0.9m）が指で押せる 20px ほどになるまで寄る
+          ortho.zoom = Math.max(ortho.zoom, (20 / 0.9) * (2 * 160) / el.clientHeight);
           ortho.updateProjectionMatrix();
         }
       } else if (current === "orbit") {
@@ -678,6 +705,48 @@ export function VenueView() {
       }
     };
 
+    // 拡大して1スペースが 16px 以上になったら、机の上に配置番号を書く（上からの見方だけ）。
+    // 上からの見方は真上から北を上に見ているので、画面の位置は (x, z) をそのまま拡大して足せばよい
+    let codesShown = false;
+    const drawCodes = () => {
+      const w = el.clientWidth, h = el.clientHeight;
+      const ppm = (h * ortho.zoom) / (2 * 160);
+      const show = current === "top" && ppm * 0.9 >= 16;
+      if (!show) {
+        if (codesShown) codeCtx.clearRect(0, 0, w, h);
+        codesShown = false;
+        return;
+      }
+      codesShown = true;
+      codeCtx.clearRect(0, 0, w, h);
+      const cx = controls ? controls.target.x : focus.x, cz = controls ? controls.target.z : focus.z;
+      const halfW = w / 2 / ppm + 2, halfH = h / 2 / ppm + 2;
+      // 大きく拡大したら列の名前もつける（「C-05a」）。そうでなければ番号だけ（「05a」）
+      const full = ppm * 0.9 >= 34;
+      const font = Math.max(9, Math.min(14, ppm * 0.9 * (full ? 0.3 : 0.42)));
+      codeCtx.font = `600 ${font}px system-ui, sans-serif`;
+      codeCtx.textAlign = "center";
+      codeCtx.textBaseline = "middle";
+      codeCtx.fillStyle = "#1d1d1b";
+      codeCtx.strokeStyle = "rgba(255,255,255,.85)";
+      codeCtx.lineWidth = 3;
+      const out = (TOP_DESK_D - DESK_D) / 2;
+      for (const [lv, d] of deskMeshes) {
+        if (floorOf(lv) !== currentFloor) continue;
+        for (const bi of d.index) {
+          const b = booths[bi];
+          // 上から描いている机の真ん中（サークルの座る側へのばした分だけずらす）
+          const x = b.at[0] - Math.sin(b.angle) * b.side * out;
+          const z = b.at[1] + Math.cos(b.angle) * b.side * out;
+          if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          const label = full ? `${b.block}-${String(b.num).padStart(2, "0")}${b.half}` : `${String(b.num).padStart(2, "0")}${b.half}`;
+          const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
+          codeCtx.strokeText(label, sx, sy);
+          codeCtx.fillText(label, sx, sy);
+        }
+      }
+    };
+
     // ---- 毎フレーム ----
     let raf = 0;
     let last = performance.now();
@@ -719,6 +788,7 @@ export function VenueView() {
       if (controls) focus.set(controls.target.x, focus.y, controls.target.z);
       else if (current === "walk") focus.set(persp.position.x, focus.y, persp.position.z);
       placeLabels();
+      drawCodes();
       renderer.render(scene, camera);
       raf = requestAnimationFrame(loop);
     };
@@ -747,6 +817,7 @@ export function VenueView() {
         else mat?.dispose();
       });
       el.removeChild(renderer.domElement);
+      el.removeChild(codeLayer);
       api.current = null;
     };
   }, [booths]);
