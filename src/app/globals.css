@@ -1,0 +1,92 @@
+:root {
+  --bg: #fafaf8;
+  --fg: #1d1d1b;
+  --muted: #6b6b66;
+  --line: #d9d9d4;
+  --card: #ffffff;
+  --accent: #1f5fbf;
+  --accent-fg: #ffffff;
+  --danger: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --fg: #ecece8;
+    --muted: #a3a39d;
+    --line: #3a3a37;
+    --card: #1e1e1c;
+    --accent: #6ea0ff;
+    --accent-fg: #0c1a33;
+    --danger: #ff8a80;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.seg {
+  display: inline-flex;
+}
+
+.seg button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.seg button:first-child {
+  border-radius: 8px 0 0 8px;
+  margin-left: 0;
+}
+
+.seg button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.chip {
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.chip.small {
+  padding: 3px 10px;
+  font-size: 0.85rem;
+}
+
+.tag {
+  font-size: 0.75rem;
+  background: #ffb000;
+  color: #1d1d1b;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 700;
+}

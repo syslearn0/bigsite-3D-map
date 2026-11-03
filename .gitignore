@@ -1,0 +1,14 @@
+/node_modules
+/.next/
+/out/
+.DS_Store
+*.pem
+npm-debug.log*
+.env*
+!.env.example
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# ビッグサイトの主催者向け図面（白図）は、規約で再配布できないので置かない
+/data/private/
