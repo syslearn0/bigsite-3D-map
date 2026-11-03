@@ -38,13 +38,71 @@ const WALK_SPEED = 6; // m/秒（見て回りやすいよう、歩く速さよ�
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
-const WISH_COLOR = 0xff2d87;
 const SELECT_COLOR = 0xffb000;
-const WISH_KEY = "comiket3d:wish";
+const WALL_H = 7.5; // ホールの壁の高さ（見やすさの目安）
+
+// 机につける印。「行きたい」は必ず行く所、「候補」は迷っている所。1つの机にはどちらか1つ
+type Mark = "want" | "maybe";
+const MARKS: Mark[] = ["want", "maybe"];
+const MARK: Record<Mark, { label: string; icon: string; color: number }> = {
+  want: { label: "行きたい", icon: "★", color: 0xff2d87 },
+  maybe: { label: "候補", icon: "◆", color: 0x0a84ff },
+};
+const MARKS_KEY = "comiket3d:marks";
+const OLD_WISH_KEY = "comiket3d:wish"; // 「行きたい」だけだったころの保存
+const PINS_KEY = "comiket3d:pins";
+
+// 端末の保存を読む。読めないとき（プライベートモードなど）は空から
+function loadMarks(): Record<string, Mark> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MARKS_KEY) ?? "null");
+    if (saved && typeof saved === "object") return saved;
+    const old = JSON.parse(localStorage.getItem(OLD_WISH_KEY) ?? "[]");
+    return Object.fromEntries((Array.isArray(old) ? old : []).map((c: string) => [c, "want" as Mark]));
+  } catch {
+    return {};
+  }
+}
+function loadPins(): Record<Mark, boolean> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PINS_KEY) ?? "null");
+    if (saved && typeof saved === "object") return { want: !!saved.want, maybe: !!saved.maybe };
+  } catch {}
+  return { want: true, maybe: false };
+}
 
 const floorY = (level: number) => venue.floorY[String(level)] ?? 0;
 const floorOf = (level: number): Floor => (level >= 4 ? 4 : 1);
 const hexCss = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
+
+// 地図のピン（下の先が机を指す）
+function pinSprite(color: number, icon: string) {
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 88;
+  const g = c.getContext("2d")!;
+  g.fillStyle = hexCss(color);
+  g.strokeStyle = "#fff";
+  g.lineWidth = 5;
+  g.beginPath();
+  g.arc(32, 30, 26, Math.PI * 0.82, Math.PI * 2.18);
+  g.lineTo(32, 85);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  g.fillStyle = "#fff";
+  g.font = "bold 28px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(icon, 32, 31);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  s.center.set(0.5, 0);
+  s.scale.set((64 / 88) * 1.4, 1.4, 1);
+  s.renderOrder = 11;
+  return s;
+}
 
 function textSprite(text: string, opts: { bg?: string; fg?: string; height?: number; px?: number } = {}) {
   const px = opts.px ?? 40;
@@ -107,7 +165,8 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material) {
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
-  recolor: (colorByGenre: boolean, wish: Set<string>, selected: number | null) => void;
+  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null) => void;
+  setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
@@ -125,23 +184,23 @@ export function VenueView() {
   const [query, setQuery] = useState("");
   const [miss, setMiss] = useState(false);
   // この画面はブラウザでだけ描く（page.tsx で ssr: false）ので、最初から端末の保存を読める
-  const [wish, setWish] = useState<Set<string>>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(WISH_KEY) ?? "[]");
-      return new Set(Array.isArray(saved) ? saved : []);
-    } catch {
-      return new Set();
-    }
-  });
+  const [marks, setMarks] = useState<Record<string, Mark>>(loadMarks);
+  const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
   const [listOpen, setListOpen] = useState(false);
   const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
   const onHere = useRef(setHere);
 
   useEffect(() => {
     try {
-      localStorage.setItem(WISH_KEY, JSON.stringify([...wish]));
+      localStorage.setItem(MARKS_KEY, JSON.stringify(marks));
+      localStorage.removeItem(OLD_WISH_KEY);
     } catch {}
-  }, [wish]);
+  }, [marks]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
+    } catch {}
+  }, [pinsOn]);
 
   // ---- 3D の準備（1回だけ） ----
   useEffect(() => {
@@ -194,7 +253,7 @@ export function VenueView() {
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
       scene.add(f);
       partsOf(h.level).floors.push(f);
-      const w = walls(h.poly, y, 5, wallMat);
+      const w = walls(h.poly, y, WALL_H, wallMat);
       scene.add(w);
       partsOf(h.level).solid.push(w);
       const [cx, cz] = centroid(h.poly);
@@ -421,13 +480,13 @@ export function VenueView() {
       }
     };
 
-    const recolor = (colorByGenre: boolean, wishSet: Set<string>, sel: number | null) => {
+    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null) => {
       const col = new THREE.Color();
       for (const { mesh, index } of deskMeshes.values()) {
         index.forEach((bi, k) => {
           const b = booths[bi];
           if (bi === sel) col.setHex(SELECT_COLOR);
-          else if (wishSet.has(b.code)) col.setHex(WISH_COLOR);
+          else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
           else if (colorByGenre) {
             const g = SAMPLE_GENRES.indexOf(lines[b.line].genre ?? "");
             col.setHex(g >= 0 ? GENRE_COLOR[g] : DESK_COLOR).lerp(new THREE.Color(0xffffff), 0.35);
@@ -522,6 +581,25 @@ export function VenueView() {
     addEventListener("keydown", onKey);
     addEventListener("keyup", onKey);
 
+    // 印をつけた机のピン。数は少ないので、変わるたびに作り直す
+    const pins: { s: THREE.Sprite; level: number; base: THREE.Vector3 }[] = [];
+    const setPins = (list: { booth: number; mark: Mark }[]) => {
+      for (const p of pins) {
+        scene.remove(p.s);
+        p.s.material.map?.dispose();
+        p.s.material.dispose();
+      }
+      pins.length = 0;
+      for (const { booth, mark } of list) {
+        const b = booths[booth];
+        const lv = hallById.get(b.hall)!.level;
+        const s = pinSprite(MARK[mark].color, MARK[mark].icon);
+        s.position.set(b.at[0], floorY(lv) + 0.75, b.at[1]);
+        scene.add(s);
+        pins.push({ s, level: lv, base: s.scale.clone() });
+      }
+    };
+
     // 1m が画面の何 px か（その場所で）
     const pxPerM = (at: THREE.Vector3) => {
       const h = el.clientHeight;
@@ -544,6 +622,13 @@ export function VenueView() {
           if (kind === "area" && ppm < 0.9) show = false;
         }
         s.visible = show;
+      }
+      for (const { s, level, base } of pins) {
+        s.visible = floorOf(level) === currentFloor;
+        s.material.depthTest = !(current === "top");
+        // 上から・3D では画面の上で 34px、歩くときは実物 1.4m
+        s.scale.copy(base);
+        if (!walk) s.scale.multiplyScalar(34 / (base.y * pxPerM(s.position)));
       }
       // 近づいてホールの名前を消したときは、画面の真ん中（歩くときは自分の足元）のホールの名前を隅に出す
       const near = walk || pxPerM(focus) >= 3.5;
@@ -599,7 +684,7 @@ export function VenueView() {
     ortho.updateProjectionMatrix();
     setView("top");
     setFloor(1);
-    api.current = { setView, setFloor, recolor, focusBooth, focusHall, hold: (d) => (hold = d) };
+    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, hold: (d) => (hold = d) };
 
     return () => {
       cancelAnimationFrame(raf);
@@ -622,7 +707,13 @@ export function VenueView() {
 
   useEffect(() => api.current?.setView(view), [view]);
   useEffect(() => api.current?.setFloor(floor), [floor]);
-  useEffect(() => api.current?.recolor(byGenre, wish, selected), [byGenre, wish, selected]);
+  useEffect(() => api.current?.recolor(byGenre, marks, selected), [byGenre, marks, selected]);
+  useEffect(() => {
+    const list = Object.entries(marks)
+      .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
+      .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark }));
+    api.current?.setPins(list);
+  }, [marks, pinsOn, codeIndex]);
 
   const select = useCallback(
     (i: number) => {
@@ -646,15 +737,20 @@ export function VenueView() {
 
   const sel = selected !== null ? booths[selected] : null;
   const selHall = sel ? hallById.get(sel.hall)! : null;
-  const wished = sel ? wish.has(sel.code) : false;
-  const toggleWish = (code: string) =>
-    setWish((w) => {
-      const n = new Set(w);
-      if (n.has(code)) n.delete(code);
-      else n.add(code);
+  const selMark = sel ? marks[sel.code] : undefined;
+  // 同じ印をもう一度押すと外す。違う印を押すと付け替える
+  const toggleMark = (code: string, mark: Mark) =>
+    setMarks((m) => {
+      const n = { ...m };
+      if (n[code] === mark) delete n[code];
+      else n[code] = mark;
       return n;
     });
-  const wishList = [...wish].filter((c) => codeIndex.has(c)).sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+  const listOf = (mark: Mark) =>
+    Object.keys(marks)
+      .filter((c) => marks[c] === mark && codeIndex.has(c))
+      .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+  const lists = { want: listOf("want"), maybe: listOf("maybe") };
   const openHalls = venue.halls.filter((h) => !h.closed);
 
   return (
@@ -685,8 +781,14 @@ export function VenueView() {
             作品で色分け
           </button>
           <button className="chip" onClick={() => setListOpen((x) => !x)}>
-            ★ 行きたい {wishList.length}
+            ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
           </button>
+          <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>ピン：</span>
+          {MARKS.map((m) => (
+            <button key={m} className="chip" aria-pressed={pinsOn[m]} onClick={() => setPinsOn((p) => ({ ...p, [m]: !p[m] }))}>
+              {MARK[m].icon} {MARK[m].label}
+            </button>
+          ))}
         </div>
         <form
           style={{ display: "flex", gap: 6, marginTop: 6 }}
@@ -756,24 +858,45 @@ export function VenueView() {
         {listOpen && (
           <div style={{ ...SHEET, top: 8, bottom: "auto", maxHeight: "60%", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong>行きたいサークル</strong>
+              <strong>印をつけたサークル</strong>
               <button className="chip small" onClick={() => setListOpen(false)}>
                 閉じる
               </button>
             </div>
-            {wishList.length === 0 && <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>机を押して「★ 行きたい」で追加できます。この端末の中だけに保存します。</p>}
-            <ul style={{ listStyle: "none", padding: 0, margin: "6px 0 0" }}>
-              {wishList.map((c) => (
-                <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
-                  <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
-                    {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
-                  </button>
-                  <button className="chip small" onClick={() => toggleWish(c)} aria-label={`${c} を外す`}>
-                    外す
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {lists.want.length + lists.maybe.length === 0 && (
+              <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>机を押して「★ 行きたい」か「◆ 候補」をつけられます。この端末の中だけに保存します。</p>
+            )}
+            {MARKS.filter((m) => lists[m].length > 0).map((m) => (
+              <section key={m} style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <strong style={{ color: hexCss(MARK[m].color) }}>
+                    {MARK[m].icon} {MARK[m].label} {lists[m].length}
+                  </strong>
+                  <label style={{ fontSize: ".85rem", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <input type="checkbox" checked={pinsOn[m]} onChange={() => setPinsOn((p) => ({ ...p, [m]: !p[m] }))} />
+                    ピンを立てる
+                  </label>
+                </div>
+                <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
+                  {lists[m].map((c) => {
+                    const other: Mark = m === "want" ? "maybe" : "want";
+                    return (
+                      <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+                        <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
+                          {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
+                        </button>
+                        <button className="chip small" onClick={() => toggleMark(c, other)}>
+                          {MARK[other].icon} {MARK[other].label}へ
+                        </button>
+                        <button className="chip small" onClick={() => toggleMark(c, m)} aria-label={`${c} の印を外す`}>
+                          外す
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
           </div>
         )}
 
@@ -788,10 +911,13 @@ export function VenueView() {
             <div style={{ fontSize: ".9rem", marginTop: 2 }}>
               作品（見本）：{lines[sel.line].genre}　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button style={{ flex: 1, minHeight: 44, fontWeight: 700 }} aria-pressed={wished} onClick={() => toggleWish(sel.code)}>
-                {wished ? "★ 行きたい（外す）" : "☆ 行きたい"}
-              </button>
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              {MARKS.map((m) => (
+                <button key={m} style={{ flex: 1, minHeight: 44, fontWeight: 700 }} aria-pressed={selMark === m} onClick={() => toggleMark(sel.code, m)}>
+                  {MARK[m].icon} {MARK[m].label}
+                  {selMark === m ? "（外す）" : ""}
+                </button>
+              ))}
               {view !== "walk" && (
                 <button
                   style={{ minHeight: 44 }}
