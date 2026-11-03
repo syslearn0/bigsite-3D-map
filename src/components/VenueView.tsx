@@ -279,6 +279,7 @@ export function VenueView() {
     let hold: -1 | 0 | 1 = 0;
     const keys = new Set<string>();
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
+    let walkAnim: { t: number; from: THREE.Vector3; to: THREE.Vector3; secs: number } | null = null;
 
     const size = () => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -448,6 +449,22 @@ export function VenueView() {
       setMiss(false);
     };
     let down: { x: number; y: number; yaw: number; pitch: number } | null = null;
+    // 歩くとき：ストリートビューのように、床をダブルタップするとそこへ歩いていく
+    let lastTap: { t: number; x: number; y: number } | null = null;
+    const floorAt = (e: PointerEvent) => {
+      const r = renderer.domElement.getBoundingClientRect();
+      ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+      return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY(currentFloor)), new THREE.Vector3());
+    };
+    const walkTo = (p: THREE.Vector3) => {
+      const from = persp.position.clone();
+      const dx = p.x - from.x, dz = p.z - from.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 0.5 || dist > 80) return; // 足元すぎる・遠すぎる（空のあたり）は動かない
+      const go = Math.max(0, dist - 1.2); // 押した所の手前で止まる（机の上に立たない）
+      const to = new THREE.Vector3(from.x + (dx / dist) * go, from.y, from.z + (dz / dist) * go);
+      walkAnim = { t: 0, from, to, secs: Math.min(1.5, Math.max(0.35, go / 12)) };
+    };
     const onDown = (e: PointerEvent) => {
       down = { x: e.clientX, y: e.clientY, yaw, pitch };
       if (current === "walk") renderer.domElement.setPointerCapture(e.pointerId);
@@ -462,6 +479,16 @@ export function VenueView() {
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       down = null;
       if (moved > 6) return;
+      if (current === "walk") {
+        const now = performance.now();
+        if (lastTap && now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+          lastTap = null;
+          const p = floorAt(e);
+          if (p) walkTo(p);
+          return;
+        }
+        lastTap = { t: now, x: e.clientX, y: e.clientY };
+      }
       const r = renderer.domElement.getBoundingClientRect();
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
       const targets = [...deskMeshes.entries()].filter(([lv]) => floorOf(lv) === currentFloor).map(([, d]) => d.mesh);
@@ -545,6 +572,14 @@ export function VenueView() {
         const fwd = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + hold;
         const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+        if (fwd || side) walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
+        if (walkAnim) {
+          walkAnim.t = Math.min(1, walkAnim.t + dt / walkAnim.secs);
+          const k = 1 - Math.pow(1 - walkAnim.t, 2);
+          persp.position.x = walkAnim.from.x + (walkAnim.to.x - walkAnim.from.x) * k;
+          persp.position.z = walkAnim.from.z + (walkAnim.to.z - walkAnim.from.z) * k;
+          if (walkAnim.t >= 1) walkAnim = null;
+        }
         persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
         persp.position.z += (fz * fwd + fx * side) * WALK_SPEED * dt;
         persp.position.y = eyeY();
@@ -623,7 +658,8 @@ export function VenueView() {
   const openHalls = venue.halls.filter((h) => !h.closed);
 
   return (
-    <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
+    // 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app）
+    <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
       <header style={{ padding: "8px 12px 6px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <strong style={{ fontSize: "1.05rem" }}>コミケ 3D マップ</strong>
@@ -704,6 +740,8 @@ export function VenueView() {
                 onPointerDown={() => api.current?.hold(d)}
                 onPointerUp={() => api.current?.hold(0)}
                 onPointerLeave={() => api.current?.hold(0)}
+                onPointerCancel={() => api.current?.hold(0)}
+                onContextMenu={(e) => e.preventDefault()}
               >
                 {label}
               </button>

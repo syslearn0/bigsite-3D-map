@@ -90,3 +90,19 @@ button[aria-pressed="true"] {
   padding: 1px 6px;
   font-weight: 700;
 }
+
+.app {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.app button {
+  touch-action: manipulation;
+}
