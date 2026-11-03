@@ -565,6 +565,28 @@ export function VenueView() {
         lastTap = { t: now, x: e.clientX, y: e.clientY };
       }
       const r = renderer.domElement.getBoundingClientRect();
+      // ピンを押したら、その机。ピンは画面の上の形（先から頭まで）のまわり 10px までを押せる所にする
+      const toScreen = (v: THREE.Vector3) => {
+        const q = v.clone().project(camera);
+        return { x: r.left + ((q.x + 1) / 2) * r.width, y: r.top + ((1 - q.y) / 2) * r.height, front: q.z < 1 };
+      };
+      // ピンはいつも画面に向く板なので、頭はカメラの「上」の向きにある（真上から見るときも）
+      const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      let pinHit = -1, pinD = Infinity;
+      for (const p of pins) {
+        if (!p.s.visible) continue;
+        const tip = toScreen(p.s.position);
+        const top = toScreen(p.s.position.clone().addScaledVector(camUp, p.s.scale.y));
+        if (!tip.front) continue;
+        const len = Math.hypot(top.x - tip.x, top.y - tip.y);
+        const t = len ? Math.max(0, Math.min(1, ((e.clientX - tip.x) * (top.x - tip.x) + (e.clientY - tip.y) * (top.y - tip.y)) / len ** 2)) : 0;
+        const d = Math.hypot(e.clientX - (tip.x + (top.x - tip.x) * t), e.clientY - (tip.y + (top.y - tip.y) * t));
+        if (d <= len * 0.37 + 10 && d < pinD) [pinHit, pinD] = [p.booth, d];
+      }
+      if (pinHit >= 0) {
+        pick(pinHit);
+        return;
+      }
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
       const targets = [...deskMeshes.entries()].filter(([lv]) => floorOf(lv) === currentFloor).map(([, d]) => d.mesh);
       const hit = ray.intersectObjects(targets, false)[0];
@@ -598,7 +620,7 @@ export function VenueView() {
     addEventListener("keyup", onKey);
 
     // 印をつけた机のピン。数は少ないので、変わるたびに作り直す
-    const pins: { s: THREE.Sprite; level: number; base: THREE.Vector3 }[] = [];
+    const pins: { s: THREE.Sprite; level: number; base: THREE.Vector3; booth: number }[] = [];
     const setPins = (list: { booth: number; mark: Mark }[]) => {
       for (const p of pins) {
         scene.remove(p.s);
@@ -612,7 +634,7 @@ export function VenueView() {
         const s = pinSprite(MARK[mark].color, MARK[mark].icon);
         s.position.set(b.at[0], floorY(lv) + 0.75, b.at[1]);
         scene.add(s);
-        pins.push({ s, level: lv, base: s.scale.clone() });
+        pins.push({ s, level: lv, base: s.scale.clone(), booth });
       }
     };
 
