@@ -325,20 +325,32 @@ export function VenueView() {
         persp.position.set(focus.x, eyeY(), focus.z);
         pitch = 0;
       }
+      applyVisibility();
     };
 
-    const setFloor = (f: Floor) => {
-      currentFloor = f;
+    // 階と見方に合わせて、何を見せるか決める。
+    // 上から・3D：選んでいない階は床を薄く残す（位置関係が分かるように）。
+    // 歩く：頭の上にくる床（2F の通路・4F のホール）は天井のようにふさぐので出さない。ホールの名前と選んだ机の印も、目の前で大きすぎるので出さない
+    let pinOn = false;
+    const applyVisibility = () => {
+      const walk = current === "walk";
       for (const [lv, p] of levels) {
-        const on = floorOf(lv) === f || (f === 1 && lv === 2);
+        const on = floorOf(lv) === currentFloor || (currentFloor === 1 && lv === 2 && !walk);
         for (const m of p.floors) {
           const mat = m.material as THREE.MeshLambertMaterial;
           mat.transparent = !on;
           mat.opacity = on ? 1 : 0.18;
           mat.depthWrite = on;
+          m.visible = on || !walk;
         }
         for (const o of p.solid) o.visible = on;
       }
+      for (const { s } of hallLabels) if (walk) s.visible = false;
+      pin.visible = pinOn && !walk;
+    };
+    const setFloor = (f: Floor) => {
+      currentFloor = f;
+      applyVisibility();
       focus.y = floorY(f);
       if (current === "walk") persp.position.y = eyeY();
       if (current === "orbit" && controls) {
@@ -368,7 +380,8 @@ export function VenueView() {
       if (floorOf(lv) !== currentFloor) setFloor(floorOf(lv));
       const p = new THREE.Vector3(b.at[0], floorY(lv), b.at[1]);
       pin.position.copy(p);
-      pin.visible = true;
+      pinOn = true;
+      applyVisibility();
       if (current === "walk") {
         // 机の前の通路（サークルの反対側）に立って、机を向く
         const nx = -Math.sin(b.angle) * -b.side, nz = Math.cos(b.angle) * -b.side;
@@ -410,7 +423,10 @@ export function VenueView() {
         });
         mesh.instanceColor!.needsUpdate = true;
       }
-      if (sel === null) pin.visible = false;
+      if (sel === null) {
+        pinOn = false;
+        pin.visible = false;
+      }
     };
 
     // ---- タップで机を選ぶ（ドラッグとは分ける） ----
