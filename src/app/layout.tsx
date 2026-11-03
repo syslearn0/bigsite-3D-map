@@ -1,15 +1,19 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { SwRegister } from "./SwRegister";
 
 export const metadata: Metadata = {
   title: "コミケ 3D マップ（見本）",
   description: "東京ビッグサイトの会場を 3D で見て、行きたいサークルの計画を立てる（見本）",
+  // iPhone でホーム画面に追加したときのアイコン
+  icons: { apple: "/apple-touch-icon.png" },
+  appleWebApp: { title: "3D マップ" },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#1f5fbf",
+  themeColor: "#1f3f7a",
 };
 
 export default function RootLayout({
@@ -19,7 +23,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body>
+        {children}
+        <SwRegister />
+      </body>
     </html>
   );
 }

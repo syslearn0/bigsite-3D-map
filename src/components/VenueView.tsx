@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -162,6 +162,16 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material) {
   return g;
 }
 
+// 電波があるか（ブラウザの知らせ）。ない間は、端末に持っている地図を出していると伝える
+const subscribeOnline = (cb: () => void) => {
+  addEventListener("online", cb);
+  addEventListener("offline", cb);
+  return () => {
+    removeEventListener("online", cb);
+    removeEventListener("offline", cb);
+  };
+};
+
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
@@ -189,6 +199,7 @@ export function VenueView() {
   const [listOpen, setListOpen] = useState(false);
   const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
   const onHere = useRef(setHere);
+  const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
 
   useEffect(() => {
     try {
@@ -775,6 +786,11 @@ export function VenueView() {
           <span className="tag">見本</span>
           <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>島の配置・作品は仮です（C109 の本当の配置ではありません）</span>
         </div>
+        {!online && (
+          <div role="status" style={{ marginTop: 6, fontSize: ".85rem", background: "#3a3a37", color: "#fff", borderRadius: 6, padding: "3px 8px" }}>
+            電波がありません。この端末に保存した地図と印を表示しています
+          </div>
+        )}
         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
           <div className="seg" role="group" aria-label="見方">
             {VIEWS.map((v) => (
