@@ -560,11 +560,21 @@ export function IslandEditor() {
       const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
       if (x1 - x0 + (y1 - y0) > 6) {
         const { toS } = tf();
+        // 四角に少しでもかかった机を選ぶ（太く描いた机の四すみの範囲で調べる）
+        const hl = DESK_L / 4 - 0.02, hd = (DESK_D / 2) * THICK;
         const codes = booths
           .filter((bt) => {
             if (bt.hall !== hallId) return false;
-            const [x, y] = toS(drawnCenter(bt));
-            return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+            const [cx, cz] = drawnCenter(bt);
+            const c = Math.cos(bt.angle), sn = Math.sin(bt.angle);
+            const pts = [
+              [-hl, -hd],
+              [hl, -hd],
+              [hl, hd],
+              [-hl, hd],
+            ].map(([du, dv]) => toS([cx + du * c - dv * sn, cz + du * sn + dv * c]));
+            const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+            return Math.max(...xs) >= x0 && Math.min(...xs) <= x1 && Math.max(...ys) >= y0 && Math.min(...ys) <= y1;
           })
           .map((bt) => bt.code);
         const ok = limit(codes);
