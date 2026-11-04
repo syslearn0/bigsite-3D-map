@@ -254,30 +254,32 @@ export function parseCode(q: string): { prefix: string; block: string; num: numb
 
 // ---- エディタ・保存した配置のための道具 ----
 
-// 壁ぞいの列の名前の札を置く所。近くにまとまった机（あいだが 6m より狭い）ごとに1つ、
-// そのまとまりの真ん中から、ホールの内側（サークルが座る側と反対）へ inward m
+// 壁ぞいの列の名前の札を置く所。壁の一辺ごと（机の向きと、壁からの位置がそろった机のまとまり）に、
+// その辺のいちばん端の机2つの、ホールの内側（サークルが座る側と反対）へ inward m。近すぎる札（10m 以内）は1つに
 export function wallLabelSpots(line: Line, inward = 2.6): XZ[] {
   if (!line.desks?.length) return [];
   const c = Math.cos(line.angle), s = Math.sin(line.angle);
-  const pts = line.desks.map((d) => {
+  const sides = new Map<string, { t: number; at: XZ; sit: XZ }[]>();
+  for (const d of line.desks) {
     const at: XZ = [line.start[0] + d.u * c - d.v * s, line.start[1] + d.u * s + d.v * c];
     const a = line.angle + (d.turn ?? 0);
     const sit: XZ = [-Math.sin(a) * d.side, Math.cos(a) * d.side]; // サークルが座る向き（壁の側）
-    return { n: d.n, at, sit };
-  });
-  pts.sort((p, q) => p.n - q.n);
-  const groups: (typeof pts)[] = [];
-  for (const p of pts) {
-    const g = groups.find((gr) => gr.some((q) => Math.hypot(q.at[0] - p.at[0], q.at[1] - p.at[1]) < 6));
-    if (g) g.push(p);
-    else groups.push([p]);
+    // 同じ壁の辺：座る向きがそろい（15° きざみ）、その向きで測った壁までの位置がそろう（4m きざみ）
+    const dirKey = Math.round(Math.atan2(sit[1], sit[0]) / (Math.PI / 12));
+    const off = Math.round((at[0] * sit[0] + at[1] * sit[1]) / 4);
+    const key = `${dirKey}:${off}`;
+    if (!sides.has(key)) sides.set(key, []);
+    sides.get(key)!.push({ t: -at[0] * sit[1] + at[1] * sit[0], at, sit });
   }
-  return groups.map((g) => {
-    const x = g.reduce((a, p) => a + p.at[0], 0) / g.length, z = g.reduce((a, p) => a + p.at[1], 0) / g.length;
-    const sx = g.reduce((a, p) => a + p.sit[0], 0), sz = g.reduce((a, p) => a + p.sit[1], 0);
-    const n = Math.hypot(sx, sz) || 1;
-    return [x - (sx / n) * inward, z - (sz / n) * inward] as XZ;
-  });
+  const out: XZ[] = [];
+  for (const list of sides.values()) {
+    list.sort((p, q) => p.t - q.t);
+    for (const p of list.length > 1 ? [list[0], list[list.length - 1]] : [list[0]]) {
+      const spot: XZ = [p.at[0] - p.sit[0] * inward, p.at[1] - p.sit[1] * inward];
+      if (!out.some((q) => Math.hypot(q[0] - spot[0], q[1] - spot[1]) < 10)) out.push(spot);
+    }
+  }
+  return out;
 }
 
 // 列のいちばん大きい番号

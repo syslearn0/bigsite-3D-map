@@ -15,6 +15,11 @@ const byName = (name: string) => {
   if (!e) throw new Error(`OSM に「${name}」がない`);
   return e;
 };
+const byId = (id: number) => {
+  const e = osm.elements.find((x) => x.id === id && x.geometry);
+  if (!e) throw new Error(`OSM に way ${id} がない`);
+  return e;
+};
 const poly = (e: El): XZ[] => {
   const p = e.geometry!.map((g) => project(ORIGIN, g.lat, g.lon));
   if (p.length > 1 && p[0][0] === p.at(-1)![0] && p[0][1] === p.at(-1)![1]) p.pop();
@@ -128,6 +133,8 @@ const areas: Area[] = [
     ["中央ターミナル", 1],
     ["リンクスペース", 1],
   ].map(([name, level]) => ({ name: String(name).replace("Ｆ ", "F "), level: Number(level), poly: poly(byName(String(name))) })),
+  // 東1〜3 と東4〜6 のあいだの通路（ガレリア）。OSM では名前が「西２F」と書かれている（way 543048845、東展示棟の通路）
+  { name: "東ガレリア", level: 1, poly: poly(byId(543048845)) },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   { name: "南展示棟", level: 1, poly: southRest },
 ];
