@@ -21,7 +21,7 @@ const sampleLines = (layoutJson as unknown as { lines: Line[] }).lines;
 type Tool = "select" | "add" | "image";
 type Bg = { img: HTMLImageElement; x: number; z: number; mPerPx: number; rot: number; opacity: number };
 const floorOf = (lv: number) => (lv >= 4 ? 4 : 1);
-const THICK = 3; // 机の奥行きを何倍に描くか
+const THICK = 6; // 机の奥行きを何倍に描くか（島 1 本が約 5.4m。島どうしの間 7m なら、間が 1.6m ほど残る）
 const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments] }));
 
 // ホールを島がまっすぐになる向きに回す角（ホールの長い辺を横に。北がなるべく上）
@@ -167,7 +167,7 @@ export function IslandEditor() {
     for (const b of booths) {
       if (!onLevel.has(b.hall)) continue;
       const c = Math.cos(b.angle), s = Math.sin(b.angle);
-      // 机の奥行きは実物の 3 倍に描く（細いと見にくく押しにくい）。島の外側へのばす
+      // 机の奥行きは実物の THICK 倍に描く（細いと見にくく押しにくい）。島の外側へのばす
       const hl = DESK_L / 4 - 0.02, hd = (DESK_D / 2) * THICK, off = (b.side * DESK_D * (THICK - 1)) / 2;
       const corner = (du: number, dv: number): XZ => [b.at[0] + du * c - (dv + off) * s, b.at[1] + du * s + (dv + off) * c];
       poly([corner(-hl, -hd), corner(hl, -hd), corner(hl, hd), corner(-hl, hd)]);
