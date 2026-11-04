@@ -151,37 +151,31 @@ const areas: Area[] = [
   { name: "南展示棟", level: 1, poly: southRest },
 ];
 
-// 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ下りる外の階段：
-// 2つの床の形がいちばん近い所どうしを、それぞれの内側へ 2m ずつのばしてむすぶ（OSM に階段の形がないので、その位置の目安）
+// 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
+// 会議棟の横のエントランスプラザの辺（プラザの1本目の辺の 55% の所）から、1F アトリウム（低くなった中庭）の上を
+// まっすぐ渡って、屋上展示場の北東の辺につながる（航空写真の橋と階段の位置。OSM に階段の形がないので、その目安）
 type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number };
 const stairs: Stair[] = [];
 {
   const roof = areas.find((a) => a.name === "屋上展示場")!.poly, plaza = areas.find((a) => a.name === "エントランスプラザ")!.poly;
-  let best: [number, XZ, XZ] = [Infinity, [0, 0], [0, 0]];
-  const near = (p: XZ, poly: XZ[]): [number, XZ] => {
-    let b: [number, XZ] = [Infinity, p];
-    poly.forEach((a, i) => {
-      const c = poly[(i + 1) % poly.length];
-      const dx = c[0] - a[0], dz = c[1] - a[1], L2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
-      const q: XZ = [a[0] + t * dx, a[1] + t * dz];
-      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
-      if (d < b[0]) b = [d, q];
-    });
-    return b;
-  };
-  for (const p of roof) {
-    const [d, q] = near(p, plaza);
-    if (d < best[0]) best = [d, p, q];
-  }
-  for (const q of plaza) {
-    const [d, p] = near(q, roof);
-    if (d < best[0]) best = [d, p, q];
-  }
-  const [, a, b] = best;
-  const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
+  const [a, b] = [plaza[0], plaza[1]];
+  const P: XZ = [a[0] + (b[0] - a[0]) * 0.55, a[1] + (b[1] - a[1]) * 0.55];
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  let n: XZ = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
+  if (pointInPolygon([P[0] + n[0] * 0.5, P[1] + n[1] * 0.5], plaza)) n = [-n[0], -n[1]]; // プラザの外（屋上展示場の側）へ
+  // P から n の向きに進んで、屋上展示場の辺に当たる所
+  let hit = Infinity;
+  roof.forEach((p, i) => {
+    const q = roof[(i + 1) % roof.length];
+    const dx = q[0] - p[0], dz = q[1] - p[1], den = n[0] * dz - n[1] * dx;
+    if (Math.abs(den) < 1e-9) return;
+    const t = ((p[0] - P[0]) * dz - (p[1] - P[1]) * dx) / den, u = ((p[0] - P[0]) * n[1] - (p[1] - P[1]) * n[0]) / den;
+    if (t > 0 && u >= 0 && u <= 1) hit = Math.min(hit, t);
+  });
+  if (!Number.isFinite(hit)) throw new Error("屋上展示場への階段：屋上展示場の辺が見つからない");
   const r = (v: number) => Math.round(v * 10) / 10;
-  stairs.push({ name: "屋上展示場への階段", from: [r(a[0] - ux * 2), r(a[1] - uz * 2)], fromLevel: 4, to: [r(b[0] + ux * 2), r(b[1] + uz * 2)], toLevel: 2, width: 6 });
+  // 両端を、それぞれの床の内側へ 1.5m のばす
+  stairs.push({ name: "屋上展示場への階段", from: [r(P[0] + n[0] * (hit + 1.5)), r(P[1] + n[1] * (hit + 1.5))], fromLevel: 4, to: [r(P[0] - n[0] * 1.5), r(P[1] - n[1] * 1.5)], toLevel: 2, width: 6 });
 }
 
 // まわりの建物（位置の手がかり。足元の形だけ）
