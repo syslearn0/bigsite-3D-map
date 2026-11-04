@@ -229,13 +229,35 @@ const osmToilets: Toilet[] = osm.elements
     const c = p.reduce((a, g) => ({ lat: a.lat + g.lat / p.length, lon: a.lon + g.lon / p.length }), { lat: 0, lon: 0 });
     return { at: project(ORIGIN, c.lat, c.lon), level: e.tags?.level ? Number(e.tags.level) : null, src: `osm:${e.type}/${e.id}` };
   });
+// 図面の「WC」「出入口」の文字は、その場所から少し（数m〜十数m）離れて書かれている。そのままだと通路（ガレリアなど）の
+// 真ん中に札が出るので、そのホールの壁に寄せる：出入口・搬入口は壁の線の上、トイレは壁の 1.5m 内側。
+// 工事中のホール（東4〜6）のものは使えないので出さない
+const hallOf = new Map(halls.map((h) => [h.id, h]));
+function toWall(hid: string, p: XZ, inset: number): XZ {
+  const poly = hallOf.get(hid)!.poly;
+  let best: [number, XZ, XZ] = [Infinity, p, [0, 0]];
+  poly.forEach((a, i) => {
+    const b = poly[(i + 1) % poly.length];
+    const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1, L = Math.sqrt(L2);
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+    const q: XZ = [a[0] + t * dx, a[1] + t * dz];
+    const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+    if (d < best[0]) best = [d, q, [-dz / L, dx / L]];
+  });
+  const [, q, n0] = best;
+  // 内側を向く法線
+  const n: XZ = pointInPolygon([q[0] + n0[0] * 0.1, q[1] + n0[1] * 0.1], poly) ? n0 : [-n0[0], -n0[1]];
+  return [Math.round((q[0] + n[0] * inset) * 10) / 10, Math.round((q[1] + n[1] * inset) * 10) / 10];
+}
+const usable = (hid: string | undefined) => !hid || (hallOf.has(hid) && !hallOf.get(hid)!.closed);
+const planToilets = (plan.toilets as { at: XZ; level: number; kinds: string[]; hall?: string }[]).filter((t) => usable(t.hall));
 const toilets: Toilet[] = [
-  ...plan.toilets.map((t) => ({ at: t.at, level: t.level, kinds: t.kinds, src: "plan" })),
+  ...planToilets.map((t) => ({ at: t.hall && !pointInPolygon(t.at, hallOf.get(t.hall)!.poly) ? toWall(t.hall, t.at, 1.5) : t.at, level: t.level, kinds: t.kinds, src: "plan" })),
   ...osmToilets.filter((o) => !plan.toilets.some((t) => Math.hypot(t.at[0] - o.at[0], t.at[1] - o.at[1]) < 15)),
 ];
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 // 出入口・搬入口（シャッター）。図面から読んだもの
-const doors = (plan.doors ?? []).map((d) => ({ at: d.at, level: d.level, kind: d.kind, hall: d.hall }));
+const doors = (plan.doors ?? []).filter((d) => usable(d.hall)).map((d) => ({ at: toWall(d.hall, d.at, 0), level: d.level, kind: d.kind, hall: d.hall }));
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層 6m（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
