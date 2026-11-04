@@ -723,17 +723,6 @@ export function IslandEditor() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
-  const upload = async (file: File) => {
-    try {
-      const got = parseLayoutFile(JSON.parse(await file.text()));
-      if (!got) return setMsg("配置のファイルとして読めませんでした");
-      change(got);
-      setSel(null);
-      setMsg(`${got.length} 本の列を読み込みました`);
-    } catch {
-      setMsg("ファイルを読めませんでした");
-    }
-  };
   // ---- 作品・キャラ ----
   const pickedList = [...picked];
   const pickedWorks = [...new Set(pickedList.flatMap((c) => dayTags[c]?.works ?? []))];
@@ -754,15 +743,26 @@ export function IslandEditor() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
-  const uploadTags = async (file: File) => {
+  // 読み込む：配置のファイルか、作品・キャラのファイルかを中身で見分ける（いまの段階に関係なく読める）
+  const uploadAny = async (file: File) => {
+    let json: unknown;
     try {
-      const got = parseTagsFile(JSON.parse(await file.text()));
-      if (!got) return setMsg("作品・キャラのファイルとして読めませんでした");
-      changeTags(got);
-      setMsg("作品・キャラを読み込みました");
+      json = JSON.parse(await file.text());
     } catch {
-      setMsg("ファイルを読めませんでした");
+      return setMsg("ファイルを読めませんでした（JSON ではない）");
     }
+    const layout = parseLayoutFile(json);
+    if (layout) {
+      change(layout);
+      setSel(null);
+      return setMsg(`配置を読み込みました（列 ${layout.length} 本・机 ${expandBooths(layout, halls).length / 2}）。「3D で確かめる」でメインの地図に出ます`);
+    }
+    const got = parseTagsFile(json);
+    if (got) {
+      changeTags(got);
+      return setMsg("作品・キャラを読み込みました。「3D で確かめる」でメインの地図に出ます");
+    }
+    setMsg("配置のファイルとしても、作品・キャラのファイルとしても読めませんでした");
   };
 
   const showOnMap = () => {
@@ -841,7 +841,10 @@ export function IslandEditor() {
               type="file"
               accept="application/json,.json"
               hidden
-              onChange={(e) => e.target.files?.[0] && (mode === "tags" ? uploadTags(e.target.files[0]) : upload(e.target.files[0]))}
+              onChange={(e) => {
+                if (e.target.files?.[0]) uploadAny(e.target.files[0]);
+                e.target.value = ""; // 同じファイルをもう一度選んでも読む
+              }}
             />
           </label>
           {mode === "layout" && <button

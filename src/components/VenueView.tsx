@@ -186,17 +186,46 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
   return g;
 }
 
-function walls(poly: XZ[], y: number, height: number, mat: THREE.Material) {
+// ホールの壁。doors（出入口の位置）に近い辺は、そこに幅 DOOR_W・高さ DOOR_H の戸口を開け、上は梁（はり）で残す
+const DOOR_W = 4.5;
+const DOOR_H = 3.6;
+function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = []) {
   const g = new THREE.Group();
+  const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
+    if (u1 - u0 < 0.05 || y1 - y0 < 0.05) return;
+    const w = new THREE.Mesh(new THREE.BoxGeometry(u1 - u0, y1 - y0, 0.4), mat);
+    const um = (u0 + u1) / 2;
+    w.position.set(ax + c * um, y + (y0 + y1) / 2, az + s * um);
+    w.rotation.y = -Math.atan2(s, c);
+    g.add(w);
+  };
   for (let i = 0; i < poly.length; i++) {
     const [ax, az] = poly[i];
     const [bx, bz] = poly[(i + 1) % poly.length];
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 0.5) continue;
-    const w = new THREE.Mesh(new THREE.BoxGeometry(len, height, 0.4), mat);
-    w.position.set((ax + bx) / 2, y + height / 2, (az + bz) / 2);
-    w.rotation.y = -Math.atan2(bz - az, bx - ax);
-    g.add(w);
+    const c = (bx - ax) / len, s = (bz - az) / len;
+    // この辺の近く（5m 以内）にある出入口を、辺の上の位置 u にして、戸口の範囲にする（重なれば1つに）
+    const gaps: [number, number][] = [];
+    for (const [dx, dz] of doors) {
+      const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
+      if (Math.abs(v) > 5 || u < 0 || u > len) continue;
+      gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2)]);
+    }
+    gaps.sort((p, q) => p[0] - q[0]);
+    const merged: [number, number][] = [];
+    for (const gp of gaps) {
+      const last = merged[merged.length - 1];
+      if (last && gp[0] <= last[1]) last[1] = Math.max(last[1], gp[1]);
+      else merged.push([...gp]);
+    }
+    let u = 0;
+    for (const [g0, g1] of merged) {
+      piece(ax, az, c, s, u, g0, 0, height);
+      piece(ax, az, c, s, g0, g1, DOOR_H, height); // 戸口の上
+      u = g1;
+    }
+    piece(ax, az, c, s, u, len, 0, height);
   }
   return g;
 }
@@ -342,6 +371,7 @@ export function VenueView() {
       return levels.get(lv)!;
     };
     const wallMat = new THREE.MeshLambertMaterial({ color: 0x8d9894, transparent: true, opacity: 0.55 });
+    const occluders: THREE.Object3D[] = []; // 札を隠す壁（3D・歩くで、壁の向こうの札は出さない）
 
     for (const a of venue.areas) {
       const y = floorY(a.level);
@@ -360,8 +390,9 @@ export function VenueView() {
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
       scene.add(f);
       partsOf(h.level).floors.push(f);
-      const w = walls(h.poly, y, WALL_H, wallMat);
+      const w = walls(h.poly, y, WALL_H, wallMat, venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at));
       scene.add(w);
+      occluders.push(w);
       partsOf(h.level).solid.push(w);
       const [cx, cz] = centroid(h.poly);
       const name = h.name + (h.level >= 4 ? "（4F）" : "") + (h.closed ? "：工事中" : "") + (h.rough ? "（形は概略）" : "");
@@ -406,18 +437,20 @@ export function VenueView() {
       byLevel.get(lv)!.push(i);
     });
     const tmp = new THREE.Object3D();
-    // 机の置き方。上から見るときは、押しやすいよう机をサークルの座る側（いすの所）までのばして描く（奥行き 0.45m → TOP_DESK_D）。
-    // 3D・歩くでは実物の大きさ。並びの向きにのばすと隣の机と重なるので、のばすのは奥行きだけ
+    // 机の置き方。見やすく押しやすいよう、机をサークルの座る側（いすの所）までのばして描く（奥行き 0.45m → TOP_DESK_D・VIEW_DESK_D）。
+    // 並びの向きにのばすと隣の机と重なるので、のばすのは奥行きだけ
     const TOP_DESK_D = 1.4;
+    const VIEW_DESK_D = 1.4; // 3D・歩く
     const placeDesks = (top: boolean) => {
+      const d = top ? TOP_DESK_D : VIEW_DESK_D;
       for (const [lv, { mesh, index }] of deskMeshes) {
         index.forEach((bi, k) => {
           const b = booths[bi];
           // 島の中心線から外へ（サークルの座る側へ）ずらす
-          const out = top ? (b.side * (TOP_DESK_D - DESK_D)) / 2 : 0;
+          const out = (b.side * (d - DESK_D)) / 2;
           tmp.position.set(b.at[0] - Math.sin(b.angle) * out, floorY(lv) + 0.35, b.at[1] + Math.cos(b.angle) * out);
           tmp.rotation.set(0, -b.angle, 0);
-          tmp.scale.set(1, 1, top ? TOP_DESK_D / DESK_D : 1);
+          tmp.scale.set(1, 1, d / DESK_D);
           tmp.updateMatrix();
           mesh.setMatrixAt(k, tmp.matrix);
         });
@@ -433,6 +466,64 @@ export function VenueView() {
       deskMeshes.set(lv, { mesh, index });
     }
     placeDesks(true);
+    // 机の側面の番号（3D・歩く）。「05a」のような文字を1枚の絵にならべ、スペースごとに机の長い面の両側へ貼る
+    const numTexts = [...new Set(booths.map((b) => `${String(b.num).padStart(2, "0")}${b.half}`))];
+    const N_COLS = 16, CW = 128, CH = 96;
+    const nRows = Math.ceil(numTexts.length / N_COLS);
+    const atlas = document.createElement("canvas");
+    atlas.width = N_COLS * CW;
+    atlas.height = nRows * CH;
+    const actx = atlas.getContext("2d")!;
+    actx.font = `800 ${Math.round(CH * 0.7)}px system-ui, sans-serif`;
+    actx.textAlign = "center";
+    actx.textBaseline = "middle";
+    actx.lineJoin = "round";
+    actx.lineWidth = 12;
+    actx.strokeStyle = "rgba(255,255,255,.95)";
+    actx.fillStyle = "#1d1d1b";
+    const numCell = new Map<string, number>();
+    numTexts.forEach((t, i) => {
+      numCell.set(t, i);
+      const x = ((i % N_COLS) + 0.5) * CW, y = (Math.floor(i / N_COLS) + 0.5) * CH;
+      actx.strokeText(t, x, y);
+      actx.fillText(t, x, y);
+    });
+    const atlasTex = new THREE.CanvasTexture(atlas);
+    atlasTex.colorSpace = THREE.SRGBColorSpace;
+    atlasTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const numMat = new THREE.MeshBasicMaterial({ map: atlasTex, alphaTest: 0.35 });
+    // スペースごとに、絵のどこを使うか（uvRect）を渡す
+    numMat.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute vec4 uvRect;")
+        .replace("#include <uv_vertex>", "#include <uv_vertex>\nvMapUv = uvRect.xy + uv * uvRect.zw;");
+    };
+    const numMeshes: { mesh: THREE.InstancedMesh; level: number }[] = [];
+    for (const [lv, { index }] of deskMeshes) {
+      const geo = new THREE.PlaneGeometry(DESK_L / 2 - 0.12, 0.5);
+      const rects = new Float32Array(index.length * 2 * 4);
+      const mesh = new THREE.InstancedMesh(geo, numMat, index.length * 2);
+      index.forEach((bi, k) => {
+        const b = booths[bi];
+        const cell = numCell.get(`${String(b.num).padStart(2, "0")}${b.half}`)!;
+        const out = (b.side * (VIEW_DESK_D - DESK_D)) / 2;
+        const nx = -Math.sin(b.angle), nz = Math.cos(b.angle);
+        const cx = b.at[0] + nx * out, cz = b.at[1] + nz * out;
+        for (const [j, sgn] of [[0, 1], [1, -1]] as const) {
+          const off = VIEW_DESK_D / 2 + 0.02;
+          tmp.position.set(cx + nx * sgn * off, floorY(lv) + 0.37, cz + nz * sgn * off);
+          tmp.rotation.set(0, sgn > 0 ? -b.angle : Math.PI - b.angle, 0);
+          tmp.scale.set(1, 1, 1);
+          tmp.updateMatrix();
+          mesh.setMatrixAt(k * 2 + j, tmp.matrix);
+          rects.set([(cell % N_COLS) / N_COLS, 1 - (Math.floor(cell / N_COLS) + 1) / nRows, 1 / N_COLS, 1 / nRows], (k * 2 + j) * 4);
+        }
+      });
+      geo.setAttribute("uvRect", new THREE.InstancedBufferAttribute(rects, 4));
+      mesh.computeBoundingSphere();
+      scene.add(mesh);
+      numMeshes.push({ mesh, level: lv });
+    }
     // 列の名前（ブロック）。会場の札のように、列の両端の頭の上に
     for (const l of lines) {
       if (l.wall) continue; // 壁ぞいの列は札を出さない（机の番号で分かる）
@@ -507,7 +598,8 @@ export function VenueView() {
       controls = null;
       current = v;
       fly = null;
-      for (const s of sprites) s.material.depthTest = v !== "top";
+      const labelSprites = new Set(labels.map((l) => l.s));
+      for (const s of sprites) s.material.depthTest = v !== "top" && !labelSprites.has(s);
       persp.fov = v === "walk" ? 70 : 50;
       persp.updateProjectionMatrix();
       if (v === "top") {
@@ -569,6 +661,7 @@ export function VenueView() {
           else o.visible = on;
         }
       }
+      for (const { mesh, level } of numMeshes) mesh.visible = current !== "top" && floorOf(level) === currentFloor;
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
@@ -787,6 +880,33 @@ export function VenueView() {
       if (current === "top") return (h * ortho.zoom) / (2 * 160);
       return h / (2 * Math.max(0.1, camera.position.distanceTo(at)) * Math.tan((persp.fov * Math.PI) / 360));
     };
+    // 3D・歩く：カメラから札までの間に壁があれば、その札を隠す（札は壁にめりこんで欠けないよう、深さで切らずに描いている）。
+    // 札のすぐ手前（2.5m）の壁は数えない（出入口・トイレの札は壁ぎわにある）。動いている間は 0.12 秒ごとに調べ直す
+    const wallRay = new THREE.Raycaster();
+    const behind = new Set<THREE.Sprite>();
+    const lastCam = new THREE.Vector3(Infinity, 0, 0);
+    let lastCheck = 0;
+    const hideBehindWalls = () => {
+      if (current === "top") return;
+      const now = performance.now();
+      if (now - lastCheck > 120 || lastCam.distanceToSquared(camera.position) > 0.25) {
+        lastCheck = now;
+        lastCam.copy(camera.position);
+        behind.clear();
+        const walls = occluders.filter((o) => o.visible);
+        const dir = new THREE.Vector3();
+        for (const { s } of labels) {
+          if (!s.visible) continue;
+          dir.subVectors(s.position, camera.position);
+          const dist = dir.length();
+          if (dist < 2.6) continue;
+          wallRay.set(camera.position, dir.normalize());
+          wallRay.far = dist - 2.5;
+          if (wallRay.intersectObjects(walls, true).length) behind.add(s);
+        }
+      }
+      for (const { s } of labels) if (behind.has(s)) s.visible = false;
+    };
     let hereName = "";
     const placeLabels = () => {
       const walk = current === "walk";
@@ -804,6 +924,7 @@ export function VenueView() {
         }
         s.visible = show;
       }
+      hideBehindWalls();
       for (const { s, base } of stationLabels) {
         s.scale.copy(base);
         if (!walk) s.scale.multiplyScalar(18 / (base.y * pxPerM(s.position)));
