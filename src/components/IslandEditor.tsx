@@ -21,6 +21,7 @@ const sampleLines = (layoutJson as unknown as { lines: Line[] }).lines;
 type Tool = "select" | "add" | "image";
 type Bg = { img: HTMLImageElement; x: number; z: number; mPerPx: number; rot: number; opacity: number };
 const floorOf = (lv: number) => (lv >= 4 ? 4 : 1);
+const THICK = 3; // 机の奥行きを何倍に描くか
 const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments] }));
 
 // ホールを島がまっすぐになる向きに回す角（ホールの長い辺を横に。北がなるべく上）
@@ -166,8 +167,9 @@ export function IslandEditor() {
     for (const b of booths) {
       if (!onLevel.has(b.hall)) continue;
       const c = Math.cos(b.angle), s = Math.sin(b.angle);
-      const hl = DESK_L / 4 - 0.02, hd = DESK_D / 2;
-      const corner = (du: number, dv: number): XZ => [b.at[0] + du * c - dv * s, b.at[1] + du * s + dv * c];
+      // 机の奥行きは実物の 3 倍に描く（細いと見にくく押しにくい）。島の外側へのばす
+      const hl = DESK_L / 4 - 0.02, hd = (DESK_D / 2) * THICK, off = (b.side * DESK_D * (THICK - 1)) / 2;
+      const corner = (du: number, dv: number): XZ => [b.at[0] + du * c - (dv + off) * s, b.at[1] + du * s + (dv + off) * c];
       poly([corner(-hl, -hd), corner(hl, -hd), corner(hl, hd), corner(-hl, hd)]);
       g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
       g.fill();
@@ -248,7 +250,7 @@ export function IslandEditor() {
   // ---- 操作 ----
   const hitLine = useCallback(
     (p: XZ) => {
-      let best = -1, bestD = 1.6;
+      let best = -1, bestD = 0.3 + DESK_D * THICK; // 太く描いた島の幅のぶん
       lines.forEach((l, i) => {
         if (l.hall !== hallId) return;
         const c = Math.cos(l.angle), s = Math.sin(l.angle);
@@ -263,12 +265,43 @@ export function IslandEditor() {
     [lines, hallId],
   );
 
+  // 指 2 本で拡大・移動（スマホ・タブレット）
+  const fingers = useRef(new Map<number, [number, number]>());
+  const pinch = useRef<{ d0: number; k0: number; u: number; v: number } | null>(null);
+  const zoomAt = useCallback(
+    (sx: number, sy: number, k: number) => {
+      const { W, H } = tf();
+      const v = view.current;
+      const before = { u: (sx - W / 2) / v.k + v.u, v: (sy - H / 2) / v.k + v.v };
+      v.k = Math.min(80, Math.max(0.5, k));
+      // 指・カーソルの下の場所がそのままになるように
+      v.u = before.u - (sx - W / 2) / v.k;
+      v.v = before.v - (sy - H / 2) / v.k;
+      repaint();
+    },
+    [tf, repaint],
+  );
+
   const onDown = (e: React.PointerEvent) => {
     const r = cv.current!.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const { toW } = tf();
     const p = toW(sx, sy);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    fingers.current.set(e.pointerId, [sx, sy]);
+    if (fingers.current.size === 2) {
+      // 2 本目の指：拡大・移動に切り替える（1 本目で始めた操作はやめる）
+      const [a, b] = [...fingers.current.values()];
+      const { W, H } = tf();
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const v = view.current;
+      pinch.current = { d0: Math.hypot(a[0] - b[0], a[1] - b[1]), k0: v.k, u: (mx - W / 2) / v.k + v.u, v: (my - H / 2) / v.k + v.v };
+      drag.current = null;
+      addStart.current = null;
+      return;
+    }
     const panStart = { sx, sy, u: view.current.u, v: view.current.v };
     if (tool === "add") {
       if (!addStart.current) {
@@ -307,8 +340,21 @@ export function IslandEditor() {
   const onMove = (e: React.PointerEvent) => {
     const r = cv.current!.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
-    const { toW, k } = tf();
+    const { toW, k, W, H } = tf();
     pointer.current = toW(sx, sy);
+    if (fingers.current.has(e.pointerId)) fingers.current.set(e.pointerId, [sx, sy]);
+    if (pinch.current && fingers.current.size >= 2) {
+      const [a, b] = [...fingers.current.values()];
+      const pc = pinch.current;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const v = view.current;
+      v.k = Math.min(80, Math.max(0.5, (pc.k0 * Math.hypot(a[0] - b[0], a[1] - b[1])) / Math.max(1, pc.d0)));
+      // 始めたときの 2 本の指の真ん中の場所が、いまの真ん中に来るように
+      v.u = pc.u - (mx - W / 2) / v.k;
+      v.v = pc.v - (my - H / 2) / v.k;
+      repaint();
+      return;
+    }
     const d = drag.current;
     if (!d) {
       if (tool === "add" && addStart.current) repaint();
@@ -329,28 +375,37 @@ export function IslandEditor() {
       setBgs((b) => ({ ...b, [hallId]: { ...b[hallId], x: d.bg!.x + dx, z: d.bg!.z + dz } }));
     }
   };
-  const onUp = () => {
+  const onUp = (e: React.PointerEvent) => {
+    fingers.current.delete(e.pointerId);
+    if (fingers.current.size < 2) pinch.current = null;
     drag.current = null;
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    const r = cv.current!.getBoundingClientRect();
-    const sx = e.clientX - r.left, sy = e.clientY - r.top;
-    const { W, H } = tf();
-    const v = view.current;
-    const before = { u: (sx - W / 2) / v.k + v.u, v: (sy - H / 2) / v.k + v.v };
-    if (tool === "image" && e.altKey && bgs[hallId]) {
-      // Alt＋ホイールで下絵の大きさ
-      const f = e.deltaY < 0 ? 1.02 : 1 / 1.02;
-      setBgs((b) => ({ ...b, [hallId]: { ...b[hallId], mPerPx: b[hallId].mPerPx * f } }));
-      return;
-    }
-    v.k = Math.min(80, Math.max(0.5, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-    // カーソルの下の場所がそのままになるように
-    v.u = before.u - (sx - W / 2) / v.k;
-    v.v = before.v - (sy - H / 2) / v.k;
-    repaint();
-  };
+  // ホイール：地図だけを拡大する。ブラウザの既定の動き（ページのスクロールや、Ctrl＋ホイール・トラックパッドのピンチでのページ全体の拡大）は止める。
+  // React の onWheel は止められない（passive）ので、canvas に直接つける
+  const onWheel = useRef<(e: WheelEvent) => void>(() => {});
+  useEffect(() => {
+    onWheel.current = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = cv.current!.getBoundingClientRect();
+      const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      if (tool === "image" && e.altKey && bgs[hallId]) {
+        // Alt＋ホイールで下絵の大きさ
+        const f = e.deltaY < 0 ? 1.02 : 1 / 1.02;
+        setBgs((b) => ({ ...b, [hallId]: { ...b[hallId], mPerPx: b[hallId].mPerPx * f } }));
+        return;
+      }
+      // トラックパッドのピンチ（Ctrl つき）は細かく、マウスのホイールは 1 段ずつ
+      const f = e.ctrlKey ? Math.exp(-e.deltaY * 0.01) : e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      zoomAt(sx, sy, view.current.k * f);
+    };
+  });
+  useEffect(() => {
+    const el = cv.current!;
+    const h = (e: WheelEvent) => onWheel.current(e);
+    el.addEventListener("wheel", h, { passive: false });
+    return () => el.removeEventListener("wheel", h);
+  }, []);
 
   // キーボード：Delete で消す、矢印で 0.1m（Shift で 1m）動かす、Ctrl+Z で戻す、Esc でやめる
   useEffect(() => {
@@ -524,7 +579,7 @@ export function IslandEditor() {
             onPointerDown={onDown}
             onPointerMove={onMove}
             onPointerUp={onUp}
-            onWheel={onWheel}
+            onPointerCancel={onUp}
           />
           <div style={{ ...HINT }}>
             {tool === "add"
