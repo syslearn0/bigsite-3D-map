@@ -493,20 +493,24 @@ export function VenueView() {
       scene.add(label);
       addLabel(label, "door");
     }
-    // 柱（配置図から写したとき）。0.8m 角、壁の高さまで
+    // 柱（配置図から写したとき）。壁ぎわの柱は 0.8m 角で壁の高さまで。
+    // 島の中の柱は、机を見やすく太く描いているので、本当の大きさだと机を突き抜けて見える。細く低い印（0.3m 角・高さ 1.6m、机は 0.7m）にする
     if (features?.pillars.length) {
       const pillarMat = new THREE.MeshLambertMaterial({ color: 0x6f7773 });
-      const byLv = new Map<number, XZ[]>();
+      const markMat = new THREE.MeshLambertMaterial({ color: 0x4a4f4c });
+      const groups = new Map<string, { lv: number; wall: boolean; list: XZ[] }>();
       for (const p of features.pillars) {
         const lv = venue.halls.find((x) => x.id === p.hall)?.level ?? 1;
-        if (!byLv.has(lv)) byLv.set(lv, []);
-        byLv.get(lv)!.push(p.at);
+        const key = `${lv}:${p.wall ? 1 : 0}`;
+        if (!groups.has(key)) groups.set(key, { lv, wall: !!p.wall, list: [] });
+        groups.get(key)!.list.push(p.at);
       }
       const t = new THREE.Object3D();
-      for (const [lv, list] of byLv) {
-        const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, WALL_H, 0.8), pillarMat, list.length);
+      for (const { lv, wall, list } of groups.values()) {
+        const size = wall ? 0.8 : 0.3, h = wall ? WALL_H : 1.6;
+        const m = new THREE.InstancedMesh(new THREE.BoxGeometry(size, h, size), wall ? pillarMat : markMat, list.length);
         list.forEach(([x, z], i) => {
-          t.position.set(x, floorY(lv) + WALL_H / 2, z);
+          t.position.set(x, floorY(lv) + h / 2, z);
           t.updateMatrix();
           m.setMatrixAt(i, t.matrix);
         });

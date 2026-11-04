@@ -247,7 +247,7 @@ export function IslandEditor() {
     for (const p of features?.pillars ?? []) {
       if (!onLevel.has(p.hall)) continue;
       const [sx, sy] = toS(p.at);
-      const r = Math.max(2, 0.4 * k);
+      const r = p.wall ? Math.max(2, 0.4 * k) : Math.max(1.5, 0.2 * k); // 島の中の柱は小さな印
       g.fillStyle = "#3a3f3c";
       g.fillRect(sx - r, sy - r, 2 * r, 2 * r);
     }
