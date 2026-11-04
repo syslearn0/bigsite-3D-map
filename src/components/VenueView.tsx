@@ -640,6 +640,28 @@ export function VenueView() {
       mesh.computeBoundingSphere();
       scene.add(mesh);
       numMeshes.push({ mesh, level: lv });
+      // 机の上の面にも、平らに。字の頭は島の内側へ向け、通路（サークルの座る側）から読める向きにする
+      const topGeo = new THREE.PlaneGeometry(DESK_L / 2 - 0.12, 0.62);
+      const topRects = new Float32Array(index.length * 4);
+      const top = new THREE.InstancedMesh(topGeo, numMat, index.length);
+      const flat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      const yawQ = new THREE.Quaternion();
+      index.forEach((bi, k) => {
+        const b = booths[bi];
+        const cell = numCell.get(`${String(b.num).padStart(2, "0")}${b.half}`)!;
+        const out = (b.side * (VIEW_DESK_D - DESK_D)) / 2;
+        tmp.position.set(b.at[0] - Math.sin(b.angle) * out, floorY(lv) + 0.71, b.at[1] + Math.cos(b.angle) * out);
+        yawQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), b.side > 0 ? -b.angle : Math.PI - b.angle);
+        tmp.quaternion.copy(yawQ).multiply(flat);
+        tmp.scale.set(1, 1, 1);
+        tmp.updateMatrix();
+        top.setMatrixAt(k, tmp.matrix);
+        topRects.set([(cell % N_COLS) / N_COLS, 1 - (Math.floor(cell / N_COLS) + 1) / nRows, 1 / N_COLS, 1 / nRows], k * 4);
+      });
+      topGeo.setAttribute("uvRect", new THREE.InstancedBufferAttribute(topRects, 4));
+      top.computeBoundingSphere();
+      scene.add(top);
+      numMeshes.push({ mesh: top, level: lv });
     }
     // 列の名前（ブロック）。会場の札のように、列の両端の頭の上に
     for (const l of lines) {
