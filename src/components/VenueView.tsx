@@ -419,6 +419,36 @@ export function VenueView() {
       partsOf(h.level).solid.push(label);
       addLabel(label, "hall");
     }
+    // 会場案内図から写したもの：一般参加者の待機列（橙）・通行不可（灰）の場所、サークル入場経路（水色・紺）、サークル入口・待ち合わせの大玉
+    for (const a of features?.areas ?? []) {
+      const wait = a.kind === "wait";
+      const y = floorY(a.level);
+      const m = flatPoly(a.poly, wait ? 0xf3a45b : 0x9a9d9a, y + 0.06, wait ? 0.55 : 0.6);
+      scene.add(m);
+      partsOf(a.level).floors.push(m);
+      const label = textSprite(wait ? "一般参加者 待機列" : "通行不可", { bg: wait ? "rgba(200,110,30,.9)" : "rgba(90,92,90,.85)", height: 2.6, px: 30 });
+      const [cx, cz] = centroid(a.poly);
+      label.position.set(cx, y + 2.6, cz);
+      scene.add(label);
+      partsOf(a.level).solid.push(label);
+      addLabel(label, wait ? "area" : "shutter");
+    }
+    for (const r of features?.routes ?? []) {
+      const m = new THREE.Mesh(
+        ribbons([{ pts: r.pts, y: 0.12, w: r.kind === "recommended" ? 3.5 : 2.4 }]),
+        new THREE.MeshBasicMaterial({ color: r.kind === "recommended" ? 0x3cb4f0 : 0x2a3f8f, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
+      );
+      scene.add(m);
+      partsOf(1).floors.push(m);
+    }
+    for (const mk of features?.marks ?? []) {
+      const entrance = mk.kind === "circle-entrance";
+      const s = textSprite(entrance ? `▶ ${mk.name}` : `● ${mk.name}`, { bg: entrance ? "rgba(20,90,170,.92)" : "rgba(180,40,110,.92)", height: 2.6, px: 30 });
+      s.position.set(mk.at[0], floorY(mk.level) + 3, mk.at[1]);
+      scene.add(s);
+      partsOf(mk.level).solid.push(s);
+      addLabel(s, "door");
+    }
     // 柱（配置図から写したとき）。0.8m 角、壁の高さまで
     if (features?.pillars.length) {
       const pillarMat = new THREE.MeshLambertMaterial({ color: 0x6f7773 });

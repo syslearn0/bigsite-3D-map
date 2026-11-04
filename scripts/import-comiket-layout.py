@@ -428,6 +428,136 @@ def read_features(doc, desks):
     return {"pillars": pillars, "openings": openings}
 
 
+# ---- 会場案内図（PDF の2ページ目）：待機列・通行不可・サークル入場経路・サークル入口・待ち合わせの大玉 ----
+# 案内図は略図で、全体を1つの式で写すと 10〜27m ずれる。そこで、ホールの角・駅などの対応点を集め、
+# 写したい点の近くの対応点ほど重く見て、その点ごとに式を決める（近いほど対応点どおりに合う）
+GUIDE = 1
+GUIDE_MAIN_X = 940  # これより右は「2階」「4階」「会議棟1階」の小さな図と凡例
+BLUE, GREY = (0.43, 0.81, 0.97), (0.82, 0.83, 0.83)
+# 案内図のホールの形（水色の塗り）→ 会場データのホール。頂点は、いったん全体の式で写して、いちばん近いホールの角と組にする
+GUIDE_HALLS = {"E7": (64, 365, 183, 481), "W1": (577, 192, 664, 322), "W2": (663, 192, 742, 321), "S": (676, 61, 748, 171)}
+# 手で読んだ対応点（案内図の pt → 会場の m）
+GUIDE_POINTS = [
+    ((229.3, 285.3), (478.5, -173.2)), ((462.9, 285.3), (251.3, -23.9)), ((462.9, 354.9), (201.7, -99.0)), ((229.3, 351.4), (428.9, -248.3)),  # 東1〜3 の四すみ
+    ((754, 533), (-255.7, -46.6)),  # ゆりかもめ 東京ビッグサイト駅
+    ((556, 803), (-221.3, -516.3)),  # りんかい線 国際展示場駅
+]
+
+
+def near(c, rgb):
+    return c is not None and all(abs(a - b) < 0.02 for a, b in zip(c, rgb))
+
+
+def path_points(dr):
+    pts = []
+    for it in dr["items"]:
+        if it[0] == "l":
+            for q in (it[1], it[2]):
+                if not pts or (abs(pts[-1][0] - q.x) > 0.01 or abs(pts[-1][1] - q.y) > 0.01):
+                    pts.append((q.x, q.y))
+        elif it[0] == "c":
+            for q in (it[1], it[4]):
+                if not pts or (abs(pts[-1][0] - q.x) > 0.01 or abs(pts[-1][1] - q.y) > 0.01):
+                    pts.append((q.x, q.y))
+        elif it[0] == "re":
+            r = it[1]
+            pts += [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)]
+    return pts
+
+
+def fit_affine(src, dst, w=None):
+    """重みつきの最小二乗で、src → dst の一次変換（x' = a x + b y + c）"""
+    n = len(src)
+    w = w or [1.0] * n
+    # 正規方程式（3×3）を2つ
+    ata = [[0.0] * 3 for _ in range(3)]
+    atb = [[0.0, 0.0] for _ in range(3)]
+    for (x, y), (u, v), k in zip(src, dst, w):
+        row = (x, y, 1.0)
+        for i in range(3):
+            for j in range(3):
+                ata[i][j] += k * row[i] * row[j]
+            atb[i][0] += k * row[i] * u
+            atb[i][1] += k * row[i] * v
+
+    def solve(m, b):
+        m = [r[:] + [bb] for r, bb in zip(m, b)]
+        for i in range(3):
+            piv = max(range(i, 3), key=lambda r: abs(m[r][i]))
+            m[i], m[piv] = m[piv], m[i]
+            for r in range(3):
+                if r != i:
+                    f = m[r][i] / m[i][i]
+                    m[r] = [a - f * c for a, c in zip(m[r], m[i])]
+        return [m[i][3] / m[i][i] for i in range(3)]
+
+    cu = solve(ata, [b[0] for b in atb])
+    cv = solve(ata, [b[1] for b in atb])
+    return lambda x, y: (cu[0] * x + cu[1] * y + cu[2], cv[0] * x + cv[1] * y + cv[2])
+
+
+def read_guide(doc):
+    p = doc[GUIDE]
+    drs = p.get_drawings()
+    # 対応点：手で読んだものに、案内図のホールの形の頂点と会場データのホールの角の組を足す
+    src = [a for a, _ in GUIDE_POINTS]
+    dst = [b for _, b in GUIDE_POINTS]
+    rough = fit_affine(src, dst)
+    for key, box in GUIDE_HALLS.items():
+        dr = next(d for d in drs if near(d.get("fill"), BLUE) and all(abs(a - b) < 1.5 for a, b in zip(d["rect"], box)))
+        ids = ["S1", "S2"] if key == "S" else [key]
+        corners = [tuple(q) for i in ids for q in HALLS[i]["poly"]]
+        # 頂点が多い形は、外の四すみ（いちばん外側の点）だけ使う
+        pts = path_points(dr)
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        for q in [(min(xs), min(ys)), (max(xs), min(ys)), (max(xs), max(ys)), (min(xs), max(ys))]:
+            gq = min(pts, key=lambda t: math.hypot(t[0] - q[0], t[1] - q[1]))
+            rx, rz = rough(*gq)
+            c = min(corners, key=lambda t: math.hypot(t[0] - rx, t[1] - rz))
+            if math.hypot(c[0] - rx, c[1] - rz) < 45:
+                src.append(gq)
+                dst.append(c)
+    rough = fit_affine(src, dst)
+
+    def to_v(x, y):
+        w = [1 / (math.hypot(x - a, y - b) ** 2 + 400) for a, b in src]  # 20pt より近い所は同じくらいの重み
+        f = fit_affine(src, dst, w)
+        u, v = f(x, y)
+        return [round(u, 1), round(v, 1)]
+
+    areas, routes, marks = [], [], []
+    for d in drs:
+        r = d["rect"]
+        if r.x0 > GUIDE_MAIN_X:
+            continue
+        if near(d.get("fill"), GREY):
+            pts = path_points(d)
+            # 大きな灰色（東7・8 の外と、国際展示場駅寄り）は一般参加者の待機列、ほかは通行不可
+            kind = "wait" if r.width * r.height > 20000 or (r.height > 3 * r.width and r.height > 150) else "closed"
+            areas.append({"kind": kind, "name": "一般参加者待機列" if kind == "wait" else "通行不可", "level": 1, "poly": [to_v(*q) for q in pts]})
+        elif d["type"] == "s" and (near(d.get("color"), BLUE) and (d.get("width") or 0) >= 1.5):
+            routes.append({"kind": "recommended", "pts": [to_v(*q) for q in path_points(d)]})
+        elif d["type"] == "s" and d.get("dashes", "").startswith("[ 0 3") and (d.get("width") or 0) >= 1.9:
+            routes.append({"kind": "circle", "pts": [to_v(*q) for q in path_points(d)]})
+    words = p.get_text("words")
+    for i, w in enumerate(words):
+        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        if cx > GUIDE_MAIN_X:
+            continue
+        if w[4] == "サークル入口" and i + 1 < len(words):
+            code = words[i + 1][4]
+            level = 2 if code == "CE" else 1  # CE はエントランスホール（2F）
+            marks.append({"kind": "circle-entrance", "name": f"サークル入口{code}", "level": level, "at": to_v(cx, cy)})
+    # 待ち合わせの大玉（凡例の「赤・灰・青」より上の、地図の中の字）
+    for color, level, where in (("赤", 2, "東地区2F"), ("灰", 2, "エントランスホール"), ("青", 1, "西アトリウム")):
+        w = next((w for w in words if w[4] == color and w[1] < 700 and w[0] < GUIDE_MAIN_X), None)
+        if w:
+            marks.append({"kind": "meeting", "name": f"大玉（{color}・{where}）", "level": level, "at": to_v((w[0] + w[2]) / 2, (w[1] + w[3]) / 2)})
+    err = max(math.hypot(*(a - b for a, b in zip(to_v(*s_), d_))) for s_, d_ in zip(src, dst))
+    print(f"案内図：対応点 {len(src)}（いちばんのずれ {err:.1f}m）・待機列と通行不可 {len(areas)}・経路 {len(routes)}・入口と大玉 {len(marks)}")
+    return {"areas": areas, "routes": routes, "marks": marks}
+
+
 def main():
     pdf = Path(sys.argv[1])
     out_path = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "data/private/layout-c108.json"
@@ -564,6 +694,7 @@ def main():
         lines.append(line)
 
     features = read_features(doc, cells_done)
+    features.update(read_guide(doc))
     out = {"format": "comiket3d-layout", "version": 1, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": pdf.name, "note": "コミックマーケット108 の配置図から写した机の配置（参考）。位置は配置図からの目安で、数m ずれることがある", "lines": lines, "features": features}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

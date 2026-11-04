@@ -114,7 +114,18 @@ test("机1つずつの列（配置図から写した列）：番号・a/b・島�
 test("配置のファイルの会場のつくり（柱・壁の切れ目）", () => {
   const features = { pillars: [{ hall: "X", at: [1, 2] as [number, number], wall: true }], openings: [{ hall: "X", a: [0, 0] as [number, number], b: [4, 0] as [number, number] }] };
   const file = JSON.parse(JSON.stringify(toLayoutFile([], features)));
-  assert.deepEqual(parseLayoutFeatures(file), features);
+  assert.deepEqual(parseLayoutFeatures(file), { ...features, areas: [], routes: [], marks: [] });
+  // 会場案内図からのもの：形の正しいものだけ残す
+  const guide = {
+    ...features,
+    areas: [{ kind: "wait", name: "一般参加者待機列", level: 1, poly: [[0, 0], [1, 0], [1, 1]] }, { kind: "closed", name: "通行不可", level: 1, poly: [[0, 0]] }],
+    routes: [{ kind: "recommended", pts: [[0, 0], [5, 5]] }],
+    marks: [{ kind: "meeting", name: "大玉（赤）", level: 2, at: [3, 4] }],
+  };
+  const g = parseLayoutFeatures({ ...file, features: guide })!;
+  assert.equal(g.areas!.length, 1);
+  assert.equal(g.routes!.length, 1);
+  assert.equal(g.marks![0].name, "大玉（赤）");
   assert.equal(parseLayoutFeatures(JSON.parse(JSON.stringify(toLayoutFile([])))), null); // なければ null
   assert.equal(parseLayoutFeatures({ ...file, features: { pillars: [{ hall: "X", at: [1] }], openings: [] } }), null);
 });

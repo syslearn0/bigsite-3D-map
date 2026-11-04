@@ -364,6 +364,10 @@ export type LayoutFile = { format: typeof LAYOUT_FORMAT; version: 1; updated: st
 export type LayoutFeatures = {
   pillars: { hall: string; at: XZ; wall?: boolean }[]; // wall：壁ぎわの柱（壁の線の上）
   openings: { hall: string; a: XZ; b: XZ }[]; // 壁の a から b までが開いている
+  // 会場案内図から：一般参加者の待機列・通行不可の場所、サークル入場経路、サークル入口・待ち合わせの大玉
+  areas?: { kind: "wait" | "closed"; name: string; level: number; poly: XZ[] }[];
+  routes?: { kind: "recommended" | "circle"; pts: XZ[] }[];
+  marks?: { kind: "circle-entrance" | "meeting"; name: string; level: number; at: XZ }[];
 };
 
 export function toLayoutFile(lines: Line[], features?: LayoutFeatures | null): LayoutFile {
@@ -376,7 +380,12 @@ export function parseLayoutFeatures(json: unknown): LayoutFeatures | null {
   if (!f || !Array.isArray(f.pillars) || !Array.isArray(f.openings)) return null;
   const xz = (p: unknown) => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
   const ok = f.pillars.every((p) => p && typeof p.hall === "string" && xz(p.at)) && f.openings.every((o) => o && typeof o.hall === "string" && xz(o.a) && xz(o.b));
-  return ok ? { pillars: f.pillars, openings: f.openings } : null;
+  if (!ok) return null;
+  // 案内図からのものは、形の正しいものだけ残す
+  const areas = (Array.isArray(f.areas) ? f.areas : []).filter((a) => a && typeof a.name === "string" && Array.isArray(a.poly) && a.poly.length >= 3 && a.poly.every(xz));
+  const routes = (Array.isArray(f.routes) ? f.routes : []).filter((r) => r && Array.isArray(r.pts) && r.pts.length >= 2 && r.pts.every(xz));
+  const marks = (Array.isArray(f.marks) ? f.marks : []).filter((m) => m && typeof m.name === "string" && xz(m.at));
+  return { pillars: f.pillars, openings: f.openings, areas, routes, marks };
 }
 
 // 読み込んだものが配置のファイルとして正しければ lines を、だめなら null
