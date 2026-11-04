@@ -8,7 +8,7 @@ import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout } from "@/lib/saved-layout";
-import { DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
+import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -639,8 +639,8 @@ export function VenueView() {
           if (bi === sel) col.setHex(SELECT_COLOR);
           else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
           else if (colorByGenre && dayTags) {
-            // 入れた作品の色（作品が入っていない机は白）
-            const w = dayTags[b.code]?.work;
+            // 入れた作品の色（作品が2つ以上なら1つ目の色。作品が入っていない机は白）
+            const w = dayTags[b.code]?.works?.[0];
             if (w) col.setStyle(workColor(w)).lerp(new THREE.Color(0xffffff), 0.2);
             else col.setHex(DESK_COLOR);
           } else if (colorByGenre) {
@@ -1518,8 +1518,8 @@ export function VenueView() {
             <div style={{ fontSize: ".9rem", marginTop: 2 }}>
               {dayTags ? (
                 <>
-                  作品：{dayTags[sel.code]?.work ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
-                  {dayTags[sel.code]?.chars?.length ? `　／　キャラ：${dayTags[sel.code]!.chars!.join("、")}` : ""}
+                  作品：{dayTags[sel.code]?.works?.join("・") ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
+                  {charsText(dayTags[sel.code]) ? `　／　キャラ：${charsText(dayTags[sel.code])}` : ""}
                 </>
               ) : (
                 <>作品（見本）：{lines[sel.line].genre}</>

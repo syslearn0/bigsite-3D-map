@@ -6,7 +6,7 @@ import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
 import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, saveLayout } from "@/lib/saved-layout";
-import { applyTag, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
+import { applyChars, applyWorks, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
 // 島のエディタ。2つの作業がある。
 // ・作品・キャラを入れる（協力者）：スペースを選んで、作品（ブルーアーカイブ・原神など）を広い範囲に入れ、次にキャラを入れる。日ごとに分けて持つ
@@ -221,15 +221,24 @@ export function IslandEditor() {
       const dt = dayTags[b.code];
       if (mode === "tags") {
         const none = b.hall === hallId ? "#c3cad4" : "#dde1e6";
+        const ws = dt?.works ?? [];
         if (picked.has(b.code)) g.fillStyle = "#ffb000";
-        else if (step === 1) g.fillStyle = dt?.work ? workColor(dt.work) : none;
+        else if (step === 1) g.fillStyle = ws[0] ? workColor(ws[0]) : none;
         else if (step === 2 && focusWork)
-          // 選んだ作品のスペースだけ：キャラが入った所は濃く、まだの所は薄く。ほかの作品は目立たせない
-          g.fillStyle = dt?.work === focusWork ? (dt.chars?.length ? workColor(dt.work) : workColor(dt.work, true)) : "#e6e9ed";
-        else g.fillStyle = dt?.work ? workColor(dt.work, true) : none;
+          // 選んだ作品を扱うスペースだけ：その作品のキャラが入った所は濃く、まだの所は薄く。ほかは目立たせない
+          g.fillStyle = ws.includes(focusWork) ? workColor(focusWork, !dt?.chars?.[focusWork]?.length) : "#e6e9ed";
+        else g.fillStyle = ws[0] ? workColor(ws[0], true) : none;
+        g.fill();
+        // ① で作品が2つ以上なら、斜め半分を2つ目の作品の色に
+        if (step === 1 && !picked.has(b.code) && ws.length > 1) {
+          poly([corner(hl, -hd), corner(hl, hd), corner(-hl, hd)]);
+          g.fillStyle = workColor(ws[1]);
+          g.fill();
+        }
+      } else {
+        g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
+        g.fill();
       }
-      else g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
-      g.fill();
     }
     // 列の名前（始点）と、番号の進む向き（始点から A側へ）
     g.textAlign = "center";
@@ -403,7 +412,7 @@ export function IslandEditor() {
   );
 
   // 選べるスペース：① はどこでも、② は選んだ作品のスペースだけ、③ は選ばない
-  const limit = (codes: string[]) => (step === 1 ? codes : step === 2 && focusWork ? codes.filter((c) => dayTags[c]?.work === focusWork) : []);
+  const limit = (codes: string[]) => (step === 1 ? codes : step === 2 && focusWork ? codes.filter((c) => dayTags[c]?.works?.includes(focusWork)) : []);
 
   const onDown = (e: React.PointerEvent) => {
     const r = cv.current!.getBoundingClientRect();
@@ -606,7 +615,8 @@ export function IslandEditor() {
           // 選んだ所の作品・キャラを消す（Ctrl+Z で戻せる）
           e.preventDefault();
           // ① は作品とキャラを、② はキャラだけを消す
-          changeTags(applyTag(tags, day, [...picked], step === 1 ? { work: "", mode: "clear" } : { mode: "clear" }));
+          if (step === 1) changeTags(applyWorks(tags, day, [...picked], "clear"));
+          else if (step === 2 && focusWork) changeTags(applyChars(tags, day, [...picked], focusWork, "clear"));
         }
         return;
       }
@@ -639,7 +649,7 @@ export function IslandEditor() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [sel, lines, theta, undo, change, updateSel, repaint, mode, undoTags, picked, changeTags, tags, day, step]);
+  }, [sel, lines, theta, undo, change, updateSel, repaint, mode, undoTags, picked, changeTags, tags, day, step, focusWork]);
 
   // ---- 選んだ島の操作 ----
   const selLine = sel !== null ? lines[sel] : null;
@@ -707,16 +717,16 @@ export function IslandEditor() {
   };
   // ---- 作品・キャラ ----
   const pickedList = [...picked];
-  const pickedWorks = [...new Set(pickedList.map((c) => dayTags[c]?.work).filter(Boolean))] as string[];
-  const pickedChars = [...new Set(pickedList.flatMap((c) => dayTags[c]?.chars ?? []))];
+  const pickedWorks = [...new Set(pickedList.flatMap((c) => dayTags[c]?.works ?? []))];
+  const pickedChars = focusWork ? [...new Set(pickedList.flatMap((c) => dayTags[c]?.chars?.[focusWork] ?? []))] : [];
   const works = worksOf(tags, day);
   const focusChars = focusWork ? charsOf(tags, day, focusWork) : [];
-  const focusCount = focusWork ? Object.values(dayTags).filter((t) => t.work === focusWork).length : 0;
-  const focusDone = focusWork ? Object.values(dayTags).filter((t) => t.work === focusWork && t.chars?.length).length : 0;
-  const selectChar = (c: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.work === focusWork && t.chars?.includes(c)).map(([code]) => code)));
-  const setWork = (w: string) => picked.size && changeTags(applyTag(tags, day, pickedList, { work: w }));
-  const setChars = (how: "set" | "add" | "clear") => picked.size && changeTags(applyTag(tags, day, pickedList, { chars: splitChars(charInput), mode: how }));
-  const selectWork = (w: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.work === w).map(([c]) => c)));
+  const focusCount = focusWork ? Object.values(dayTags).filter((t) => t.works?.includes(focusWork)).length : 0;
+  const focusDone = focusWork ? Object.values(dayTags).filter((t) => t.works?.includes(focusWork) && t.chars?.[focusWork]?.length).length : 0;
+  const selectChar = (c: string) => focusWork && setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.chars?.[focusWork]?.includes(c)).map(([code]) => code)));
+  const setWorks = (how: "set" | "add" | "remove" | "clear") => picked.size && changeTags(applyWorks(tags, day, pickedList, how, [workInput]));
+  const setChars = (how: "set" | "add" | "clear") => picked.size && focusWork && changeTags(applyChars(tags, day, pickedList, focusWork, how, splitChars(charInput)));
+  const selectWork = (w: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.works?.includes(w)).map(([c]) => c)));
   const downloadTags = () => {
     const blob = new Blob([JSON.stringify(toTagsFile(tags), null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -868,7 +878,7 @@ export function IslandEditor() {
                   {hall.name}・{day}日目
                 </h3>
                 <div style={{ fontSize: ".85rem", color: "var(--muted)" }}>
-                  作品が入ったスペース {booths.filter((b) => b.hall === hallId && dayTags[b.code]?.work).length} ／ {booths.filter((b) => b.hall === hallId).length}
+                  作品が入ったスペース {booths.filter((b) => b.hall === hallId && dayTags[b.code]?.works?.length).length} ／ {booths.filter((b) => b.hall === hallId).length}
                 </div>
                 {msg && <div style={{ fontSize: ".85rem", marginTop: 4 }}>{msg}</div>}
               </section>
@@ -898,14 +908,21 @@ export function IslandEditor() {
                           <option key={w.work} value={w.work} />
                         ))}
                       </datalist>
-                      <span style={{ display: "flex", gap: 4 }}>
-                        <button className="chip small" disabled={!picked.size || !workInput.trim()} onClick={() => setWork(workInput)}>
-                          選んだ所をこの作品にする
+                      <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <button className="chip small" disabled={!picked.size || !workInput.trim()} onClick={() => setWorks("set")} title="選んだ所の作品を、この作品だけにする">
+                          この作品にする
                         </button>
-                        <button className="chip small" disabled={!picked.size} onClick={() => setWork("")}>
-                          作品を外す
+                        <button className="chip small" disabled={!picked.size || !workInput.trim()} onClick={() => setWorks("add")} title="いまの作品はそのままで、この作品も扱う">
+                          この作品を足す
+                        </button>
+                        <button className="chip small" disabled={!picked.size || !workInput.trim()} onClick={() => setWorks("remove")}>
+                          この作品を外す
+                        </button>
+                        <button className="chip small" disabled={!picked.size} onClick={() => setWorks("clear")}>
+                          全部外す
                         </button>
                       </span>
+                      <p style={NOTE}>1つのサークルが複数の作品を扱うときは「足す」。2つ以上の作品がある所は、斜め半分が2つ目の作品の色になります。作品を外すと、その作品のキャラも消えます。</p>
                     </div>
                   </section>
                   <section>
