@@ -254,6 +254,32 @@ export function parseCode(q: string): { prefix: string; block: string; num: numb
 
 // ---- エディタ・保存した配置のための道具 ----
 
+// 壁ぞいの列の名前の札を置く所。近くにまとまった机（あいだが 6m より狭い）ごとに1つ、
+// そのまとまりの真ん中から、ホールの内側（サークルが座る側と反対）へ inward m
+export function wallLabelSpots(line: Line, inward = 2.6): XZ[] {
+  if (!line.desks?.length) return [];
+  const c = Math.cos(line.angle), s = Math.sin(line.angle);
+  const pts = line.desks.map((d) => {
+    const at: XZ = [line.start[0] + d.u * c - d.v * s, line.start[1] + d.u * s + d.v * c];
+    const a = line.angle + (d.turn ?? 0);
+    const sit: XZ = [-Math.sin(a) * d.side, Math.cos(a) * d.side]; // サークルが座る向き（壁の側）
+    return { n: d.n, at, sit };
+  });
+  pts.sort((p, q) => p.n - q.n);
+  const groups: (typeof pts)[] = [];
+  for (const p of pts) {
+    const g = groups.find((gr) => gr.some((q) => Math.hypot(q.at[0] - p.at[0], q.at[1] - p.at[1]) < 6));
+    if (g) g.push(p);
+    else groups.push([p]);
+  }
+  return groups.map((g) => {
+    const x = g.reduce((a, p) => a + p.at[0], 0) / g.length, z = g.reduce((a, p) => a + p.at[1], 0) / g.length;
+    const sx = g.reduce((a, p) => a + p.sit[0], 0), sz = g.reduce((a, p) => a + p.sit[1], 0);
+    const n = Math.hypot(sx, sz) || 1;
+    return [x - (sx / n) * inward, z - (sz / n) * inward] as XZ;
+  });
+}
+
 // 列のいちばん大きい番号
 export function maxNum(line: Line): number {
   if (line.desks?.length) return Math.max(...line.desks.map((d) => d.n));

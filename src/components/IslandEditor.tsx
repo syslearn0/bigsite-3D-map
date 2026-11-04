@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
-import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, parseLayoutFeatures, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type LayoutFeatures, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, wallLabelSpots, parseLayoutFeatures, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type LayoutFeatures, type Line } from "@/lib/layout";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, loadLayoutFeatures, saveLayout } from "@/lib/saved-layout";
 import { applyChars, applyWorks, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
@@ -32,7 +32,7 @@ const drawnCenter = (b: { at: XZ; angle: number; side: number }): XZ => {
 };
 // 列の名前（○）の場所：島の列の両端の少し外（メインの地図と同じ）
 const blockSpots = (l: Line): XZ[] => {
-  if (l.wall) return []; // 壁ぞいの列には出さない
+  if (l.wall) return wallLabelSpots(l, 2.4); // 壁ぞいの列は、まとまった机ごとにホールの内側へ
   const c = Math.cos(l.angle), s = Math.sin(l.angle), len = lineLength(l);
   return [
     [l.start[0] - c * 2.2, l.start[1] - s * 2.2],

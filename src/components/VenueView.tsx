@@ -9,7 +9,7 @@ import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
-import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
@@ -565,11 +565,12 @@ export function VenueView() {
     }
     // 列の名前（ブロック）。会場の札のように、列の両端の頭の上に
     for (const l of lines) {
-      if (l.wall) continue; // 壁ぞいの列は札を出さない（机の番号で分かる）
       const h = hallById.get(l.hall)!;
-      for (const u of [-3, lineLength(l) + 3]) {
+      // 島の列は両端の外に。壁ぞいの列は、まとまった机ごとにホールの内側へ
+      const spots: XZ[] = l.wall ? wallLabelSpots(l, 3) : [-3, lineLength(l) + 3].map((u) => [l.start[0] + Math.cos(l.angle) * u, l.start[1] + Math.sin(l.angle) * u] as XZ);
+      for (const [x, z] of spots) {
         const s = textSprite(l.block, { bg: "rgba(255,255,255,.9)", fg: "#1d1d1b", height: 1.8, px: 36 });
-        s.position.set(l.start[0] + Math.cos(l.angle) * u, floorY(h.level) + 3.2, l.start[1] + Math.sin(l.angle) * u);
+        s.position.set(x, floorY(h.level) + 3.2, z);
         scene.add(s);
         partsOf(h.level).solid.push(s);
         addLabel(s, "block");
@@ -1275,9 +1276,10 @@ export function VenueView() {
       const blockPx = Math.round(Math.max(mm(2.4), k * 1.8));
       g.font = `700 ${blockPx}px system-ui, sans-serif`;
       for (const l of lines) {
-        if (!ids.has(l.hall) || l.wall) continue;
-        for (const u of [-2.8, lineLength(l) + 2.8]) {
-          const [sx, sy] = px(l.start[0] + Math.cos(l.angle) * u, l.start[1] + Math.sin(l.angle) * u);
+        if (!ids.has(l.hall)) continue;
+        const spots: XZ[] = l.wall ? wallLabelSpots(l, 3) : [-2.8, lineLength(l) + 2.8].map((u) => [l.start[0] + Math.cos(l.angle) * u, l.start[1] + Math.sin(l.angle) * u] as XZ);
+        for (const [x, z] of spots) {
+          const [sx, sy] = px(x, z);
           g.fillStyle = "#fff";
           g.strokeStyle = "#1d1d1b";
           g.lineWidth = Math.max(1, mm(0.15));
