@@ -302,10 +302,10 @@ export function IslandEditor() {
       g.fillStyle = "#1d1d1b";
       g.fillText(text, sx, sy);
     };
-    if (k * (DESK_L / 2) >= 15) {
+    if (k * (DESK_L / 2) >= 9) {
       // スペースごと
-      for (const b of booths) if (onLevel.has(b.hall)) label(`${String(b.num).padStart(2, "0")}${b.half}`, toS(drawnCenter(b)), Math.round(Math.max(10, Math.min(14, k * 0.42))));
-    } else if (k * DESK_L >= 22) {
+      for (const b of booths) if (onLevel.has(b.hall)) label(`${String(b.num).padStart(2, "0")}${b.half}`, toS(drawnCenter(b)), Math.round(Math.max(9, Math.min(14, k * 0.45))));
+    } else if (k * DESK_L >= 14) {
       // 机ごと
       for (let i = 0; i + 1 < booths.length; i++) {
         const a = booths[i], b = booths[i + 1];
