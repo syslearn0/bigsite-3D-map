@@ -6,7 +6,7 @@ import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
 import { DESK_D, DESK_L, expandBooths, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, saveLayout } from "@/lib/saved-layout";
-import { applyTag, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
+import { applyTag, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
 // 島のエディタ。2つの作業がある。
 // ・作品・キャラを入れる（協力者）：スペースを選んで、作品（ブルーアーカイブ・原神など）を広い範囲に入れ、次にキャラを入れる。日ごとに分けて持つ
@@ -51,6 +51,9 @@ export function IslandEditor() {
   const [msg, setMsg] = useState("");
   // いまの作業：作品・キャラを入れる（協力者）／机の配置（管理用）
   const [mode, setMode] = useState<"tags" | "layout">("tags");
+  // 作品・キャラを入れる作業の段階：① 作品を広い範囲に ② 作品を1つ選んでキャラ ③ お品書き（準備中）
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [focusWork, setFocusWork] = useState<string | null>(null); // ② でキャラを入れる作品
   const [day, setDay] = useState<Day>(1);
   const [tags, setTags] = useState<Tags>(() => loadTags(TAGS_DRAFT_KEY) ?? loadTags(TAGS_KEY) ?? {});
   const [picked, setPicked] = useState<Set<string>>(new Set()); // 選んだスペース（配置番号）
@@ -207,11 +210,19 @@ export function IslandEditor() {
       const corner = (du: number, dv: number): XZ => [b.at[0] + du * c - (dv + off) * s, b.at[1] + du * s + (dv + off) * c];
       poly([corner(-hl, -hd), corner(hl, -hd), corner(hl, hd), corner(-hl, hd)]);
       const dt = dayTags[b.code];
-      if (mode === "tags") g.fillStyle = picked.has(b.code) ? "#ffb000" : dt?.work ? workColor(dt.work) : b.hall === hallId ? "#c3cad4" : "#dde1e6";
+      if (mode === "tags") {
+        const none = b.hall === hallId ? "#c3cad4" : "#dde1e6";
+        if (picked.has(b.code)) g.fillStyle = "#ffb000";
+        else if (step === 1) g.fillStyle = dt?.work ? workColor(dt.work) : none;
+        else if (step === 2 && focusWork)
+          // 選んだ作品のスペースだけ：キャラが入った所は濃く、まだの所は薄く。ほかの作品は目立たせない
+          g.fillStyle = dt?.work === focusWork ? (dt.chars?.length ? workColor(dt.work) : workColor(dt.work, true)) : "#e6e9ed";
+        else g.fillStyle = dt?.work ? workColor(dt.work, true) : none;
+      }
       else g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
       g.fill();
       // キャラが入っているスペースには白い点
-      if (mode === "tags" && dt?.chars?.length && k * DESK_L >= 12) {
+      if (mode === "tags" && step === 2 && dt?.chars?.length && (!focusWork || dt.work === focusWork) && k * DESK_L >= 12) {
         const [sx, sy] = toS(corner(0, 0));
         g.fillStyle = "#fff";
         g.beginPath();
@@ -366,6 +377,9 @@ export function IslandEditor() {
     [lines, hallId, tf],
   );
 
+  // 選べるスペース：① はどこでも、② は選んだ作品のスペースだけ、③ は選ばない
+  const limit = (codes: string[]) => (step === 1 ? codes : step === 2 && focusWork ? codes.filter((c) => dayTags[c]?.work === focusWork) : []);
+
   const onDown = (e: React.PointerEvent) => {
     const r = cv.current!.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -395,19 +409,20 @@ export function IslandEditor() {
       }
       const li = blockAt(sx, sy);
       if (li >= 0) {
-        const codes = booths.filter((b) => b.line === li).map((b) => b.code);
+        const codes = limit(booths.filter((b) => b.line === li).map((b) => b.code));
         setPicked((prev) => (e.shiftKey || e.ctrlKey || e.metaKey ? new Set([...prev, ...codes]) : new Set(codes)));
         anchor.current = null;
         return;
       }
       const code = spaceAt(p);
+      if (code && !limit([code]).length) return; // ② で、選んだ作品ではないスペース
       if (code) {
         const a = anchor.current !== null ? codeIdx.get(anchor.current) : undefined;
         const i = codeIdx.get(code)!;
         if (e.shiftKey && a !== undefined && booths[a].line === booths[i].line) {
           // 同じ列の中で、前に押した所からここまで（番号の並びの順に）
           const [i0, i1] = a < i ? [a, i] : [i, a];
-          setPicked((prev) => new Set([...prev, ...booths.slice(i0, i1 + 1).map((b) => b.code)]));
+          setPicked((prev) => new Set([...prev, ...limit(booths.slice(i0, i1 + 1).map((b) => b.code))]));
         } else if (e.ctrlKey || e.metaKey) {
           setPicked((prev) => {
             const n = new Set(prev);
@@ -518,7 +533,8 @@ export function IslandEditor() {
             return x >= x0 && x <= x1 && y >= y0 && y <= y1;
           })
           .map((bt) => bt.code);
-        setPicked((prev) => (b.add ? new Set([...prev, ...codes]) : new Set(codes)));
+        const ok = limit(codes);
+        setPicked((prev) => (b.add ? new Set([...prev, ...ok]) : new Set(ok)));
       } else if (!b.add) setPicked(new Set());
       boxSel.current = null;
       repaint();
@@ -564,7 +580,8 @@ export function IslandEditor() {
         else if ((e.key === "Delete" || e.key === "Backspace") && picked.size) {
           // 選んだ所の作品・キャラを消す（Ctrl+Z で戻せる）
           e.preventDefault();
-          changeTags(applyTag(tags, day, [...picked], { work: "", mode: "clear" }));
+          // ① は作品とキャラを、② はキャラだけを消す
+          changeTags(applyTag(tags, day, [...picked], step === 1 ? { work: "", mode: "clear" } : { mode: "clear" }));
         }
         return;
       }
@@ -586,8 +603,8 @@ export function IslandEditor() {
         setSel(null);
         return;
       }
-      const step = e.shiftKey ? 1 : 0.1;
-      const m = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      const nudge = e.shiftKey ? 1 : 0.1;
+      const m = { ArrowLeft: [-nudge, 0], ArrowRight: [nudge, 0], ArrowUp: [0, -nudge], ArrowDown: [0, nudge] }[e.key];
       if (m) {
         e.preventDefault();
         const c = Math.cos(theta), s = Math.sin(theta);
@@ -597,7 +614,7 @@ export function IslandEditor() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [sel, lines, theta, undo, change, updateSel, repaint, mode, undoTags, picked, changeTags, tags, day]);
+  }, [sel, lines, theta, undo, change, updateSel, repaint, mode, undoTags, picked, changeTags, tags, day, step]);
 
   // ---- 選んだ島の操作 ----
   const selLine = sel !== null ? lines[sel] : null;
@@ -668,6 +685,10 @@ export function IslandEditor() {
   const pickedWorks = [...new Set(pickedList.map((c) => dayTags[c]?.work).filter(Boolean))] as string[];
   const pickedChars = [...new Set(pickedList.flatMap((c) => dayTags[c]?.chars ?? []))];
   const works = worksOf(tags, day);
+  const focusChars = focusWork ? charsOf(tags, day, focusWork) : [];
+  const focusCount = focusWork ? Object.values(dayTags).filter((t) => t.work === focusWork).length : 0;
+  const focusDone = focusWork ? Object.values(dayTags).filter((t) => t.work === focusWork && t.chars?.length).length : 0;
+  const selectChar = (c: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.work === focusWork && t.chars?.includes(c)).map(([code]) => code)));
   const setWork = (w: string) => picked.size && changeTags(applyTag(tags, day, pickedList, { work: w }));
   const setChars = (how: "set" | "add" | "clear") => picked.size && changeTags(applyTag(tags, day, pickedList, { chars: splitChars(charInput), mode: how }));
   const selectWork = (w: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.work === w).map(([c]) => c)));
@@ -706,9 +727,17 @@ export function IslandEditor() {
       <header style={{ padding: "8px 12px", background: "var(--card)", borderBottom: "1px solid var(--line)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <strong>島のエディタ</strong>
         <div className="seg" role="group" aria-label="作業">
-          <button aria-pressed={mode === "tags"} onClick={() => ((addStart.current = null), setMode("tags"))}>
-            作品・キャラを入れる
-          </button>
+          {(
+            [
+              [1, "① 作品"],
+              [2, "② キャラ"],
+              [3, "③ お品書き"],
+            ] as const
+          ).map(([n, label]) => (
+            <button key={n} aria-pressed={mode === "tags" && step === n} onClick={() => ((addStart.current = null), setPicked(new Set()), setMode("tags"), setStep(n))}>
+              {label}
+            </button>
+          ))}
           <button aria-pressed={mode === "layout"} onClick={() => (setPicked(new Set()), setMode("layout"))}>
             机の配置（管理用）
           </button>
@@ -790,7 +819,13 @@ export function IslandEditor() {
           />
           <div style={{ ...HINT }}>
             {mode === "tags"
-              ? "スペースを押して選ぶ。列の名前（○）でその列を全部、何もない所からドラッグで囲んで選ぶ。Shift＋押すで同じ列の範囲、Ctrl＋押すで足す・外す。右ドラッグで地図を動かす。Delete で消す"
+              ? step === 1
+                ? "① 作品：作品を入れる範囲を選ぶ。列の名前（○）でその列を全部、何もない所からドラッグで囲む。Shift＋押すで同じ列の範囲、Ctrl＋押すで足す・外す。右ドラッグで地図を動かす"
+                : step === 2
+                  ? focusWork
+                    ? `② キャラ：「${focusWork}」のスペースだけ選べます（ほかは薄く出ています）。選び方は ① と同じ`
+                    : "② キャラ：右の欄で、キャラを入れる作品を選ぶ"
+                  : "③ お品書き：まだ入れられません"
               : tool === "add"
               ? addStart.current
                 ? "終わりの場所を押す（向きは壁にそろう。Shift で自由な向き）。Esc でやめる"
@@ -812,18 +847,16 @@ export function IslandEditor() {
                 </div>
                 {msg && <div style={{ fontSize: ".85rem", marginTop: 4 }}>{msg}</div>}
               </section>
-              <section>
-                <h3 style={H3}>選んだスペース {picked.size}</h3>
-                {!picked.size && <p style={NOTE}>まず作品を広い範囲に入れ、そのあとキャラを入れます。列の名前（○）を押すと、その列を全部選べます。</p>}
-                {picked.size > 0 && (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <div style={{ fontSize: ".85rem" }}>
-                      作品：{pickedWorks.length ? pickedWorks.join("・") : "（なし）"}
-                      <br />
-                      キャラ：{pickedChars.length ? pickedChars.slice(0, 12).join("、") + (pickedChars.length > 12 ? " …" : "") : "（なし）"}
+              {step === 1 && (
+                <>
+                  <section>
+                    <h3 style={H3}>① 作品を入れる</h3>
+                    <p style={NOTE}>まず、作品ごとのまとまり（例：この3列はブルーアーカイブ）を広い範囲で入れます。キャラは次の ② で入れます。</p>
+                    <div style={{ fontSize: ".9rem", margin: "4px 0" }}>
+                      選んだスペース {picked.size}
+                      {picked.size > 0 && `（いまの作品：${pickedWorks.length ? pickedWorks.join("・") : "なし"}）`}
                     </div>
                     <div style={{ display: "grid", gap: 4 }}>
-                      <strong style={{ fontSize: ".9rem" }}>① 作品</strong>
                       <input list="works" value={workInput} onChange={(e) => setWorkInput(e.target.value)} placeholder="ブルーアーカイブ" aria-label="作品" />
                       <datalist id="works">
                         {works.map((w) => (
@@ -831,58 +864,117 @@ export function IslandEditor() {
                         ))}
                       </datalist>
                       <span style={{ display: "flex", gap: 4 }}>
-                        <button className="chip small" disabled={!workInput.trim()} onClick={() => setWork(workInput)}>
-                          この作品にする
+                        <button className="chip small" disabled={!picked.size || !workInput.trim()} onClick={() => setWork(workInput)}>
+                          選んだ所をこの作品にする
                         </button>
-                        <button className="chip small" onClick={() => setWork("")}>
+                        <button className="chip small" disabled={!picked.size} onClick={() => setWork("")}>
                           作品を外す
                         </button>
                       </span>
                     </div>
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <strong style={{ fontSize: ".9rem" }}>② キャラ</strong>
-                      <input value={charInput} onChange={(e) => setCharInput(e.target.value)} placeholder="アリス、ユウカ" aria-label="キャラ" />
-                      <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        <button className="chip small" disabled={!splitChars(charInput).length} onClick={() => setChars("set")}>
-                          この内容にする
+                  </section>
+                  <section>
+                    <h3 style={H3}>この日の作品 {works.length ? `（${works.length}）` : ""}</h3>
+                    {!works.length && <p style={NOTE}>まだありません。</p>}
+                    <div style={{ display: "grid", gap: 3 }}>
+                      {works.map((w) => (
+                        <button
+                          key={w.work}
+                          className="chip small"
+                          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, textAlign: "left" }}
+                          onClick={() => (selectWork(w.work), setWorkInput(w.work))}
+                          title="この作品のスペースを全部選ぶ"
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(w.work), display: "inline-block" }} />
+                            {w.work}
+                          </span>
+                          <span style={{ color: "var(--muted)" }}>{w.count}</span>
                         </button>
-                        <button className="chip small" disabled={!splitChars(charInput).length} onClick={() => setChars("add")}>
-                          足す
-                        </button>
-                        <button className="chip small" onClick={() => setChars("clear")}>
-                          キャラを消す
-                        </button>
-                      </span>
-                      <p style={NOTE}>キャラは「、」かカンマで区切って何人でも。</p>
+                      ))}
                     </div>
-                    <div style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
-                      <strong style={{ fontSize: ".9rem" }}>③ お品書き・サークルの画像</strong>
-                      <p style={NOTE}>準備会に確認してから、サークル本人に入れてもらう予定です（まだ入れられません）。</p>
+                  </section>
+                </>
+              )}
+              {step === 2 && (
+                <>
+                  <section>
+                    <h3 style={H3}>② キャラを入れる</h3>
+                    <p style={NOTE}>キャラを入れる作品を選んでください。その作品のスペースだけが選べるようになります。作品は ① で入れます。</p>
+                    {!works.length && <p style={NOTE}>この日の作品がまだありません。先に ① で作品を入れてください。</p>}
+                    <div style={{ display: "grid", gap: 3 }}>
+                      {works.map((w) => (
+                        <button
+                          key={w.work}
+                          className="chip small"
+                          aria-pressed={focusWork === w.work}
+                          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, textAlign: "left" }}
+                          onClick={() => (setFocusWork(w.work), setPicked(new Set()))}
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(w.work), display: "inline-block" }} />
+                            {w.work}
+                          </span>
+                          <span>{w.count}</span>
+                        </button>
+                      ))}
                     </div>
-                  </div>
-                )}
-              </section>
-              <section>
-                <h3 style={H3}>この日の作品 {works.length ? `（${works.length}）` : ""}</h3>
-                {!works.length && <p style={NOTE}>まだありません。</p>}
-                <div style={{ display: "grid", gap: 3 }}>
-                  {works.map((w) => (
-                    <button
-                      key={w.work}
-                      className="chip small"
-                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, textAlign: "left" }}
-                      onClick={() => (selectWork(w.work), setWorkInput(w.work))}
-                      title="この作品のスペースを全部選ぶ"
-                    >
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(w.work), display: "inline-block" }} />
-                        {w.work}
-                      </span>
-                      <span style={{ color: "var(--muted)" }}>{w.count}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
+                  </section>
+                  {focusWork && (
+                    <>
+                      <section>
+                        <h3 style={H3}>「{focusWork}」</h3>
+                        <div style={{ fontSize: ".85rem", color: "var(--muted)" }}>
+                          キャラが入ったスペース {focusDone} ／ {focusCount}
+                        </div>
+                        <div style={{ fontSize: ".9rem", margin: "6px 0 4px" }}>
+                          選んだスペース {picked.size}
+                          {picked.size > 0 && `（いまのキャラ：${pickedChars.length ? pickedChars.slice(0, 8).join("、") + (pickedChars.length > 8 ? " …" : "") : "なし"}）`}
+                        </div>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <input list="chars" value={charInput} onChange={(e) => setCharInput(e.target.value)} placeholder="アリス、ユウカ" aria-label="キャラ" />
+                          <datalist id="chars">
+                            {focusChars.map((c) => (
+                              <option key={c.char} value={c.char} />
+                            ))}
+                          </datalist>
+                          <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            <button className="chip small" disabled={!picked.size || !splitChars(charInput).length} onClick={() => setChars("set")}>
+                              この内容にする
+                            </button>
+                            <button className="chip small" disabled={!picked.size || !splitChars(charInput).length} onClick={() => setChars("add")}>
+                              足す
+                            </button>
+                            <button className="chip small" disabled={!picked.size} onClick={() => setChars("clear")}>
+                              キャラを消す
+                            </button>
+                          </span>
+                          <p style={NOTE}>キャラは「、」かカンマで区切って何人でも。</p>
+                        </div>
+                      </section>
+                      <section>
+                        <h3 style={H3}>この作品のキャラ {focusChars.length ? `（${focusChars.length}）` : ""}</h3>
+                        {!focusChars.length && <p style={NOTE}>まだありません。</p>}
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          {focusChars.map((c) => (
+                            <button key={c.char} className="chip small" onClick={() => (selectChar(c.char), setCharInput(c.char))} title="このキャラのスペースを全部選ぶ">
+                              {c.char} {c.count}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    </>
+                  )}
+                </>
+              )}
+              {step === 3 && (
+                <section>
+                  <h3 style={H3}>③ お品書き・サークルの画像</h3>
+                  <p style={NOTE}>
+                    サークルのお品書きや画像は、準備会に確認してから、サークル本人に入れてもらう予定です。本人確認とアップロードの仕組みが要るので、まだ入れられません。
+                  </p>
+                </section>
+              )}
             </>
           )}
           {mode === "layout" && <>

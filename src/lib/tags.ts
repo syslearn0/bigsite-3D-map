@@ -92,11 +92,18 @@ export function worksOf(tags: Tags, day: Day): { work: string; count: number }[]
   return [...n].map(([work, count]) => ({ work, count })).sort((a, b) => b.count - a.count || a.work.localeCompare(b.work, "ja"));
 }
 
-// 作品ごとの色。名前から決めるので、だれの端末でも同じ作品は同じ色
-export function workColor(work: string): string {
+// 作品ごとの色。名前から決めるので、だれの端末でも同じ作品は同じ色。pale は薄い色（まだキャラが入っていない所など）
+export function workColor(work: string, pale = false): string {
   let h = 0;
   for (const ch of work) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
-  return `hsl(${h % 360}, 62%, 56%)`; // カンマつき（three.js の色の読み込みでも使えるように）
+  return pale ? `hsl(${h % 360}, 45%, 84%)` : `hsl(${h % 360}, 62%, 56%)`; // カンマつき（three.js の色の読み込みでも使えるように）
+}
+
+// ある作品のキャラの一覧（多い順）
+export function charsOf(tags: Tags, day: Day, work: string): { char: string; count: number }[] {
+  const n = new Map<string, number>();
+  for (const t of Object.values(tags[day] ?? {})) if (t.work === work) for (const c of t.chars ?? []) n.set(c, (n.get(c) ?? 0) + 1);
+  return [...n].map(([char, count]) => ({ char, count })).sort((a, b) => b.count - a.count || a.char.localeCompare(b.char, "ja"));
 }
 
 // 「アリス, ユウカ、ヒナ」→ ["アリス", "ユウカ", "ヒナ"]
