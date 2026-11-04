@@ -92,6 +92,29 @@ export function expandBooths(lines: Line[], halls: HallLike[]): Booth[] {
   return out;
 }
 
+// 島（横切る通路で区切られた区間）の両端の番号。端ごとに A側・B側の2つ。
+// u：島の中心線の始点からの距離（端の机の端）、out：島の外へ向かう向き（始点側 -1・終点側 1）、side：A側 -1・B側 1（Booth.side と同じ）
+export type IslandEnd = { line: number; u: number; out: 1 | -1; side: 1 | -1; num: number };
+
+export function islandEnds(lines: Line[]): IslandEnd[] {
+  const out: IslandEnd[] = [];
+  lines.forEach((line, li) => {
+    const starts = segmentStarts(line);
+    const total = line.segments.reduce((a, n) => a + n, 0); // A側の机の数（B側も同じ）
+    let before = 0; // この区間より前の A側の机の数
+    line.segments.forEach((n, i) => {
+      const u0 = starts[i], u1 = starts[i] + n * DESK_L;
+      // A側は始点から 1, 2, …、B側は終点から続きの番号で戻る（A側の k 番目の机の向かいは 2*total+1-k）
+      out.push({ line: li, u: u0, out: -1, side: -1, num: before + 1 });
+      out.push({ line: li, u: u0, out: -1, side: 1, num: 2 * total - before });
+      out.push({ line: li, u: u1, out: 1, side: -1, num: before + n });
+      out.push({ line: li, u: u1, out: 1, side: 1, num: 2 * total + 1 - (before + n) });
+      before += n;
+    });
+  });
+  return out;
+}
+
 // ---- 見本の配置（本当の配置が入るまでの仮のもの） ----
 
 const KANA_E = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロ";

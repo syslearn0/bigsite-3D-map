@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pointInPolygon, type XZ } from "../src/lib/geo";
-import { expandBooths, parseCode, sampleLayout, type HallLike } from "../src/lib/layout";
+import { expandBooths, islandEnds, parseCode, sampleLayout, type HallLike } from "../src/lib/layout";
 
 const venue = JSON.parse(readFileSync("src/data/venue.json", "utf8")) as { halls: HallLike[] };
 
@@ -34,4 +34,13 @@ test("配置番号の書き方の揺れ", () => {
   assert.deepEqual(parseCode("西あ-03"), { prefix: "西", block: "あ", num: 3, half: undefined });
   assert.deepEqual(parseCode("東Ａ－０１ａ".replace("－", "-")), { prefix: "東", block: "A", num: 1, half: "a" });
   assert.equal(parseCode("こんにちは"), null);
+});
+
+test("島の端の番号：区間ごとの両端に、A側と B側の机の番号", () => {
+  const ends = islandEnds([{ hall: "X", block: "ア", start: [0, 0], angle: 0, segments: [2, 2] }]);
+  // 区間1：始め A1・B8、終わり A2・B7。区間2：始め A3・B6、終わり A4・B5（expandBooths の番号と同じ）
+  assert.deepEqual(
+    ends.map((e) => `${e.side === -1 ? "A" : "B"}${e.num}`),
+    ["A1", "B8", "A2", "B7", "A3", "B6", "A4", "B5"],
+  );
 });

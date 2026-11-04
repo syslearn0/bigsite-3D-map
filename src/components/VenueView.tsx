@@ -7,7 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, pointInPolygon, type XZ } from "@/lib/geo";
-import { DESK_D, DESK_L, expandBooths, parseCode, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, parseCode, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
@@ -327,14 +327,16 @@ export function VenueView() {
       deskMeshes.set(lv, { mesh, index });
     }
     placeDesks(true);
-    // 列の名前（ブロック）。会場の札のように、列の端の頭の上に
+    // 列の名前（ブロック）。会場の札のように、列の両端の頭の上に
     for (const l of lines) {
       const h = hallById.get(l.hall)!;
-      const s = textSprite(l.block, { bg: "rgba(255,255,255,.9)", fg: "#1d1d1b", height: 1.8, px: 36 });
-      s.position.set(l.start[0] - Math.cos(l.angle) * 1.5, floorY(h.level) + 3.2, l.start[1] - Math.sin(l.angle) * 1.5);
-      scene.add(s);
-      partsOf(h.level).solid.push(s);
-      addLabel(s, "block");
+      for (const u of [-3, lineLength(l) + 3]) {
+        const s = textSprite(l.block, { bg: "rgba(255,255,255,.9)", fg: "#1d1d1b", height: 1.8, px: 36 });
+        s.position.set(l.start[0] + Math.cos(l.angle) * u, floorY(h.level) + 3.2, l.start[1] + Math.sin(l.angle) * u);
+        scene.add(s);
+        partsOf(h.level).solid.push(s);
+        addLabel(s, "block");
+      }
     }
     // 選んだ机の印
     const pin = new THREE.Group();
@@ -708,10 +710,13 @@ export function VenueView() {
     // 拡大して1スペースが 16px 以上になったら、机の上に配置番号を書く（上からの見方だけ）。
     // 上からの見方は真上から北を上に見ているので、画面の位置は (x, z) をそのまま拡大して足せばよい
     let codesShown = false;
+    const ends = islandEnds(lines);
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
       const ppm = (h * ortho.zoom) / (2 * 160);
-      const show = current === "top" && ppm * 0.9 >= 16;
+      // 机ごとの番号：1スペースが 16px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
+      const every = ppm * 0.9 >= 16;
+      const show = current === "top" && (every || ppm >= 3);
       if (!show) {
         if (codesShown) codeCtx.clearRect(0, 0, w, h);
         codesShown = false;
@@ -721,6 +726,30 @@ export function VenueView() {
       codeCtx.clearRect(0, 0, w, h);
       const cx = controls ? controls.target.x : focus.x, cz = controls ? controls.target.z : focus.z;
       const halfW = w / 2 / ppm + 2, halfH = h / 2 / ppm + 2;
+      if (!every) {
+        // 島の端の机の上に、A側・B側の番号（横切る通路の向こうの番号や列の名前と重ならないよう、島の内側に。A・B の間は画面の上で少し離す）
+        codeCtx.font = "600 10px system-ui, sans-serif";
+        codeCtx.textAlign = "center";
+        codeCtx.textBaseline = "middle";
+        codeCtx.fillStyle = "#1d1d1b";
+        codeCtx.strokeStyle = "rgba(255,255,255,.9)";
+        codeCtx.lineWidth = 3;
+        for (const e of ends) {
+          const l = lines[e.line];
+          if (floorOf(hallById.get(l.hall)!.level) !== currentFloor) continue;
+          const c = Math.cos(l.angle), sn = Math.sin(l.angle);
+          const x = l.start[0] + e.u * c, z = l.start[1] + e.u * sn;
+          if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          const sideOff = e.side * Math.max(7, (TOP_DESK_D / 2) * ppm);
+          const inward = -e.out * Math.max(7, (DESK_L / 2) * ppm);
+          const sx = (x - cx) * ppm + w / 2 + c * inward - sn * sideOff;
+          const sy = (z - cz) * ppm + h / 2 + sn * inward + c * sideOff;
+          const label = String(e.num).padStart(2, "0");
+          codeCtx.strokeText(label, sx, sy);
+          codeCtx.fillText(label, sx, sy);
+        }
+        return;
+      }
       // 大きく拡大したら列の名前もつける（「C-05a」）。そうでなければ番号だけ（「05a」）
       const full = ppm * 0.9 >= 34;
       const font = Math.max(9, Math.min(14, ppm * 0.9 * (full ? 0.3 : 0.42)));
