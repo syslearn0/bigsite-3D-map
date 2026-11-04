@@ -230,14 +230,6 @@ export function IslandEditor() {
       }
       else g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
       g.fill();
-      // キャラが入っているスペースには白い点
-      if (mode === "tags" && step === 2 && dt?.chars?.length && (!focusWork || dt.work === focusWork) && k * DESK_L >= 12) {
-        const [sx, sy] = toS(corner(0, 0));
-        g.fillStyle = "#fff";
-        g.beginPath();
-        g.arc(sx, sy, Math.max(2, k * 0.25), 0, Math.PI * 2);
-        g.fill();
-      }
     }
     // 列の名前（始点）と、番号の進む向き（始点から A側へ）
     g.textAlign = "center";
@@ -890,7 +882,17 @@ export function IslandEditor() {
                       {picked.size > 0 && `（いまの作品：${pickedWorks.length ? pickedWorks.join("・") : "なし"}）`}
                     </div>
                     <div style={{ display: "grid", gap: 4 }}>
-                      <input list="works" value={workInput} onChange={(e) => setWorkInput(e.target.value)} placeholder="ブルーアーカイブ" aria-label="作品" />
+                      {works.length > 0 && (
+                        <select aria-label="登録した作品から選ぶ" value="" onChange={(e) => e.target.value && setWorkInput(e.target.value)}>
+                          <option value="">登録した作品から選ぶ（{works.length}）</option>
+                          {works.map((w) => (
+                            <option key={w.work} value={w.work}>
+                              {w.work}（{w.count}）
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <input list="works" value={workInput} onChange={(e) => setWorkInput(e.target.value)} placeholder="新しい作品は、ここに名前を入れる" aria-label="作品" />
                       <datalist id="works">
                         {works.map((w) => (
                           <option key={w.work} value={w.work} />
@@ -960,11 +962,43 @@ export function IslandEditor() {
                         <div style={{ fontSize: ".85rem", color: "var(--muted)" }}>
                           キャラが入ったスペース {focusDone} ／ {focusCount}
                         </div>
+                        <div style={{ display: "flex", gap: 10, fontSize: ".8rem", margin: "4px 0" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(focusWork), display: "inline-block" }} />
+                            キャラが入った
+                          </span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(focusWork, true), display: "inline-block" }} />
+                            まだ
+                          </span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <i style={{ width: 12, height: 12, borderRadius: 3, background: "#ffb000", display: "inline-block" }} />
+                            選んでいる
+                          </span>
+                        </div>
                         <div style={{ fontSize: ".9rem", margin: "6px 0 4px" }}>
                           選んだスペース {picked.size}
                           {picked.size > 0 && `（いまのキャラ：${pickedChars.length ? pickedChars.slice(0, 8).join("、") + (pickedChars.length > 8 ? " …" : "") : "なし"}）`}
                         </div>
                         <div style={{ display: "grid", gap: 4 }}>
+                          {focusChars.length > 0 && (
+                            <select
+                              aria-label="登録したキャラから選ぶ"
+                              value=""
+                              onChange={(e) => {
+                                const c = e.target.value;
+                                // 選んだキャラを入力欄に足す（何人でも）
+                                if (c) setCharInput((v) => (splitChars(v).includes(c) ? v : [...splitChars(v), c].join("、")));
+                              }}
+                            >
+                              <option value="">登録したキャラから足す（{focusChars.length}）</option>
+                              {focusChars.map((c) => (
+                                <option key={c.char} value={c.char}>
+                                  {c.char}（{c.count}）
+                                </option>
+                              ))}
+                            </select>
+                          )}
                           <input list="chars" value={charInput} onChange={(e) => setCharInput(e.target.value)} placeholder="アリス、ユウカ" aria-label="キャラ" />
                           <datalist id="chars">
                             {focusChars.map((c) => (
