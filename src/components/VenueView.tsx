@@ -245,8 +245,8 @@ export function VenueView() {
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
     // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
     // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
-    type LabelKind = "hall" | "area" | "wc" | "block";
-    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, block: 15 };
+    type LabelKind = "hall" | "area" | "wc" | "aid" | "block";
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, block: 15 };
     const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
     const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
     const levels = new Map<number, LevelParts>();
@@ -298,7 +298,7 @@ export function VenueView() {
       m.position.set(a.at[0], floorY(a.level) + 3, a.at[1]);
       scene.add(m);
       partsOf(a.level).solid.push(m);
-      addLabel(m, "wc");
+      addLabel(m, "aid");
     }
 
     // 机（スペース＝机半分）。階ごとに InstancedMesh
@@ -709,6 +709,30 @@ export function VenueView() {
         // 上から・3D では画面の上で 34px、歩くときは実物 1.4m
         s.scale.copy(base);
         if (!walk) s.scale.multiplyScalar(34 / (base.y * pxPerM(s.position)));
+      }
+      // 上から・3D では、画面の上で重なる WC・救護室の札を隠す（近づけば出てくる）。
+      // ホールの名前とピンを先に置き、その上に重なるものも隠す。救護室は WC より先に置く
+      if (!walk) {
+        const W = el.clientWidth, H = el.clientHeight;
+        const placed: [number, number, number, number][] = [];
+        const box = (s: THREE.Sprite, hpx: number, bottom: boolean): [number, number, number, number] | null => {
+          const q = s.position.clone().project(camera);
+          if (q.z > 1) return null;
+          const x = ((q.x + 1) / 2) * W, y = ((1 - q.y) / 2) * H;
+          const wpx = (hpx * s.scale.x) / s.scale.y;
+          return bottom ? [x - wpx / 2, y - hpx, x + wpx / 2, y] : [x - wpx / 2, y - hpx / 2, x + wpx / 2, y + hpx / 2];
+        };
+        const hits = (b: [number, number, number, number]) => placed.some((r) => b[0] < r[2] + 3 && b[2] > r[0] - 3 && b[1] < r[3] + 3 && b[3] > r[1] - 3);
+        for (const { s, kind } of labels) if (kind === "hall" && s.visible) { const b = box(s, LABEL_PX.hall, false); if (b) placed.push(b); }
+        for (const { s } of pins) if (s.visible) { const b = box(s, 34, true); if (b) placed.push(b); }
+        for (const k of ["aid", "wc"] as const)
+          for (const { s, kind } of labels) {
+            if (kind !== k || !s.visible) continue;
+            const b = box(s, LABEL_PX[k], false);
+            if (!b) continue;
+            if (hits(b)) s.visible = false;
+            else placed.push(b);
+          }
       }
       // 近づいてホールの名前を消したときは、画面の真ん中（歩くときは自分の足元）のホールの名前を隅に出す
       const near = walk || pxPerM(focus) >= 3.5;
