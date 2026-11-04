@@ -35,7 +35,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   color: var(--fg);
   background: var(--card);
@@ -105,4 +106,10 @@ button[aria-pressed="true"] {
 
 .app button {
   touch-action: manipulation;
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

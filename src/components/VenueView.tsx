@@ -7,7 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, pointInPolygon, type XZ } from "@/lib/geo";
-import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, parseCode, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
@@ -191,8 +191,10 @@ export function VenueView() {
   const [floor, setFloor] = useState<Floor>(1);
   const [byGenre, setByGenre] = useState(true);
   const [selected, setSelected] = useState<number | null>(null);
-  const [query, setQuery] = useState("");
-  const [miss, setMiss] = useState(false);
+  // 机を選ぶ欄：列（lines の何番目か）→ 番号 → a・b。地図で机を押したときも、その机に合わせる
+  const [pickLine, setPickLine] = useState<number | null>(null);
+  const [pickNum, setPickNum] = useState(1);
+  const [pickHalf, setPickHalf] = useState<"a" | "b">("a");
   // この画面はブラウザでだけ描く（page.tsx で ssr: false）ので、最初から端末の保存を読める
   const [marks, setMarks] = useState<Record<string, Mark>>(loadMarks);
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
@@ -550,7 +552,9 @@ export function VenueView() {
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
       setSelected(i);
-      setMiss(false);
+      setPickLine(booths[i].line);
+      setPickNum(booths[i].num);
+      setPickHalf(booths[i].half);
     };
     let down: { x: number; y: number; yaw: number; pitch: number } | null = null;
     // 歩くとき：ストリートビューのように、床をダブルタップするとそこへ歩いていく
@@ -871,15 +875,16 @@ export function VenueView() {
     [booths],
   );
 
-  const search = () => {
-    const p = parseCode(query);
-    if (!p) return setMiss(true);
-    // a・b を書かなかったときは a
-    const i = codeIndex.get(`${p.prefix}${p.block}-${String(p.num).padStart(2, "0")}${p.half ?? "a"}`);
-    if (i === undefined) return setMiss(true);
-    setMiss(false);
-    select(i);
+  // 選ぶ欄を変えたら、すぐその机へ
+  const jump = (line: number, num: number, half: "a" | "b") => {
+    setPickLine(line);
+    setPickNum(num);
+    setPickHalf(half);
+    const l = lines[line];
+    const i = codeIndex.get(`${hallById.get(l.hall)!.building}${l.block}-${String(num).padStart(2, "0")}${half}`);
+    if (i !== undefined) select(i);
   };
+  const pickMax = pickLine === null ? 0 : 2 * lines[pickLine].segments.reduce((a, n) => a + n, 0);
 
   const sel = selected !== null ? booths[selected] : null;
   const selHall = sel ? hallById.get(sel.hall)! : null;
@@ -941,23 +946,50 @@ export function VenueView() {
             </button>
           ))}
         </div>
-        <form
-          style={{ display: "flex", gap: 6, marginTop: 6 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            search();
-          }}
-        >
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="配置番号（例：東A-01a、西あ-12b）"
-            aria-label="配置番号"
+        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+          <select
+            aria-label="列"
+            value={pickLine ?? ""}
+            onChange={(e) => jump(Number(e.target.value), 1, "a")}
+            style={{ flex: 2, minWidth: 0 }}
+          >
+            <option value="" disabled>
+              列を選ぶ
+            </option>
+            {openHalls.map((h) => (
+              <optgroup key={h.id} label={h.name + (h.level >= 4 ? "（4F）" : "")}>
+                {lines.map((l, i) =>
+                  l.hall === h.id ? (
+                    <option key={i} value={i}>
+                      {h.building}
+                      {l.block}
+                    </option>
+                  ) : null,
+                )}
+              </optgroup>
+            ))}
+          </select>
+          <select
+            aria-label="番号"
+            value={pickNum}
+            disabled={pickLine === null}
+            onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)}
             style={{ flex: 1, minWidth: 0 }}
-          />
-          <button type="submit">探す</button>
-        </form>
-        {miss && <div style={{ color: "var(--danger)", fontSize: ".85rem", marginTop: 4 }}>その配置番号は見本の配置にありません</div>}
+          >
+            {Array.from({ length: pickMax }, (_, k) => (
+              <option key={k} value={k + 1}>
+                {String(k + 1).padStart(2, "0")}
+              </option>
+            ))}
+          </select>
+          <div className="seg" role="group" aria-label="a・b">
+            {(["a", "b"] as const).map((x) => (
+              <button key={x} aria-pressed={pickLine !== null && pickHalf === x} disabled={pickLine === null} onClick={() => jump(pickLine!, pickNum, x)}>
+                {x}
+              </button>
+            ))}
+          </div>
+        </div>
         <div style={{ display: "flex", gap: 4, marginTop: 6, overflowX: "auto", paddingBottom: 2 }}>
           {openHalls.map((h) => (
             <button key={h.id} className="chip small" onClick={() => api.current?.focusHall(h.id)}>
