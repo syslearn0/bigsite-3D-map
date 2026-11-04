@@ -50,7 +50,7 @@ for e in osm["elements"]:
 
 halls = {h["id"]: h for h in venue["halls"]}
 # 図面とホール。南3・南4・西3・西4 は 4F
-# 東3（ほぼ画像だけ）・東7・東8（文字が絵）・西3・西4（溝が点線で、ホールの範囲と向きを決めきれない）は、まだ読めない
+# 東3（ほぼ画像だけ）・東7・東8（文字が絵）・西3・西4（溝が点線）は、下で手で読む
 PLANS = {"E1": "E_E1_c", "E2": "E_E2_c", "W1": "E_W1_c", "W2": "E_W2_c", "S1": "E_S1_c", "S2": "E_S2_c", "S3": "E_S3_c", "S4": "E_S4_c"}
 # 溝が点線で自動で取れない図面は、図面の画像から読んだホールの範囲（中心 x・y、幅・高さ、pt）
 MANUAL = {"S3": (821, 611, 968, 1086), "S4": (838, 1440, 1017, 1174)}
@@ -141,6 +141,70 @@ for hid, name in PLANS.items():
     report.append(f"{hid}: ホールの範囲 {pw:.0f}×{ph:.0f}m（会場データ {L:.0f}×{W:.0f}m）、向き {k * 90}°、トイレの文字 {len(world)}（建物の中 {ins}）{"、向きは図面から" if hid in ORIENT else ""}")
     for x, z, kd in world:
         out.append({"hall": hid, "level": h["level"], "at": [round(x, 1), round(z, 1)], "kind": kd})
+
+# ---- 文字を自動で読めない図面は、図面の画像を見て手で読んだ位置 ----
+# 東3：A4 の図面（1/200 の A1 を縮めたもの。1pt ≒ 0.2m）。120dpi の画像の px で読んだ（1px = 0.6pt）。
+#   向きは東1・東2 と同じ（下が東4〜6 との間の通路）。ホールの溝の中心を会場データの東3の中心に合わせる
+# 東7・東8：A3 の図面（1/600。1pt ≒ 0.212m）。140dpi の画像の px で読んだ（1px = 72/140 pt）。
+#   北の矢印が図面の左下を向くので、図面の右 → 会場の 135° の向き（会場データの辺の向きにそろえる）。
+#   東7ホールの右下の直角の角を、会場データの東7のいちばん西の角に合わせる。
+#   東8の図面は東7と同じ向き・縮尺で、両方に描かれたリンクスペースのトイレから、東8の図面の点 + (460, -1035) が東7の図面の点
+# 西3・西4：1/200。西3の図面の pt で読んだ。西4の図面は中身が 90° 回っているので、両方にある搬入口の名前
+#   （西3-A・西4-A）で西3の図面に重ねた（西4の点 (x, y) → 西3の図面 (502 + y - 209, 344 - x + 1109)。両方に描かれたトイレが重なる）。
+#   向きは、図面の上が西4の側。西3ホールの溝の中心を会場データの西3の中心に合わせる
+def nearest_axis(h, want):
+    """会場データのホールの辺の向き（4通り）のうち、want（ラジアン）にいちばん近いもの"""
+    _, ang, _, _ = min_rect(h["poly"])
+    return min((ang + k * math.pi / 2 for k in range(4)), key=lambda a: abs(math.atan2(math.sin(a - want), math.cos(a - want))))
+
+def toward(hid, ref):
+    """ホール hid の中心から ref の中心への向き（ラジアン）"""
+    c, _, _, _ = min_rect(halls[hid]["poly"])
+    rp = halls[ref]["poly"]
+    return math.atan2(sum(p[1] for p in rp) / len(rp) - c[1], sum(p[0] for p in rp) / len(rp) - c[0])
+
+def place(hid, a, anchor_world, pts):
+    """図面の点（anchor からの m。図面の右・下）を会場の座標に。a：図面の右が向く角"""
+    rx, rz = math.cos(a), math.sin(a); dx, dz = -rz, rx
+    for (x, y), kinds in pts:
+        for kd in kinds:
+            out.append({"hall": hid, "level": halls[hid]["level"], "at": [round(anchor_world[0] + x * rx + y * dx, 1), round(anchor_world[1] + x * rz + y * dz, 1)], "kind": kd})
+
+# 東3
+s3 = 0.6 * 0.0254 / 72 * 566  # px → m
+c3, _, _, _ = min_rect(halls["E3"]["poly"])
+a3 = nearest_axis(halls["E3"], toward("E3", "E5") - math.pi / 2)  # 図面の下が東5の側 → 図面の右はそこから 90° 戻した向き
+place("E3", a3, c3, [(((x - 487) * s3, (y - 505) * s3), k) for (x, y), k in [
+    ((270, 100), ["男子", "女子", "多機能"]),  # 左上、搬入口の側
+    ((760, 965), ["男子", "女子", "多機能"]),  # 右下、通路の側
+    ((610, 1210), ["男子", "女子", "多機能"]),  # 通路の向こう側
+]])
+report.append("E3: 画像から手で読んだ 3 か所")
+
+# 東7・東8
+s7 = 72 / 140 * 0.0254 / 72 * 600
+a7 = nearest_axis(halls["E7"], math.radians(135))
+r7 = (math.cos(a7), math.sin(a7)); d7 = (-r7[1], r7[0])
+corner = max(halls["E7"]["poly"], key=lambda v: v[0] * (r7[0] + d7[0]) + v[1] * (r7[1] + d7[1]))
+e7 = [((1530, 1060), ["男子", "多機能"]), ((1530, 1215), ["女子", "多機能"]), ((1095, 60), ["女子", "多機能"]), ((1530, 75), ["男子"])]
+e8 = [((740, 925), ["男子", "女子", "多機能"]), ((1430, 1320), ["男子", "女子", "多機能"])]
+pts7 = [(((x - 1440) * s7, (y - 1290) * s7), k) for (x, y), k in e7 + [((x + 460, y - 1035), k) for (x, y), k in e8]]
+place("E7", a7, corner, pts7[:4])
+place("E8", a7, corner, pts7[4:])
+report.append("E7・E8: 画像から手で読んだ 6 か所")
+
+# 西3・西4
+c_w3, _, _, _ = min_rect(halls["W3"]["poly"])
+a_w3 = nearest_axis(halls["W3"], toward("W3", "W4") + math.pi / 2)  # 図面の上が西4の側 → 図面の右はそこから 90° 進めた向き
+w4 = lambda x, y: (502 + y - 209, 344 - x + 1109)
+place("W3", a_w3, c_w3, [(((x - 849) * PT, (y - 1503) * PT), k) for (x, y), k in [
+    ((510, 1190), ["男子", "多機能"]),  # 左（搬入口の側）
+    ((512, 1484), ["女子", "多機能"]),
+    ((1330, 840), ["男子", "女子", "多機能"]),  # 右上（西4との間の角）
+    (w4(1449, 732), ["女子"]),
+    (w4(1451, 1062), ["男子"]),
+]])
+report.append("W3・W4: 図面の文字の位置から手で読んだ 5 か所")
 
 # 同じトイレ（隣の図面にも描かれているもの・男女が並ぶもの）を、6m 以内でまとめる
 merged = []

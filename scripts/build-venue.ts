@@ -58,6 +58,24 @@ hall("W1", "西1ホール", "西", 1);
 hall("W2", "西2ホール", "西", 1);
 hall("W3", "西3ホール", "西", 4);
 hall("W4", "西4ホール", "西", 4);
+// 西3ホールは、図面（白図）では幅約44m × 長さ約106m（溝の範囲）。OSM の形は 40m × 93m と小さいので、
+// OSM の長方形の向きのまま、図面の寸法の長方形にする。西4 との境目（可動間仕切）の端はそのままにして、反対側へ伸ばす
+{
+  const h = halls.find((x) => x.id === "W3")!;
+  const r = minAreaRect(h.poly);
+  const ax: XZ = [Math.cos(r.angle), Math.sin(r.angle)];
+  const nx: XZ = [-ax[1], ax[0]];
+  const w4 = centroid(halls.find((x) => x.id === "W4")!.poly);
+  const toW4 = (w4[0] - r.center[0]) * ax[0] + (w4[1] - r.center[1]) * ax[1] > 0 ? 1 : -1;
+  const keep = (toW4 * r.length) / 2; // 西4 側の端（中心から u 方向に）
+  const far = keep - toW4 * 106;
+  h.poly = [
+    [keep, -22],
+    [far, -22],
+    [far, 22],
+    [keep, 22],
+  ].map(([u, v]) => [Math.round((r.center[0] + ax[0] * u + nx[0] * v) * 10) / 10, Math.round((r.center[1] + ax[1] * u + nx[1] * v) * 10) / 10] as XZ);
+}
 
 // 南展示場の外形：頂点 0〜4 と最後の頂点がホール、残りは西展示棟へ向かう通路
 const south = byName("南展示場");
