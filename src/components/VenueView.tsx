@@ -911,7 +911,9 @@ export function VenueView() {
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <strong style={{ fontSize: "1.05rem" }}>コミケ 3D マップ</strong>
           <span className="tag">見本</span>
-          <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>島の配置・作品は仮です（C109 の本当の配置ではありません）</span>
+          <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>
+            コミックマーケット準備会とは関係のない非公式の試作です。島の配置・作品は仮です（C109 の本当の配置ではありません）
+          </span>
         </div>
         {!online && (
           <div role="status" style={{ marginTop: 6, fontSize: ".85rem", background: "#3a3a37", color: "#fff", borderRadius: 6, padding: "3px 8px" }}>
