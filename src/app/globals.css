@@ -169,40 +169,36 @@ select:disabled {
     color: #333;
   }
 
+  /* 1枚に1グループ、A4 横 */
   .print-hall {
-    break-before: page;
-  }
-
-  /* 横長のホールは A4 横、縦長のホールは A4 縦（名前つきのページ） */
-  .print-hall.land {
     page: land;
+    break-after: page;
   }
 
-  .print-hall.port {
-    page: port;
+  .print-hall:last-child {
+    break-after: auto;
+  }
+
+  .print-hall h2 {
+    margin: 0 0 3pt;
   }
 
   .print-hall img {
     width: 100%;
+    max-height: 160mm;
     object-fit: contain;
   }
 
-  .print-hall.land img {
-    max-height: 165mm;
-  }
-
-  .print-hall.port img {
-    max-height: 250mm;
+  .print-marks {
+    font-size: 9pt;
+    margin: 3pt 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2pt 10pt;
   }
 }
 
 @page land {
   size: A4 landscape;
   margin: 10mm;
-}
-
-@page port {
-  size: A4 portrait;
-  margin: 10mm;
-
 }
