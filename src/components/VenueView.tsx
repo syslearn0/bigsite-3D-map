@@ -9,7 +9,7 @@ import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
-import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
@@ -435,6 +435,7 @@ export function VenueView() {
     placeDesks(true);
     // 列の名前（ブロック）。会場の札のように、列の両端の頭の上に
     for (const l of lines) {
+      if (l.wall) continue; // 壁ぞいの列は札を出さない（机の番号で分かる）
       const h = hallById.get(l.hall)!;
       for (const u of [-3, lineLength(l) + 3]) {
         const s = textSprite(l.block, { bg: "rgba(255,255,255,.9)", fg: "#1d1d1b", height: 1.8, px: 36 });
@@ -1088,7 +1089,7 @@ export function VenueView() {
       const blockPx = Math.round(Math.max(mm(2.4), k * 1.8));
       g.font = `700 ${blockPx}px system-ui, sans-serif`;
       for (const l of lines) {
-        if (!ids.has(l.hall)) continue;
+        if (!ids.has(l.hall) || l.wall) continue;
         for (const u of [-2.8, lineLength(l) + 2.8]) {
           const [sx, sy] = px(l.start[0] + Math.cos(l.angle) * u, l.start[1] + Math.sin(l.angle) * u);
           g.fillStyle = "#fff";
@@ -1224,7 +1225,7 @@ export function VenueView() {
     const i = codeIndex.get(`${hallById.get(l.hall)!.building}${l.block}-${String(num).padStart(2, "0")}${half}`);
     if (i !== undefined) select(i);
   };
-  const pickMax = pickLine === null ? 0 : 2 * lines[pickLine].segments.reduce((a, n) => a + n, 0);
+  const pickNums = pickLine === null ? [] : lineNums(lines[pickLine]);
 
   const sel = selected !== null ? booths[selected] : null;
   const selHall = sel ? hallById.get(sel.hall)! : null;
@@ -1357,7 +1358,7 @@ export function VenueView() {
           <select
             aria-label="列"
             value={pickLine ?? ""}
-            onChange={(e) => jump(Number(e.target.value), 1, "a")}
+            onChange={(e) => jump(Number(e.target.value), lineNums(lines[Number(e.target.value)])[0] ?? 1, "a")}
             style={{ flex: 2, minWidth: 0 }}
           >
             <option value="" disabled>
@@ -1383,9 +1384,9 @@ export function VenueView() {
             onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)}
             style={{ flex: 1, minWidth: 0 }}
           >
-            {Array.from({ length: pickMax }, (_, k) => (
-              <option key={k} value={k + 1}>
-                {String(k + 1).padStart(2, "0")}
+            {pickNums.map((n) => (
+              <option key={n} value={n}>
+                {String(n).padStart(2, "0")}
               </option>
             ))}
           </select>

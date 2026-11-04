@@ -19,8 +19,21 @@ export type Line = {
   block: string; // 「ア」「A」「あ」など
   start: XZ; // 島の中心線の始点
   angle: number; // 島の向き（x 軸から z 軸へ、ラジアン）
-  segments: number[]; // 区切りごとの机の数
+  segments: number[]; // 区切りごとの机の数（desks があるときは使わない）
   genre?: string;
+  // 机1つずつの位置（配置図から写した列）。あれば segments より優先する。
+  // 島が等間隔でない列、角を曲がる壁ぞいの列、斜めの壁ぞいの机などを、そのまま持てる
+  desks?: Desk[];
+  wall?: boolean; // 壁ぞいの列（列の名前の札と、島の端の番号を出さない）
+};
+
+// 列の中の机1つ。u・v は列の始点からの位置（u：列の向き、v：その左手。expandBooths の pos と同じ）
+export type Desk = {
+  n: number; // 番号
+  u: number;
+  v: number;
+  turn?: number; // 机の長い辺の向き（列の向きからの角、ラジアン）。なければ列の向き
+  side: 1 | -1; // サークルが座る側（机の長い辺の向きから見て左手が 1。列の向きの机なら v と同じ側が 1）
 };
 
 export type Booth = {
@@ -51,6 +64,7 @@ function segmentStarts(line: Line) {
 }
 
 export function lineLength(line: Line) {
+  if (line.desks?.length) return Math.max(...line.desks.map((d) => d.u)) + DESK_L / 2;
   return line.segments.reduce((a, n) => a + n * DESK_L, 0) + CROSS * Math.max(0, line.segments.length - 1);
 }
 
@@ -60,6 +74,34 @@ export function expandBooths(lines: Line[], halls: HallLike[]): Booth[] {
   lines.forEach((line, li) => {
     const c = Math.cos(line.angle), s = Math.sin(line.angle);
     const pos = (u: number, v: number): XZ => [line.start[0] + u * c - v * s, line.start[1] + u * s + v * c];
+    if (line.desks) {
+      const byNum = new Map(line.desks.map((d) => [d.n, d]));
+      for (const d of line.desks) {
+        const turn = d.turn ?? 0;
+        const ac = Math.cos(turn), as = Math.sin(turn); // 机の長い辺の向き（列の中で）
+        // a は前の番号の机の側（なければ、次の番号の机と反対の側）。どちらも近くになければ長い辺の向きの手前
+        const near = (o: Desk | undefined) => (o && Math.hypot(o.u - d.u, o.v - d.v) < DESK_L * 1.6 ? o : undefined);
+        const prev = near(byNum.get(d.n - 1)), next = near(byNum.get(d.n + 1));
+        let dir = -1;
+        if (prev) dir = (prev.u - d.u) * ac + (prev.v - d.v) * as >= 0 ? 1 : -1;
+        else if (next) dir = (next.u - d.u) * ac + (next.v - d.v) * as >= 0 ? -1 : 1;
+        for (const [half, k] of [["a", dir], ["b", -dir]] as const) {
+          const off = (k * DESK_L) / 4;
+          out.push({
+            code: `${prefix.get(line.hall) ?? ""}${line.block}-${pad(d.n)}${half}`,
+            hall: line.hall,
+            block: line.block,
+            num: d.n,
+            half,
+            at: pos(d.u + off * ac, d.v + off * as),
+            angle: line.angle + turn,
+            side: d.side,
+            line: li,
+          });
+        }
+      }
+      return;
+    }
     const starts = segmentStarts(line);
     // A側：始点から進む。机の中の a は進む向きの手前側
     const desksA: { u0: number; dir: 1 | -1 }[] = [];
@@ -99,6 +141,26 @@ export type IslandEnd = { line: number; u: number; out: 1 | -1; side: 1 | -1; nu
 export function islandEnds(lines: Line[]): IslandEnd[] {
   const out: IslandEnd[] = [];
   lines.forEach((line, li) => {
+    if (line.wall) return;
+    if (line.desks) {
+      // 机1つずつの列：列の向きにならんだ机を、あいだが空いた所で島に分ける。島ごと・側ごとに両端の番号
+      const ds = [...line.desks].sort((a, b) => a.u - b.u);
+      const islands: Desk[][] = [];
+      for (const d of ds) {
+        const last = islands[islands.length - 1];
+        if (last && d.u - last[last.length - 1].u < DESK_L * 1.5) last.push(d);
+        else islands.push([d]);
+      }
+      for (const isl of islands)
+        for (const side of [-1, 1] as const) {
+          const one = isl.filter((d) => (d.v >= 0 ? 1 : -1) === side);
+          if (!one.length) continue;
+          const a = one[0], b = one[one.length - 1];
+          out.push({ line: li, u: a.u - DESK_L / 2, out: -1, side, num: a.n });
+          out.push({ line: li, u: b.u + DESK_L / 2, out: 1, side, num: b.n });
+        }
+      return;
+    }
     const starts = segmentStarts(line);
     const total = line.segments.reduce((a, n) => a + n, 0); // A側の机の数（B側も同じ）
     let before = 0; // この区間より前の A側の机の数
@@ -192,6 +254,18 @@ export function parseCode(q: string): { prefix: string; block: string; num: numb
 
 // ---- エディタ・保存した配置のための道具 ----
 
+// 列のいちばん大きい番号
+export function maxNum(line: Line): number {
+  if (line.desks?.length) return Math.max(...line.desks.map((d) => d.n));
+  return 2 * line.segments.reduce((a, n) => a + n, 0);
+}
+
+// 列にある番号（小さい順）。机1つずつの列は、抜けている番号や、ホールをまたぐ壁ぞいの列の続きの番号がある
+export function lineNums(line: Line): number[] {
+  if (line.desks) return [...new Set(line.desks.map((d) => d.n))].sort((a, b) => a - b);
+  return Array.from({ length: maxNum(line) }, (_, k) => k + 1);
+}
+
 // その建物でまだ使っていない、いちばん前の列の名前（東は A〜Z・ア〜、西は あ〜、南は a〜）
 export function nextBlock(lines: Line[], building: string, halls: HallLike[]): string {
   const inBuilding = new Set(halls.filter((h) => h.building === building).map((h) => h.id));
@@ -210,19 +284,24 @@ export type LayoutProblem = { line: number; text: string };
 export function layoutProblems(lines: Line[], halls: HallLike[]): LayoutProblem[] {
   const out: LayoutProblem[] = [];
   const hallOf = new Map(halls.map((h) => [h.id, h]));
-  const seen = new Map<string, number>();
   lines.forEach((l, i) => {
     const h = hallOf.get(l.hall);
     if (!h) return out.push({ line: i, text: `列 ${l.block}：ホール ${l.hall} がない` });
     if (!l.block.trim()) out.push({ line: i, text: `${i + 1}本目の列：列の名前がない` });
-    if (!l.segments.length || l.segments.some((n) => !Number.isInteger(n) || n < 1)) out.push({ line: i, text: `列 ${l.block}：机の数が正しくない` });
-    // 同じ建物の中で、列の名前が重ならない（配置番号が重なるため）
-    const key = `${h.building}${l.block}`;
-    if (seen.has(key)) out.push({ line: i, text: `列 ${l.block}：${h.building}の中で ${seen.get(key)! + 1}本目と同じ名前` });
-    else seen.set(key, i);
+    if (l.desks ? !l.desks.length : !l.segments.length || l.segments.some((n) => !Number.isInteger(n) || n < 1)) out.push({ line: i, text: `列 ${l.block}：机の数が正しくない` });
   });
-  // 机がホールの外にはみ出していないか
+  // 同じ配置番号が2つない（同じ建物で列の名前が同じでも、番号が重ならなければよい。壁ぞいの列はホールをまたいで続く）
   const booths = expandBooths(lines, halls);
+  const seen = new Map<string, number>();
+  const dupWith = new Map<number, number>();
+  for (const b of booths) {
+    const j = seen.get(b.code);
+    if (j === undefined) seen.set(b.code, b.line);
+    else if (!dupWith.has(b.line)) dupWith.set(b.line, j);
+  }
+  for (const [i, j] of dupWith)
+    out.push({ line: i, text: i === j ? `列 ${lines[i].block}：同じ番号の机が2つある` : `列 ${lines[i].block}：${j + 1}本目の列と番号が重なっている（同じ名前）` });
+  // 机がホールの外にはみ出していないか
   const outside = new Set<number>();
   for (const b of booths) if (!outside.has(b.line) && hallOf.has(b.hall) && !pointInPolygon(b.at, hallOf.get(b.hall)!.poly)) outside.add(b.line);
   for (const i of outside) out.push({ line: i, text: `列 ${lines[i].block}：ホールの外にはみ出している` });
@@ -271,7 +350,12 @@ export function parseLayoutFile(json: unknown): Line[] | null {
       l.start.every((v) => typeof v === "number" && Number.isFinite(v)) &&
       typeof l.angle === "number" &&
       Array.isArray(l.segments) &&
-      l.segments.every((n) => Number.isInteger(n) && n > 0),
+      l.segments.every((n) => Number.isInteger(n) && n > 0) &&
+      (l.desks === undefined ||
+        (Array.isArray(l.desks) &&
+          l.desks.every(
+            (d) => d && Number.isInteger(d.n) && d.n > 0 && [d.u, d.v, d.turn ?? 0].every((x) => typeof x === "number" && Number.isFinite(x)) && (d.side === 1 || d.side === -1),
+          ))),
   );
   return ok ? f.lines : null;
 }

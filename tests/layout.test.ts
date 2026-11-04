@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pointInPolygon, type XZ } from "../src/lib/geo";
-import { expandBooths, islandEnds, layoutProblems, nextBlock, parseCode, parseLayoutFile, sampleLayout, toLayoutFile, type HallLike, type Line } from "../src/lib/layout";
+import { expandBooths, islandEnds, layoutProblems, maxNum, nextBlock, parseCode, parseLayoutFile, sampleLayout, toLayoutFile, type HallLike, type Line } from "../src/lib/layout";
 
 const venue = JSON.parse(readFileSync("src/data/venue.json", "utf8")) as { halls: HallLike[] };
 
@@ -68,4 +68,45 @@ test("次の列の名前・配置の困ったところ・配置のファイル",
   assert.deepEqual(parseLayoutFile(JSON.parse(JSON.stringify(toLayoutFile([a])))), [a]);
   assert.equal(parseLayoutFile({ format: "x", lines: [] }), null);
   assert.equal(parseLayoutFile({ format: "comiket3d-layout", lines: [{ ...a, segments: [0] }] }), null);
+});
+
+test("机1つずつの列（配置図から写した列）：番号・a/b・島の端・同じ名前の壁ぞいの列", () => {
+  const halls: HallLike[] = [
+    { id: "X", building: "東", level: 1, poly: [[-50, -50], [50, -50], [50, 50], [-50, 50]] },
+    { id: "Y", building: "東", level: 1, poly: [[60, -50], [160, -50], [160, 50], [60, 50]] },
+  ];
+  // 島：A側（v<0）に 1・2、B側（v>0）に 3・4。机は列の向き
+  const island: Line = {
+    hall: "X", block: "ア", start: [0, 0], angle: 0, segments: [],
+    desks: [
+      { n: 1, u: 0.9, v: -0.225, side: -1 },
+      { n: 2, u: 2.7, v: -0.225, side: -1 },
+      { n: 3, u: 2.7, v: 0.225, side: 1 },
+      { n: 4, u: 0.9, v: 0.225, side: 1 },
+    ],
+  };
+  const b = expandBooths([island], halls);
+  assert.equal(b.length, 8);
+  const at = (code: string) => b.find((x) => x.code === code)!.at;
+  // a は前の番号の机の側：01a は 02 と反対の側（u が小さい方）、02a は 01 の側
+  assert.ok(at("東ア-01a")[0] < at("東ア-01b")[0]);
+  assert.ok(at("東ア-02a")[0] < at("東ア-02b")[0]);
+  assert.ok(at("東ア-03a")[0] > at("東ア-03b")[0]);
+  assert.deepEqual(
+    islandEnds([island]).map((e) => [e.side, e.out, e.num]),
+    [[-1, -1, 1], [-1, 1, 2], [1, -1, 4], [1, 1, 3]],
+  );
+  assert.equal(maxNum(island), 4);
+  // 壁ぞいの列は、ホールをまたいで同じ名前で続いてよい（番号が重ならなければ）
+  const wallX: Line = { hall: "X", block: "ア", start: [0, 40], angle: 0, segments: [], wall: true, desks: [{ n: 5, u: 0, v: 0, turn: Math.PI / 2, side: 1 }] };
+  const wallY: Line = { hall: "Y", block: "ア", start: [100, 40], angle: 0, segments: [], wall: true, desks: [{ n: 6, u: 0, v: 0, side: 1 }] };
+  assert.deepEqual(layoutProblems([island, wallX, wallY], halls), []);
+  assert.equal(islandEnds([wallX]).length, 0);
+  assert.equal(expandBooths([wallX], halls)[0].angle, Math.PI / 2);
+  // 番号が重なれば知らせる
+  const dup: Line = { ...wallY, desks: [{ n: 4, u: 0, v: 0, side: 1 }] };
+  assert.match(layoutProblems([island, dup], halls)[0].text, /番号が重なっている/);
+  // ファイルに書き出して読み戻せる。机の値が変なら読まない
+  assert.deepEqual(parseLayoutFile(JSON.parse(JSON.stringify(toLayoutFile([island, wallX])))), [island, wallX]);
+  assert.equal(parseLayoutFile({ format: "comiket3d-layout", lines: [{ ...wallX, desks: [{ n: 1, u: "x", v: 0, side: 1 }] }] }), null);
 });

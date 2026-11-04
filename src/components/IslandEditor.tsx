@@ -32,13 +32,14 @@ const drawnCenter = (b: { at: XZ; angle: number; side: number }): XZ => {
 };
 // 列の名前（○）の場所：島の列の両端の少し外（メインの地図と同じ）
 const blockSpots = (l: Line): XZ[] => {
+  if (l.wall) return []; // 壁ぞいの列には出さない
   const c = Math.cos(l.angle), s = Math.sin(l.angle), len = lineLength(l);
   return [
     [l.start[0] - c * 2.2, l.start[1] - s * 2.2],
     [l.start[0] + c * (len + 2.2), l.start[1] + s * (len + 2.2)],
   ];
 };
-const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments] }));
+const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments], ...(x.desks ? { desks: x.desks.map((d) => ({ ...d })) } : {}) }));
 
 // ホールを島がまっすぐになる向きに回す角（ホールの長い辺を横に。北がなるべく上）
 function viewAngle(h: Hall) {
@@ -355,8 +356,10 @@ export function IslandEditor() {
         const c = Math.cos(l.angle), s = Math.sin(l.angle);
         const u = (p[0] - l.start[0]) * c + (p[1] - l.start[1]) * s;
         const v = -(p[0] - l.start[0]) * s + (p[1] - l.start[1]) * c;
-        const len = lineLength(l);
-        const d = Math.hypot(Math.max(0, -u, u - len), v);
+        // 机1つずつの列は、いちばん近い机までの近さ（壁ぞいの列は角を曲がるので、列の線では調べられない）
+        const d = l.desks
+          ? Math.min(...l.desks.map((k) => Math.hypot(Math.max(0, Math.abs(u - k.u) - DESK_L / 2), Math.max(0, Math.abs(v - k.v) - DESK_D / 2))))
+          : Math.hypot(Math.max(0, -u, u - lineLength(l)), v);
         if (d < bestD) [best, bestD] = [i, d];
       });
       return best;
@@ -668,7 +671,13 @@ export function IslandEditor() {
   const reverse = () => {
     if (!selLine) return;
     const len = lineLength(selLine);
-    updateSel({ start: [selLine.start[0] + Math.cos(selLine.angle) * len, selLine.start[1] + Math.sin(selLine.angle) * len], angle: selLine.angle + Math.PI, segments: [...selLine.segments].reverse() });
+    updateSel({
+      start: [selLine.start[0] + Math.cos(selLine.angle) * len, selLine.start[1] + Math.sin(selLine.angle) * len],
+      angle: selLine.angle + Math.PI,
+      segments: [...selLine.segments].reverse(),
+      // 机1つずつの列：机は動かさず、列の向きだけ反対にする（机の座る側も、向きが反対になったぶん入れかえる）
+      ...(selLine.desks ? { desks: selLine.desks.map((d) => ({ ...d, u: len - d.u, v: -d.v, side: (-d.side) as 1 | -1 })) } : {}),
+    });
   };
   // 平行にコピー：島の横（sign = 1 か -1）へ、間隔 copyGap で copyN 本。列の名前は次の文字
   const copyParallel = (sign: 1 | -1) => {
@@ -676,7 +685,7 @@ export function IslandEditor() {
     const nx = -Math.sin(selLine.angle) * sign, nz = Math.cos(selLine.angle) * sign;
     let next = [...lines];
     for (let i = 1; i <= copyN; i++) {
-      next = [...next, { ...selLine, start: [selLine.start[0] + nx * copyGap * i, selLine.start[1] + nz * copyGap * i] as XZ, segments: [...selLine.segments], block: nextBlock(next, hall.building, halls) }];
+      next = [...next, { ...selLine, start: [selLine.start[0] + nx * copyGap * i, selLine.start[1] + nz * copyGap * i] as XZ, segments: [...selLine.segments], ...(selLine.desks ? { desks: selLine.desks.map((d) => ({ ...d })) } : {}), block: nextBlock(next, hall.building, halls) }];
     }
     change(next);
   };
@@ -1123,20 +1132,28 @@ export function IslandEditor() {
                   列の名前
                   <input value={selLine.block} onChange={(e) => updateSel({ block: e.target.value.trim() })} style={{ width: 80 }} />
                 </label>
-                <label style={ROW}>
-                  机の数（区切り）
-                  <input
-                    defaultValue={selLine.segments.join(",")}
-                    key={`${sel}-${selLine.segments.join(",")}`}
-                    onBlur={(e) => {
-                      const seg = e.target.value.split(/[,、\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
-                      if (seg.length) updateSel({ segments: seg });
-                    }}
-                    style={{ width: 110 }}
-                    placeholder="16,16"
-                  />
-                </label>
-                <p style={NOTE}>横切る通路で区切られた区間ごとの机の数をカンマで（例：16,16）。机1つが番号1つ。</p>
+                {selLine.desks ? (
+                  <p style={NOTE}>
+                    机 {selLine.desks.length} 個（{selLine.wall ? "壁ぞいの列" : "島の列"}）。配置図から机1つずつの位置を写した列なので、机の数はここでは変えられません。列ごとの移動・回転・向きの反対はできます。
+                  </p>
+                ) : (
+                  <>
+                    <label style={ROW}>
+                      机の数（区切り）
+                      <input
+                        defaultValue={selLine.segments.join(",")}
+                        key={`${sel}-${selLine.segments.join(",")}`}
+                        onBlur={(e) => {
+                          const seg = e.target.value.split(/[,、\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+                          if (seg.length) updateSel({ segments: seg });
+                        }}
+                        style={{ width: 110 }}
+                        placeholder="16,16"
+                      />
+                    </label>
+                    <p style={NOTE}>横切る通路で区切られた区間ごとの机の数をカンマで（例：16,16）。机1つが番号1つ。</p>
+                  </>
+                )}
                 <label style={ROW}>
                   作品・ジャンル
                   <input value={selLine.genre ?? ""} onChange={(e) => updateSel({ genre: e.target.value || undefined })} style={{ width: 110 }} />
