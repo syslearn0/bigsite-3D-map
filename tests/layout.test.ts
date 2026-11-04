@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pointInPolygon, type XZ } from "../src/lib/geo";
-import { expandBooths, islandEnds, layoutProblems, maxNum, nextBlock, parseCode, parseLayoutFile, sampleLayout, toLayoutFile, type HallLike, type Line } from "../src/lib/layout";
+import { expandBooths, islandEnds, layoutProblems, maxNum, nextBlock, parseCode, parseLayoutFeatures, parseLayoutFile, sampleLayout, toLayoutFile, type HallLike, type Line } from "../src/lib/layout";
 
 const venue = JSON.parse(readFileSync("src/data/venue.json", "utf8")) as { halls: HallLike[] };
 
@@ -109,4 +109,12 @@ test("机1つずつの列（配置図から写した列）：番号・a/b・島�
   // ファイルに書き出して読み戻せる。机の値が変なら読まない
   assert.deepEqual(parseLayoutFile(JSON.parse(JSON.stringify(toLayoutFile([island, wallX])))), [island, wallX]);
   assert.equal(parseLayoutFile({ format: "comiket3d-layout", lines: [{ ...wallX, desks: [{ n: 1, u: "x", v: 0, side: 1 }] }] }), null);
+});
+
+test("配置のファイルの会場のつくり（柱・壁の切れ目）", () => {
+  const features = { pillars: [{ hall: "X", at: [1, 2] as [number, number], wall: true }], openings: [{ hall: "X", a: [0, 0] as [number, number], b: [4, 0] as [number, number] }] };
+  const file = JSON.parse(JSON.stringify(toLayoutFile([], features)));
+  assert.deepEqual(parseLayoutFeatures(file), features);
+  assert.equal(parseLayoutFeatures(JSON.parse(JSON.stringify(toLayoutFile([])))), null); // なければ null
+  assert.equal(parseLayoutFeatures({ ...file, features: { pillars: [{ hall: "X", at: [1] }], openings: [] } }), null);
 });

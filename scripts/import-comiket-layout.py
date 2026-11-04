@@ -213,6 +213,221 @@ def inside_hall(hid, at, margin=1.2):
     return best[1]
 
 
+VIEW_D = 1.4  # 地図で描く机の奥行き（サークルの座る側へのばす。VenueView の TOP_DESK_D・VIEW_DESK_D と同じ）
+WALL_GAP = 0.5  # 描いた机と壁のあいだ（壁ぎわの柱が入る）
+
+
+def keep_in(hid, pt, margin):
+    """pt をホールの壁から margin 以上内側にするための動き（dx, dz）。もう足りていれば (0, 0)"""
+    poly = HALLS[hid]["poly"]
+    inside = point_in(pt, poly)
+    best = None
+    for i in range(len(poly)):
+        (ax, az), (bx, bz) = poly[i], poly[(i + 1) % len(poly)]
+        dx, dz = bx - ax, bz - az
+        L2 = dx * dx + dz * dz
+        if L2 < 1e-6:
+            continue
+        t = max(0, min(1, ((pt[0] - ax) * dx + (pt[1] - az) * dz) / L2))
+        q = (ax + t * dx, az + t * dz)
+        d = math.hypot(pt[0] - q[0], pt[1] - q[1])
+        if best is None or d < best[0]:
+            L = math.sqrt(L2)
+            n = (-dz / L, dx / L)
+            if not point_in((q[0] + n[0] * 0.05, q[1] + n[1] * 0.05), poly):
+                n = (-n[0], -n[1])
+            best = (d, q, n)
+    d, q, n = best
+    if inside and d >= margin:
+        return (0.0, 0.0)
+    return (q[0] + n[0] * margin - pt[0], q[1] + n[1] * margin - pt[1])
+
+
+def drawn_corners(at, axis, side):
+    """地図で描く机の四すみ（机の中心 at、長い辺の向き axis、サークルの座る向き side）"""
+    out = (VIEW_D - DESK_D) / 2
+    cx, cz = at[0] + side[0] * out, at[1] + side[1] * out
+    return [(cx + axis[0] * a * DESK_L / 2 + side[0] * b * VIEW_D / 2, cz + axis[1] * a * DESK_L / 2 + side[1] * b * VIEW_D / 2) for a in (-1, 1) for b in (-1, 1)]
+
+
+def push_run(hid, run):
+    """机の並び（島・壁ぞいの列）を、描いた机がどれも壁から WALL_GAP 以上内側になるまで、並びごと動かす"""
+    for _ in range(40):
+        worst = (0.0, 0.0)
+        for d in run:
+            for c in drawn_corners(d["at"], d["axis"], d["side"]):
+                m = keep_in(hid, c, WALL_GAP)
+                if math.hypot(*m) > math.hypot(*worst):
+                    worst = m
+        if math.hypot(*worst) < 0.01:
+            return
+        for d in run:
+            d["at"] = (d["at"][0] + worst[0] * 1.02, d["at"][1] + worst[1] * 1.02)
+
+
+def separate(desks):
+    """壁ぞいの机どうしが、描いた大きさで重なっていたら、長い辺の向きに離す（ばらばらに壁から離したときに起きる）"""
+    walls = [d for d in desks if not d["island"]]
+    for _ in range(20):
+        moved = False
+        for i, a in enumerate(walls):
+            for b in walls[i + 1:]:
+                if a["hall"] != b["hall"] or math.hypot(a["at"][0] - b["at"][0], a["at"][1] - b["at"][1]) > 3:
+                    continue
+                ax = a["axis"]
+                if abs(ax[0] * b["axis"][0] + ax[1] * b["axis"][1]) < 0.9:
+                    continue  # 向きの違う机（角）は、ここでは扱わない
+                du = (b["at"][0] - a["at"][0]) * ax[0] + (b["at"][1] - a["at"][1]) * ax[1]
+                dv = -(b["at"][0] - a["at"][0]) * ax[1] + (b["at"][1] - a["at"][1]) * ax[0]
+                if abs(dv) > VIEW_D * 0.9:
+                    continue
+                need = DESK_L + 0.06 - abs(du)
+                if need > 0:
+                    sgn = 1 if du >= 0 else -1
+                    for d, k in ((a, -0.5), (b, 0.5)):
+                        d["at"] = (d["at"][0] + ax[0] * sgn * k * need, d["at"][1] + ax[1] * sgn * k * need)
+                    moved = True
+        if not moved:
+            return
+
+
+def on_outline(pt, poly, tol=1.0):
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
+        dx, dy = bx - ax, by - ay
+        t = max(0, min(1, ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / (dx * dx + dy * dy)))
+        if math.hypot(pt[0] - ax - t * dx, pt[1] - ay - t * dy) < tol:
+            return True
+    return False
+
+
+def zone_at(pi, x, y, pad=12):
+    """配置図の点 (x, y) を含む区切り（なければ None）"""
+    for z in ZONES[pi]:
+        if z["xs"][0] - pad <= x <= z["xs"][-1] + pad and z["ys"][0] - pad <= y <= z["ys"][-1] + pad:
+            return z
+    return None
+
+
+def wall_point(hid, at, inset):
+    """会場データのホールの壁のいちばん近い点から inset だけ内側"""
+    poly = HALLS[hid]["poly"]
+    best = None
+    for i in range(len(poly)):
+        (ax, az), (bx, bz) = poly[i], poly[(i + 1) % len(poly)]
+        dx, dz = bx - ax, bz - az
+        L2 = dx * dx + dz * dz
+        if L2 < 1e-6:
+            continue
+        t = max(0, min(1, ((at[0] - ax) * dx + (at[1] - az) * dz) / L2))
+        q = (ax + t * dx, az + t * dz)
+        d = math.hypot(at[0] - q[0], at[1] - q[1])
+        if best is None or d < best[0]:
+            L = math.sqrt(L2)
+            n = (-dz / L, dx / L)
+            if not point_in((q[0] + n[0] * 0.05, q[1] + n[1] * 0.05), poly):
+                n = (-n[0], -n[1])
+            best = (d, (q[0] + n[0] * inset, q[1] + n[1] * inset))
+    return best[1]
+
+
+def venue_edge_dir(hid, q):
+    """会場データのホールの、点 q がのっている（いちばん近い）辺の向き"""
+    poly = HALLS[hid]["poly"]
+    best = None
+    for i in range(len(poly)):
+        (ax, az), (bx, bz) = poly[i], poly[(i + 1) % len(poly)]
+        dx, dz = bx - ax, bz - az
+        L2 = dx * dx + dz * dz
+        if L2 < 1e-6:
+            continue
+        t = max(0, min(1, ((q[0] - ax) * dx + (q[1] - az) * dz) / L2))
+        d = math.hypot(q[0] - ax - t * dx, q[1] - az - t * dz)
+        if best is None or d < best[0]:
+            L = math.sqrt(L2)
+            best = (d, (dx / L, dz / L))
+    return best[1]
+
+
+def read_features(doc, desks):
+    """柱（小さな黒い四角）と、壁の切れ目（ホールの外形にそって、黒い壁が描かれていない所＝出入口・シャッター）"""
+    pillars, openings = [], []
+    for pi in ZONES:
+        p = doc[pi]
+        dark = [dr["rect"] for dr in p.get_drawings() if dr.get("fill") and max(dr["fill"]) < 0.3]
+        is_pillar = lambda r: abs(r.width - r.height) < 0.6 and 2.5 <= r.width <= 8.5
+        for r in dark:
+            if not is_pillar(r):
+                continue
+            x, y = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
+            z = zone_at(pi, x, y, pad=6)
+            if not z:
+                continue
+            hid = z["hall"]
+            e = nearest_edge(hid, x, y)
+            wall_pillar = bool(e and e[0] < max(10, PAGES[pi][1] * 1.8))
+            if wall_pillar:
+                # 壁ぎわの柱：会場データの壁の線の上（半分が壁に入る）
+                at = wall_point(hid, to_venue(z, x, y), 0.0)
+            else:
+                # 島の中などの柱：配置図でいちばん近い机の四角から見た位置を、その机の会場での位置にあてはめる
+                near = [d for d in desks if d["pdf"][0] == pi and abs(d["pdf"][1] - x) < d["pdf"][3] * 1.2 and abs(d["pdf"][2] - y) < d["pdf"][3] * 1.2]
+                if near:
+                    d = min(near, key=lambda d: math.hypot(d["pdf"][1] - x, d["pdf"][2] - y))
+                    _, cx, cy, sz, pal, _ = d["pdf"]
+                    da = ((x - cx) * pal[0] + (y - cy) * pal[1]) / sz  # 机の長い辺の向き（配置図）
+                    dc = ((x - cx) * -pal[1] + (y - cy) * pal[0]) / sz  # それと直角
+                    ax_, ac_ = d["axis"], (-d["axis"][1], d["axis"][0])
+                    # 配置図の「直角の向き」が会場でどちら向きかは、区切りの向きで決める
+                    vx, vz = z["r"][0] * -pal[1] + z["dn"][0] * pal[0], z["r"][1] * -pal[1] + z["dn"][1] * pal[0]
+                    if vx * ac_[0] + vz * ac_[1] < 0:
+                        ac_ = (-ac_[0], -ac_[1])
+                    at = (d["at"][0] + ax_[0] * da * DESK_L + ac_[0] * dc * DESK_D, d["at"][1] + ax_[1] * da * DESK_L + ac_[1] * dc * DESK_D)
+                    hid = d["hall"]
+                else:
+                    at = to_venue(z, x, y)
+                if not point_in(at, HALLS[hid]["poly"]):
+                    at = wall_point(hid, at, 0.0)
+                    wall_pillar = True
+            pillars.append({"hall": hid, "at": [round(at[0], 2), round(at[1], 2)], "wall": wall_pillar})
+        walls_ = [r for r in dark if not is_pillar(r)]
+        hids = {z["hall"] for z in ZONES[pi]}
+        for hid in hids:
+            poly = OUTLINES[hid]
+            for i in range(len(poly)):
+                a, b = poly[i], poly[(i + 1) % len(poly)]
+                # ほかのホールと分け合う辺（東1〜3・南1/2 の境）は、壁がなくてよいので数えない
+                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+                shared = any(o != hid and on_outline(mid, OUTLINES[o]) for o in hids)
+                if shared:
+                    continue
+                L = math.hypot(b[0] - a[0], b[1] - a[1])
+                ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+                nx, ny = -uy, ux
+                cov = []
+                for k in range(int(L) + 1):
+                    px, py = a[0] + ux * k, a[1] + uy * k
+                    hit = any(r.x0 - 0.5 <= px + nx * t <= r.x1 + 0.5 and r.y0 - 0.5 <= py + ny * t <= r.y1 + 0.5 for t in range(-10, 11, 2) for r in walls_)
+                    cov.append(hit)
+                # 壁のない区間（角の近くの 4pt は数えない）。6pt（2m ほど）より短いものは描き方のすき間
+                k = 4
+                while k < len(cov) - 4:
+                    if cov[k]:
+                        k += 1
+                        continue
+                    j = k
+                    while j < len(cov) - 4 and not cov[j]:
+                        j += 1
+                    if j - k >= 6:
+                        z = zone_at(pi, a[0] + ux * (k + j) / 2, a[1] + uy * (k + j) / 2)
+                        if z:
+                            pa = to_venue(z, a[0] + ux * k, a[1] + uy * k)
+                            pb = to_venue(z, a[0] + ux * j, a[1] + uy * j)
+                            openings.append({"hall": hid, "a": [round(pa[0], 2), round(pa[1], 2)], "b": [round(pb[0], 2), round(pb[1], 2)]})
+                    k = j
+    return {"pillars": pillars, "openings": openings}
+
+
 def main():
     pdf = Path(sys.argv[1])
     out_path = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "data/private/layout-c108.json"
@@ -220,6 +435,7 @@ def main():
     pages = read_cells(doc)
     # 列（ホール, 列の名前）ごとの机：{n, at（会場）, axis（机の長い辺の向き、会場）, side_dir（サークルが座る向き、会場）, island}
     blocks = collections.defaultdict(list)
+    cells_done = []  # 置いた机（柱の位置を、近くの机からの位置で決めるのに使う）
     for pi, (size, cells, labels) in pages.items():
         zones = ZONES[pi]
         island_labels = [l for l in labels if l["t"] not in WALL_BLOCKS]
@@ -243,19 +459,19 @@ def main():
                 n = math.hypot(x, z)
                 return (x / n, z / n)
 
-            def place(c, at, axis, side_dir):
-                h = hall_of(pi, block, c["n"])
-                if c["n"] in NO_CIRCLE.get((h, block), ()):
-                    return
-                if not island:
-                    # 机の両端のどちらかが外に出ていたら、その端を内側へ寄せたぶん机ごと動かす
-                    for k in (0, 0.5, -0.5):
-                        end = (at[0] + axis[0] * DESK_L * k, at[1] + axis[1] * DESK_L * k)
-                        moved = inside_hall(h, end)
-                        at = (at[0] + moved[0] - end[0], at[1] + moved[1] - end[1])
-                blocks[(h, block)].append({"n": c["n"], "at": at, "axis": axis, "side": side_dir, "island": island})
+            run = []  # この並びの机。あとで並びごと壁から離す
 
-            if island or (min(len(xs), len(ys)) == 1 and len(cs) >= 2):
+            def place(c, at, axis, side_dir, across=None, pdf_along=None):
+                h = hall_of(pi, block, c["n"])
+                d = {"n": c["n"], "at": at, "axis": axis, "side": side_dir, "island": island, "hall": h,
+                     "pdf": (pi, c["x"], c["y"], size, pdf_along or (0, 1), across or (-axis[1], axis[0]))}
+                run.append(d)
+                if c["n"] not in NO_CIRCLE.get((h, block), ()):
+                    blocks[(h, block)].append(d)
+
+            # まっすぐな壁ぞいの列：机の真ん中が1本の線にのる（斜めの壁ぞいに少しずつずれて並ぶ机は、1つずつ置く）
+            straight = len(cs) >= 2 and (max(c["x"] for c in cs) - min(c["x"] for c in cs) < size * 0.4 or max(c["y"] for c in cs) - min(c["y"] for c in cs) < size * 0.4)
+            if island or straight:
                 # 島・まっすぐな壁ぞいの列：真ん中だけ写して、机は本物の大きさでならべる
                 vertical = len(ys) > len(xs)
                 along = (0, 1) if vertical else (1, 0)
@@ -278,15 +494,35 @@ def main():
                         b = 0
                         side_dir = wall_side  # 壁の側に座る
                     at = (cx + axis[0] * a + across[0] * b, cz + axis[1] * a + across[1] * b)
-                    place(c, at, axis, side_dir)
+                    place(c, at, axis, side_dir, across, along)
+                push_run(hid, run)
             else:
                 # 1つだけの机・斜めの壁ぞいの机：机ごとに写して、いちばん近い壁にそろえる
                 for c in cs:
                     e = nearest_edge(hid, c["x"], c["y"])
-                    axis = vdir(*e[1])
-                    to_wall = (e[2][0] - c["x"], e[2][1] - c["y"])
-                    side_dir = vdir(*to_wall) if math.hypot(*to_wall) > 0.01 else (-axis[1], axis[0])
-                    place(c, to_venue(zone, c["x"], c["y"]), axis, side_dir)
+                    at = to_venue(zone, c["x"], c["y"])
+                    # 向きは会場データのいちばん近い壁にそろえる（配置図と会場データで、斜めの壁の角度が少し違う）
+                    q = wall_point(hid, at, 0.0)
+                    axis = venue_edge_dir(hid, q)
+                    to_wall = (q[0] - at[0], q[1] - at[1])
+                    n = math.hypot(*to_wall)
+                    side_dir = (to_wall[0] / n, to_wall[1] / n) if n > 0.01 else (-axis[1], axis[0])
+                    if abs(side_dir[0] * axis[0] + side_dir[1] * axis[1]) > 0.5:
+                        side_dir = (-axis[1], axis[0]) if (-axis[1]) * to_wall[0] + axis[0] * to_wall[1] >= 0 else (axis[1], -axis[0])
+                    run = []
+                    pdf_along = e[1]
+                    place(c, at, axis, side_dir, (-axis[1], axis[0]), pdf_along)
+                    push_run(hid, run)
+                    cells_done.extend(run)
+                continue
+            cells_done.extend(run)
+
+    # 離したことで壁に近づいた机を、もう一度壁から離す（2回まわす）
+    for _ in range(2):
+        separate(cells_done)
+        for d in cells_done:
+            if not d["island"]:
+                push_run(d["hall"], [d])
 
     # 列ごとに、列の向き・始点・机の位置（u, v）にする
     lines = []
@@ -327,12 +563,14 @@ def main():
             line["wall"] = True
         lines.append(line)
 
-    out = {"format": "comiket3d-layout", "version": 1, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": pdf.name, "note": "コミックマーケット108 の配置図から写した机の配置（参考）。位置は配置図からの目安で、数m ずれることがある", "lines": lines}
+    features = read_features(doc, cells_done)
+    out = {"format": "comiket3d-layout", "version": 1, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": pdf.name, "note": "コミックマーケット108 の配置図から写した机の配置（参考）。位置は配置図からの目安で、数m ずれることがある", "lines": lines, "features": features}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     per = collections.Counter()
     for l in lines:
         per[l["hall"]] += len(l["desks"])
+    print(f"柱 {len(features['pillars'])}・壁の切れ目 {len(features['openings'])}")
     print(f"列 {len(lines)}・机 {sum(per.values())}（スペース {2 * sum(per.values())}）", dict(sorted(per.items())), "→", out_path)
 
 

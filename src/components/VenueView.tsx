@@ -7,7 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
-import { clearLayout, LAYOUT_KEY, loadLayout } from "@/lib/saved-layout";
+import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
@@ -37,6 +37,8 @@ const venue = venueJson as unknown as Venue;
 // （この画面はブラウザでだけ描くので、読み込むときに端末の保存を読める）
 const savedLines = loadLayout(LAYOUT_KEY);
 const lines = savedLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
+// 配置図から写した配置なら、柱と壁の切れ目（出入口・開いているシャッター）もある
+const features = savedLines ? loadLayoutFeatures(LAYOUT_KEY) : null;
 // 作品・キャラ（島のエディタで入れたもの）。なければ見本の作品で色分けする
 const savedTags = loadTags(TAGS_KEY);
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
@@ -189,7 +191,7 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
 // ホールの壁。doors（出入口の位置）に近い辺は、そこに幅 DOOR_W・高さ DOOR_H の戸口を開け、上は梁（はり）で残す
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
-function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = []) {
+function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = []) {
   const g = new THREE.Group();
   const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
     if (u1 - u0 < 0.05 || y1 - y0 < 0.05) return;
@@ -211,6 +213,14 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors
       const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
       if (Math.abs(v) > 5 || u < 0 || u > len) continue;
       gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2)]);
+    }
+    // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
+    for (const [p, q] of spans) {
+      const up = (p[0] - ax) * c + (p[1] - az) * s, vp = -(p[0] - ax) * s + (p[1] - az) * c;
+      const uq = (q[0] - ax) * c + (q[1] - az) * s, vq = -(q[0] - ax) * s + (q[1] - az) * c;
+      if (Math.abs(vp) > 5 || Math.abs(vq) > 5) continue;
+      const g0 = Math.max(0.3, Math.min(up, uq)), g1 = Math.min(len - 0.3, Math.max(up, uq));
+      if (g1 - g0 > 0.5) gaps.push([g0, g1]);
     }
     gaps.sort((p, q) => p[0] - q[0]);
     const merged: [number, number][] = [];
@@ -390,7 +400,14 @@ export function VenueView() {
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
       scene.add(f);
       partsOf(h.level).floors.push(f);
-      const w = walls(h.poly, y, WALL_H, wallMat, venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at));
+      const w = walls(
+        h.poly,
+        y,
+        WALL_H,
+        wallMat,
+        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
+        (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
+      );
       scene.add(w);
       occluders.push(w);
       partsOf(h.level).solid.push(w);
@@ -401,6 +418,28 @@ export function VenueView() {
       scene.add(label);
       partsOf(h.level).solid.push(label);
       addLabel(label, "hall");
+    }
+    // 柱（配置図から写したとき）。0.8m 角、壁の高さまで
+    if (features?.pillars.length) {
+      const pillarMat = new THREE.MeshLambertMaterial({ color: 0x6f7773 });
+      const byLv = new Map<number, XZ[]>();
+      for (const p of features.pillars) {
+        const lv = venue.halls.find((x) => x.id === p.hall)?.level ?? 1;
+        if (!byLv.has(lv)) byLv.set(lv, []);
+        byLv.get(lv)!.push(p.at);
+      }
+      const t = new THREE.Object3D();
+      for (const [lv, list] of byLv) {
+        const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, WALL_H, 0.8), pillarMat, list.length);
+        list.forEach(([x, z], i) => {
+          t.position.set(x, floorY(lv) + WALL_H / 2, z);
+          t.updateMatrix();
+          m.setMatrixAt(i, t.matrix);
+        });
+        m.computeBoundingSphere();
+        scene.add(m);
+        partsOf(lv).solid.push(m);
+      }
     }
     for (const t of venue.toilets) {
       const lv = t.level ?? 1;

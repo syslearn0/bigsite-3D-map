@@ -330,10 +330,25 @@ export function layoutProblems(lines: Line[], halls: HallLike[]): LayoutProblem[
 
 // 配置のファイル（エディタで書き出し・読み込み、メインの地図が端末に保存したものを読む）
 export const LAYOUT_FORMAT = "comiket3d-layout";
-export type LayoutFile = { format: typeof LAYOUT_FORMAT; version: 1; updated: string; lines: Line[] };
+export type LayoutFile = { format: typeof LAYOUT_FORMAT; version: 1; updated: string; lines: Line[]; features?: LayoutFeatures };
 
-export function toLayoutFile(lines: Line[]): LayoutFile {
-  return { format: LAYOUT_FORMAT, version: 1, updated: new Date().toISOString(), lines };
+// 配置図にある会場のつくり（配置といっしょに写したもの）：柱と、壁の切れ目（出入口・開いているシャッター）
+export type LayoutFeatures = {
+  pillars: { hall: string; at: XZ; wall?: boolean }[]; // wall：壁ぎわの柱（壁の線の上）
+  openings: { hall: string; a: XZ; b: XZ }[]; // 壁の a から b までが開いている
+};
+
+export function toLayoutFile(lines: Line[], features?: LayoutFeatures | null): LayoutFile {
+  return { format: LAYOUT_FORMAT, version: 1, updated: new Date().toISOString(), lines, ...(features ? { features } : {}) };
+}
+
+// 配置のファイルの会場のつくり（なければ・正しくなければ null）
+export function parseLayoutFeatures(json: unknown): LayoutFeatures | null {
+  const f = (json as Partial<LayoutFile> | null)?.features;
+  if (!f || !Array.isArray(f.pillars) || !Array.isArray(f.openings)) return null;
+  const xz = (p: unknown) => Array.isArray(p) && p.length === 2 && p.every((v) => typeof v === "number" && Number.isFinite(v));
+  const ok = f.pillars.every((p) => p && typeof p.hall === "string" && xz(p.at)) && f.openings.every((o) => o && typeof o.hall === "string" && xz(o.a) && xz(o.b));
+  return ok ? { pillars: f.pillars, openings: f.openings } : null;
 }
 
 // 読み込んだものが配置のファイルとして正しければ lines を、だめなら null

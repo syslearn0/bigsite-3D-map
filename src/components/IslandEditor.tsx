@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
-import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
-import { DRAFT_KEY, LAYOUT_KEY, loadLayout, saveLayout } from "@/lib/saved-layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, parseLayoutFeatures, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type LayoutFeatures, type Line } from "@/lib/layout";
+import { DRAFT_KEY, LAYOUT_KEY, loadLayout, loadLayoutFeatures, saveLayout } from "@/lib/saved-layout";
 import { applyChars, applyWorks, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
 // 島のエディタ。2つの作業がある。
@@ -50,6 +50,8 @@ function viewAngle(h: Hall) {
 
 export function IslandEditor() {
   const [lines, setLines] = useState<Line[]>(() => loadLayout(DRAFT_KEY) ?? loadLayout(LAYOUT_KEY) ?? clone(sampleLines));
+  // 配置といっしょに写した柱・壁の切れ目（配置図から作ったファイルを読み込んだときだけ）。配置と同じ所から読む
+  const [features, setFeatures] = useState<LayoutFeatures | null>(() => (loadLayout(DRAFT_KEY) ? loadLayoutFeatures(DRAFT_KEY) : loadLayoutFeatures(LAYOUT_KEY)));
   const [hallId, setHallId] = useState("E1");
   const [sel, setSel] = useState<number | null>(null);
   const [tool, setTool] = useState<Tool>("select");
@@ -97,8 +99,8 @@ export function IslandEditor() {
 
   // 端末に書きかけを保存（自動）
   useEffect(() => {
-    saveLayout(DRAFT_KEY, lines);
-  }, [lines]);
+    saveLayout(DRAFT_KEY, lines, features);
+  }, [lines, features]);
   useEffect(() => {
     saveTags(TAGS_DRAFT_KEY, tags);
   }, [tags]);
@@ -240,6 +242,14 @@ export function IslandEditor() {
         g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
         g.fill();
       }
+    }
+    // 柱（配置図から写したとき）。0.8m 角の黒い四角（机を太く描いているので、机の上に重ねる）
+    for (const p of features?.pillars ?? []) {
+      if (!onLevel.has(p.hall)) continue;
+      const [sx, sy] = toS(p.at);
+      const r = Math.max(2, 0.4 * k);
+      g.fillStyle = "#3a3f3c";
+      g.fillRect(sx - r, sy - r, 2 * r, 2 * r);
     }
     // 列の名前（始点）と、番号の進む向き（始点から A側へ）
     g.textAlign = "center";
@@ -716,7 +726,7 @@ export function IslandEditor() {
 
   // ---- ファイル ----
   const download = () => {
-    const blob = new Blob([JSON.stringify(toLayoutFile(lines), null, 1)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(toLayoutFile(lines, features), null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `layout-${new Date().toISOString().slice(0, 10)}.json`;
@@ -754,6 +764,7 @@ export function IslandEditor() {
     const layout = parseLayoutFile(json);
     if (layout) {
       change(layout);
+      setFeatures(parseLayoutFeatures(json));
       setSel(null);
       return setMsg(`配置を読み込みました（列 ${layout.length} 本・机 ${expandBooths(layout, halls).length / 2}）。「3D で確かめる」でメインの地図に出ます`);
     }
@@ -766,7 +777,7 @@ export function IslandEditor() {
   };
 
   const showOnMap = () => {
-    if (!saveLayout(LAYOUT_KEY, lines) || !saveTags(TAGS_KEY, tags)) return setMsg("端末に保存できませんでした");
+    if (!saveLayout(LAYOUT_KEY, lines, features) || !saveTags(TAGS_KEY, tags)) return setMsg("端末に保存できませんでした");
     // メインの地図は、開いたときに保存した配置を読むので、ページごと開き直す
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 読み込み直しが要るため
     location.href = "/";
@@ -852,6 +863,7 @@ export function IslandEditor() {
             onClick={() => {
               if (confirm("見本の配置に戻しますか？いまの配置は消えます（書き出していなければ戻せません）")) {
                 change(clone(sampleLines));
+                setFeatures(null);
                 setSel(null);
               }
             }}
