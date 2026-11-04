@@ -2,7 +2,7 @@
 // 座標は会場の中のメートル（x：東、z：南）。位置関係は OSM の緯度経度のまま（ホール同士の並びは地図どおり）。
 // 南展示棟は OSM に外形1つ（ホール＋西展示棟へつなぐ通路）しかないので、ホールの部分を切り出して「形は概略」とする。
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { centroid, minAreaRect, project, type XZ } from "../src/lib/geo";
 
 type El = { type: string; id: number; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[]; lat?: number; lon?: number };
@@ -121,17 +121,28 @@ const context = osm.elements
   .filter((b) => b.poly.length >= 3);
 
 // トイレ（OSM にあるものだけ。実際よりずっと少ない）
-const toilets = osm.elements
+// トイレ・救護室：図面（白図）から読んだもの（data/plan-toilets.json、scripts/extract-plan-toilets.py が作る）を優先し、
+// 図面を読めていない所は OSM のトイレで補う（図面のトイレから 15m 以内の OSM のトイレは同じものとみなす）
+type Toilet = { at: XZ; level: number | null; kinds?: string[]; src: string };
+const plan = existsSync("data/plan-toilets.json")
+  ? (JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { toilets: { at: XZ; level: number; kinds: string[] }[]; firstAid: { at: XZ; level: number }[] })
+  : { toilets: [], firstAid: [] };
+const osmToilets: Toilet[] = osm.elements
   .filter((e) => e.tags?.amenity === "toilets")
   .map((e) => {
     const p = e.geometry ? e.geometry : [{ lat: e.lat!, lon: e.lon! }];
     const c = p.reduce((a, g) => ({ lat: a.lat + g.lat / p.length, lon: a.lon + g.lon / p.length }), { lat: 0, lon: 0 });
-    return { at: project(ORIGIN, c.lat, c.lon), level: e.tags?.level ? Number(e.tags.level) : null, osm: `${e.type}/${e.id}` };
+    return { at: project(ORIGIN, c.lat, c.lon), level: e.tags?.level ? Number(e.tags.level) : null, src: `osm:${e.type}/${e.id}` };
   });
+const toilets: Toilet[] = [
+  ...plan.toilets.map((t) => ({ at: t.at, level: t.level, kinds: t.kinds, src: "plan" })),
+  ...osmToilets.filter((o) => !plan.toilets.some((t) => Math.hypot(t.at[0] - o.at[0], t.at[1] - o.at[1]) < 15)),
+];
+const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, toilets }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, toilets, firstAid }),
 );
-console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}・トイレ ${toilets.length} を src/data/venue.json に`);
+console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length} を src/data/venue.json に`);

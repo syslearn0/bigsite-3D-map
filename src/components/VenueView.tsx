@@ -20,7 +20,8 @@ type Venue = {
   halls: Hall[];
   areas: { name: string; level: number; poly: XZ[] }[];
   context: { name: string; height: number; poly: XZ[] }[];
-  toilets: { at: XZ; level: number | null }[];
+  toilets: { at: XZ; level: number | null; kinds?: string[] }[];
+  firstAid: { at: XZ; level: number }[];
 };
 const venue = venueJson as unknown as Venue;
 const lines = (layoutJson as unknown as { lines: Line[] }).lines;
@@ -285,10 +286,18 @@ export function VenueView() {
     }
     for (const t of venue.toilets) {
       const lv = t.level ?? 1;
-      const m = textSprite("WC", { bg: "rgba(31,95,191,.9)", height: 3, px: 34 });
+      // 多機能トイレがあるときは「WC♿」
+      const m = textSprite(t.kinds?.includes("多機能") ? "WC ♿" : "WC", { bg: "rgba(31,95,191,.9)", height: 3, px: 34 });
       m.position.set(t.at[0], floorY(lv) + 3, t.at[1]);
       scene.add(m);
       partsOf(lv).solid.push(m);
+      addLabel(m, "wc");
+    }
+    for (const a of venue.firstAid) {
+      const m = textSprite("＋ 救護室", { bg: "rgba(200,30,30,.92)", height: 3, px: 34 });
+      m.position.set(a.at[0], floorY(a.level) + 3, a.at[1]);
+      scene.add(m);
+      partsOf(a.level).solid.push(m);
       addLabel(m, "wc");
     }
 
