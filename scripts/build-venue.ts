@@ -3,7 +3,7 @@
 // 南展示棟は OSM に外形1つ（ホール＋西展示棟へつなぐ通路）しかないので、ホールの部分を切り出して「形は概略」とする。
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { centroid, minAreaRect, project, type XZ } from "../src/lib/geo";
+import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "../src/lib/geo";
 
 type El = { type: string; id: number; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[]; lat?: number; lon?: number };
 const osm = JSON.parse(readFileSync("data/osm/bigsight.json", "utf8")) as { fetchedAt: string; elements: El[] };
@@ -138,6 +138,27 @@ const context = osm.elements
   .map((e) => ({ name: e.tags?.name ?? "", height: Number(e.tags?.height) || 10, poly: poly(e) }))
   .filter((b) => b.poly.length >= 3);
 
+// 「周辺も表示」で立体にする建物（OSM の height・min_height・building:levels から）。
+// 会議棟の逆ピラミッドは、OSM に段ごとの部品（Conference Tower Inverted Pyramid L2〜L8）があるので、積むとそれらしい形になる。
+// 展示ホールの建物（東・東新・西・南の展示棟と、その中の部品）は、中のホールが見えなくなるので立体にしない
+const hallBuildings = ["東展示棟", "東新展示棟", "西展示棟", "南展示場"].map((n) => poly(byName(n)));
+const inHallBuilding = (p: XZ[]) => {
+  const c = centroid(p);
+  return hallBuildings.some((b) => pointInPolygon(c, b));
+};
+const parts3d = osm.elements
+  .filter((e) => e.geometry && (e.tags?.building || e.tags?.["building:part"]) && !e.tags?.indoor && !/ホール|展示|West Hall/.test(e.tags?.name ?? ""))
+  .map((e) => {
+    const t = e.tags!;
+    const levels = Number(t["building:levels"]) || 0;
+    const max = Number(t.height) || (levels ? levels * 4 : 10);
+    const min = Number(t.min_height) || (Number(t["building:min_level"]) || 0) * 4;
+    return { poly: poly(e), min, max, color: t["building:colour"] ?? null, name: t.name ?? "", part: !!t["building:part"] };
+  })
+  .filter((b) => b.poly.length >= 3 && b.max > b.min && !inHallBuilding(b.poly))
+  // 部品（building:part）がある建物は、部品だけを立てる（外形と部品が重ならないように）
+  .filter((b, _, all) => b.part || !all.some((x) => x.part && pointInPolygon(centroid(x.poly), b.poly)));
+
 // トイレ（OSM にあるものだけ。実際よりずっと少ない）
 // トイレ・救護室：図面（白図）から読んだもの（data/plan-toilets.json、scripts/extract-plan-toilets.py が作る）を優先し、
 // 図面を読めていない所は OSM のトイレで補う（図面のトイレから 15m 以内の OSM のトイレは同じものとみなす）
@@ -161,6 +182,6 @@ const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, toilets, firstAid }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, toilets, firstAid }),
 );
-console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length} を src/data/venue.json に`);
+console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length} を src/data/venue.json に`);

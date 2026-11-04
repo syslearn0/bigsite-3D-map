@@ -20,6 +20,7 @@ type Venue = {
   halls: Hall[];
   areas: { name: string; level: number; poly: XZ[] }[];
   context: { name: string; height: number; poly: XZ[] }[];
+  parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   toilets: { at: XZ; level: number | null; kinds?: string[] }[];
   firstAid: { at: XZ; level: number }[];
 };
@@ -181,6 +182,7 @@ type Api = {
   focusBooth: (i: number) => void;
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
+  setSurround: (on: boolean) => void;
 };
 
 export function VenueView() {
@@ -191,6 +193,7 @@ export function VenueView() {
   const [view, setView] = useState<View>("top");
   const [floor, setFloor] = useState<Floor>(1);
   const [byGenre, setByGenre] = useState(true);
+  const [surround, setSurround] = useState(false); // 周辺の建物（会議棟の逆ピラミッドなど）も立体で出す
   const [selected, setSelected] = useState<number | null>(null);
   // 机を選ぶ欄：列（lines の何番目か）→ 番号 → a・b。地図で机を押したときも、その机に合わせる
   const [pickLine, setPickLine] = useState<number | null>(null);
@@ -240,6 +243,17 @@ export function VenueView() {
     ground.position.y = -0.2;
     scene.add(ground);
     for (const b of venue.context) scene.add(flatPoly(b.poly, 0xb9bfb8, -0.1));
+    // 周辺の建物の立体（OSM の高さ。会議棟の逆ピラミッドは段ごとの部品を積んだもの）。「周辺も表示」のときだけ出す
+    const surroundings = new THREE.Group();
+    surroundings.visible = false;
+    for (const b of venue.parts3d) {
+      const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.max - b.min, bevelEnabled: false });
+      const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: b.color ? new THREE.Color(b.color) : new THREE.Color(0xd2d5cf) }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = b.min;
+      surroundings.add(m);
+    }
+    scene.add(surroundings);
 
     // 階ごとの入れ物。選んでいない階は床を薄くし、机・壁・文字を隠す
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
@@ -866,7 +880,10 @@ export function VenueView() {
     ortho.updateProjectionMatrix();
     setView("top");
     setFloor(1);
-    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, hold: (d) => (hold = d) };
+    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, hold: (d) => (hold = d), setSurround: (on) => {
+        surroundings.visible = on;
+      },
+    };
 
     return () => {
       cancelAnimationFrame(raf);
@@ -890,6 +907,9 @@ export function VenueView() {
 
   useEffect(() => api.current?.setView(view), [view]);
   useEffect(() => api.current?.setFloor(floor), [floor]);
+  useEffect(() => {
+    api.current?.setSurround(surround);
+  }, [surround]);
   useEffect(() => api.current?.recolor(byGenre, marks, selected), [byGenre, marks, selected]);
   useEffect(() => {
     const list = Object.entries(marks)
@@ -970,6 +990,9 @@ export function VenueView() {
           </div>
           <button className="chip" aria-pressed={byGenre} onClick={() => setByGenre((x) => !x)}>
             作品で色分け
+          </button>
+          <button className="chip" aria-pressed={surround} onClick={() => setSurround((x) => !x)}>
+            周辺も表示
           </button>
           <button className="chip" onClick={() => setListOpen((x) => !x)}>
             ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
