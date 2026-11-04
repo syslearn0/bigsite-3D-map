@@ -985,8 +985,9 @@ export function VenueView() {
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
       const ppm = (h * ortho.zoom) / (2 * 160);
-      // 机ごとの番号：1スペースが 16px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
+      // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
       const every = ppm * 0.9 >= 16;
+      const perDesk = !every && ppm * DESK_L >= 14;
       const show = current === "top" && (every || ppm >= 3);
       if (!show) {
         if (codesShown) codeCtx.clearRect(0, 0, w, h);
@@ -997,6 +998,31 @@ export function VenueView() {
       codeCtx.clearRect(0, 0, w, h);
       const cx = controls ? controls.target.x : focus.x, cz = controls ? controls.target.z : focus.z;
       const halfW = w / 2 / ppm + 2, halfH = h / 2 / ppm + 2;
+      if (perDesk) {
+        // 机の真ん中（a と b のあいだ）に、机の番号だけ
+        codeCtx.font = `600 ${Math.round(Math.max(9, Math.min(13, ppm * DESK_L * 0.45)))}px system-ui, sans-serif`;
+        codeCtx.textAlign = "center";
+        codeCtx.textBaseline = "middle";
+        codeCtx.fillStyle = "#1d1d1b";
+        codeCtx.strokeStyle = "rgba(255,255,255,.85)";
+        codeCtx.lineWidth = 3;
+        const out = (TOP_DESK_D - DESK_D) / 2;
+        for (const [lv, d] of deskMeshes) {
+          if (floorOf(lv) !== currentFloor) continue;
+          for (const bi of d.index) {
+            const a = booths[bi], b = booths[bi + 1];
+            if (a.half !== "a" || !b || b.line !== a.line || b.num !== a.num) continue;
+            const x = (a.at[0] + b.at[0]) / 2 - Math.sin(a.angle) * a.side * out;
+            const z = (a.at[1] + b.at[1]) / 2 + Math.cos(a.angle) * a.side * out;
+            if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+            const label = String(a.num).padStart(2, "0");
+            const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
+            codeCtx.strokeText(label, sx, sy);
+            codeCtx.fillText(label, sx, sy);
+          }
+        }
+        return;
+      }
       if (!every) {
         // 島の端の机の上に、A側・B側の番号（横切る通路の向こうの番号や列の名前と重ならないよう、島の内側に。A・B の間は画面の上で少し離す）
         codeCtx.font = "600 10px system-ui, sans-serif";
