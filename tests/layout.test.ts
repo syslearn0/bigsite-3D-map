@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pointInPolygon, type XZ } from "../src/lib/geo";
-import { expandBooths, islandEnds, parseCode, sampleLayout, type HallLike } from "../src/lib/layout";
+import { expandBooths, islandEnds, layoutProblems, nextBlock, parseCode, parseLayoutFile, sampleLayout, toLayoutFile, type HallLike, type Line } from "../src/lib/layout";
 
 const venue = JSON.parse(readFileSync("src/data/venue.json", "utf8")) as { halls: HallLike[] };
 
@@ -43,4 +43,29 @@ test("島の端の番号：区間ごとの両端に、A側と B側の机の番�
     ends.map((e) => `${e.side === -1 ? "A" : "B"}${e.num}`),
     ["A1", "B8", "A2", "B7", "A3", "B6", "A4", "B5"],
   );
+});
+
+test("次の列の名前・配置の困ったところ・配置のファイル", () => {
+  const halls: HallLike[] = [{ id: "X", building: "東", level: 1, poly: [[-50, -50], [50, -50], [50, 50], [-50, 50]] }];
+  const a: Line = { hall: "X", block: "A", start: [-10, 0], angle: 0, segments: [4] };
+  assert.equal(nextBlock([a], "東", halls), "B");
+  // 使い切ったら「'」つき
+  const many = "abcdefghijklmnopqrstuvwxyz".split("").map((b) => ({ ...a, block: b }));
+  assert.equal(nextBlock(many, "南", [{ ...halls[0], building: "南" }]), "a'");
+  assert.deepEqual(layoutProblems([a], halls), []);
+  // 同じ名前・はみ出し
+  const dup = { ...a, start: [0, 10] as [number, number] };
+  const far = { ...a, block: "C", start: [45, 0] as [number, number] };
+  const texts = layoutProblems([a, dup, far], halls).map((p) => p.text);
+  assert.ok(texts.some((t) => t.includes("同じ名前")));
+  assert.ok(texts.some((t) => t.includes("はみ出し")));
+  // 重なり（ずらした同じ列）
+  const over = { ...a, block: "D", start: [-9.5, 0] as [number, number] };
+  assert.ok(layoutProblems([a, over], halls).some((p) => p.text.includes("重なっている")));
+  // 見本の配置には困ったところがない
+  assert.deepEqual(layoutProblems(sampleLayout(venue.halls), venue.halls), []);
+  // ファイルの書き出しと読み込み
+  assert.deepEqual(parseLayoutFile(JSON.parse(JSON.stringify(toLayoutFile([a])))), [a]);
+  assert.equal(parseLayoutFile({ format: "x", lines: [] }), null);
+  assert.equal(parseLayoutFile({ format: "comiket3d-layout", lines: [{ ...a, segments: [0] }] }), null);
 });

@@ -9,7 +9,7 @@ import { minAreaRect, pointInPolygon, type XZ } from "./geo";
 
 export const DESK_L = 1.8;
 export const DESK_D = 0.45;
-const PITCH = 7; // 島どうしの間隔（机2列 0.9m＋椅子 0.9m×2＋通路 約4.3m）。実際のコミケの密度（東1ホールで千数百スペース）に合わせた目安
+export const PITCH = 7; // 島どうしの間隔（机2列 0.9m＋椅子 0.9m×2＋通路 約4.3m）。実際のコミケの密度（東1ホールで千数百スペース）に合わせた目安
 const MARGIN = 9; // 壁からの余白（壁ぞいの通路。壁サークルはあとで）
 const MAX_DESKS = 16; // 区切り1つの机の数（約29m）ごとに横切る通路
 const CROSS = 5; // 横切る通路の幅
@@ -120,7 +120,7 @@ export function islandEnds(lines: Line[]): IslandEnd[] {
 const KANA_E = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロ";
 const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const KANA_W = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろ";
-const BLOCKS: Record<string, string[]> = { 東: [...ALPHA, ...KANA_E], 西: [...KANA_W], 南: [...ALPHA.toLowerCase()] };
+export const BLOCKS: Record<string, string[]> = { 東: [...ALPHA, ...KANA_E], 西: [...KANA_W], 南: [...ALPHA.toLowerCase()] };
 export const SAMPLE_GENRES = ["作品A", "作品B", "作品C", "作品D", "作品E", "作品F", "作品G", "作品H"];
 
 export function sampleLayout(halls: HallLike[]): Line[] {
@@ -189,3 +189,90 @@ export function parseCode(q: string): { prefix: string; block: string; num: numb
   if (!m) return null;
   return { prefix: m[1], block: m[2], num: Number(m[3]), half: m[4]?.toLowerCase() as "a" | "b" | undefined };
 }
+
+// ---- エディタ・保存した配置のための道具 ----
+
+// その建物でまだ使っていない、いちばん前の列の名前（東は A〜Z・ア〜、西は あ〜、南は a〜）
+export function nextBlock(lines: Line[], building: string, halls: HallLike[]): string {
+  const inBuilding = new Set(halls.filter((h) => h.building === building).map((h) => h.id));
+  const used = new Set(lines.filter((l) => inBuilding.has(l.hall)).map((l) => l.block));
+  // 使い切ったら、見本と同じく「'」をつけて続ける（a' b' …、a'' …）
+  const list = BLOCKS[building] ?? ALPHA.split("");
+  for (const mark of ["", "'", "''", "'''"]) {
+    const b = list.find((x) => !used.has(x + mark));
+    if (b) return b + mark;
+  }
+  return `${building}?`;
+}
+
+// 配置の困ったところ。エディタで警告として出す
+export type LayoutProblem = { line: number; text: string };
+export function layoutProblems(lines: Line[], halls: HallLike[]): LayoutProblem[] {
+  const out: LayoutProblem[] = [];
+  const hallOf = new Map(halls.map((h) => [h.id, h]));
+  const seen = new Map<string, number>();
+  lines.forEach((l, i) => {
+    const h = hallOf.get(l.hall);
+    if (!h) return out.push({ line: i, text: `列 ${l.block}：ホール ${l.hall} がない` });
+    if (!l.block.trim()) out.push({ line: i, text: `${i + 1}本目の列：列の名前がない` });
+    if (!l.segments.length || l.segments.some((n) => !Number.isInteger(n) || n < 1)) out.push({ line: i, text: `列 ${l.block}：机の数が正しくない` });
+    // 同じ建物の中で、列の名前が重ならない（配置番号が重なるため）
+    const key = `${h.building}${l.block}`;
+    if (seen.has(key)) out.push({ line: i, text: `列 ${l.block}：${h.building}の中で ${seen.get(key)! + 1}本目と同じ名前` });
+    else seen.set(key, i);
+  });
+  // 机がホールの外にはみ出していないか
+  const booths = expandBooths(lines, halls);
+  const outside = new Set<number>();
+  for (const b of booths) if (!outside.has(b.line) && hallOf.has(b.hall) && !pointInPolygon(b.at, hallOf.get(b.hall)!.poly)) outside.add(b.line);
+  for (const i of outside) out.push({ line: i, text: `列 ${lines[i].block}：ホールの外にはみ出している` });
+  // ほかの列と重なっていないか（同じ階で、違う列の机が 0.6m より近い）。1m のます目に分けて近くだけ調べる
+  const grid = new Map<string, number[]>();
+  const levelOf = (b: Booth) => hallOf.get(b.hall)?.level ?? 0;
+  const cell = (lv: number, x: number, z: number) => `${lv}:${Math.floor(x)},${Math.floor(z)}`;
+  booths.forEach((b, i) => {
+    const k = cell(levelOf(b), b.at[0], b.at[1]);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k)!.push(i);
+  });
+  const overlap = new Map<number, number>();
+  booths.forEach((b) => {
+    if (overlap.has(b.line)) return;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dz = -1; dz <= 1; dz++)
+        for (const j of grid.get(cell(levelOf(b), b.at[0] + dx, b.at[1] + dz)) ?? []) {
+          const o = booths[j];
+          if (o.line !== b.line && Math.hypot(o.at[0] - b.at[0], o.at[1] - b.at[1]) < 0.6) overlap.set(b.line, o.line);
+        }
+  });
+  for (const [i, j] of overlap) out.push({ line: i, text: `列 ${lines[i].block}：列 ${lines[j].block} と重なっている` });
+  return out;
+}
+
+// 配置のファイル（エディタで書き出し・読み込み、メインの地図が端末に保存したものを読む）
+export const LAYOUT_FORMAT = "comiket3d-layout";
+export type LayoutFile = { format: typeof LAYOUT_FORMAT; version: 1; updated: string; lines: Line[] };
+
+export function toLayoutFile(lines: Line[]): LayoutFile {
+  return { format: LAYOUT_FORMAT, version: 1, updated: new Date().toISOString(), lines };
+}
+
+// 読み込んだものが配置のファイルとして正しければ lines を、だめなら null
+export function parseLayoutFile(json: unknown): Line[] | null {
+  const f = json as Partial<LayoutFile> | null;
+  if (!f || f.format !== LAYOUT_FORMAT || !Array.isArray(f.lines)) return null;
+  const ok = f.lines.every(
+    (l) =>
+      l &&
+      typeof l.hall === "string" &&
+      typeof l.block === "string" &&
+      Array.isArray(l.start) &&
+      l.start.length === 2 &&
+      l.start.every((v) => typeof v === "number" && Number.isFinite(v)) &&
+      typeof l.angle === "number" &&
+      Array.isArray(l.segments) &&
+      l.segments.every((n) => Number.isInteger(n) && n > 0),
+  );
+  return ok ? f.lines : null;
+}
+

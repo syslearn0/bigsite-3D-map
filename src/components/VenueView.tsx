@@ -7,6 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
+import { clearLayout, LAYOUT_KEY, loadLayout } from "@/lib/saved-layout";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -31,7 +32,10 @@ type Venue = {
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
 };
 const venue = venueJson as unknown as Venue;
-const lines = (layoutJson as unknown as { lines: Line[] }).lines;
+// 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
+// （この画面はブラウザでだけ描くので、読み込むときに端末の保存を読める）
+const savedLines = loadLayout(LAYOUT_KEY);
+const lines = savedLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
@@ -1271,7 +1275,21 @@ export function VenueView() {
       <header style={{ padding: "8px 12px 6px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <strong style={{ fontSize: "1.05rem" }}>コミケ 3D マップ</strong>
-          <span className="tag">見本</span>
+          <span className="tag">{savedLines ? "編集した配置" : "見本"}</span>
+          {savedLines && (
+            <button
+              className="chip small"
+              onClick={() => {
+                clearLayout(LAYOUT_KEY);
+                location.reload();
+              }}
+            >
+              見本に戻す
+            </button>
+          )}
+          <a className="chip small" href="/editor" style={{ border: "1px solid var(--line)", textDecoration: "none", color: "var(--fg)" }}>
+            島のエディタ
+          </a>
           <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>
             コミックマーケット準備会とは関係のない非公式の試作です。島の配置・作品は仮です（C109 の本当の配置ではありません）
           </span>
