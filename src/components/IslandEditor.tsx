@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
-import { DESK_D, DESK_L, expandBooths, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, saveLayout } from "@/lib/saved-layout";
 import { applyTag, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
@@ -29,6 +29,14 @@ const THICK = 6; // 机の奥行きを何倍に描くか（島 1 本が約 5.4m�
 const drawnCenter = (b: { at: XZ; angle: number; side: number }): XZ => {
   const off = (b.side * DESK_D * (THICK - 1)) / 2;
   return [b.at[0] - Math.sin(b.angle) * off, b.at[1] + Math.cos(b.angle) * off];
+};
+// 列の名前（○）の場所：島の列の両端の少し外（メインの地図と同じ）
+const blockSpots = (l: Line): XZ[] => {
+  const c = Math.cos(l.angle), s = Math.sin(l.angle), len = lineLength(l);
+  return [
+    [l.start[0] - c * 2.2, l.start[1] - s * 2.2],
+    [l.start[0] + c * (len + 2.2), l.start[1] + s * (len + 2.2)],
+  ];
 };
 const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments] }));
 
@@ -81,6 +89,7 @@ export function IslandEditor() {
   const levelHalls = useMemo(() => halls.filter((h) => floorOf(h.level) === floorOf(hall.level)), [hall]);
   const booths = useMemo(() => expandBooths(lines, halls), [lines]);
   const codeIdx = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
+  const ends = useMemo(() => islandEnds(lines), [lines]);
   const dayTags = tags[day] ?? {};
   const problems = useMemo(() => layoutProblems(lines, halls), [lines]);
   const badLines = useMemo(() => new Set(problems.map((p) => p.line)), [problems]);
@@ -236,18 +245,20 @@ export function IslandEditor() {
     lines.forEach((l, i) => {
       if (!onLevel.has(l.hall)) return;
       const c = Math.cos(l.angle), s = Math.sin(l.angle);
-      const [sx, sy] = toS([l.start[0] - c * 2.2, l.start[1] - s * 2.2]);
       const r = Math.max(8, k * 1.1);
-      g.fillStyle = mode === "layout" && i === sel ? "#ffb000" : "#fff";
-      g.strokeStyle = "#1d1d1b";
-      g.lineWidth = 1;
-      g.beginPath();
-      g.arc(sx, sy, r, 0, Math.PI * 2);
-      g.fill();
-      g.stroke();
-      g.fillStyle = "#1d1d1b";
-      g.font = `700 ${Math.round(r * 1.1)}px system-ui, sans-serif`;
-      g.fillText(l.block, sx, sy);
+      for (const spot of blockSpots(l)) {
+        const [sx, sy] = toS(spot);
+        g.fillStyle = mode === "layout" && i === sel ? "#ffb000" : "#fff";
+        g.strokeStyle = "#1d1d1b";
+        g.lineWidth = 1;
+        g.beginPath();
+        g.arc(sx, sy, r, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+        g.fillStyle = "#1d1d1b";
+        g.font = `700 ${Math.round(r * 1.1)}px system-ui, sans-serif`;
+        g.fillText(l.block, sx, sy);
+      }
       if (mode === "layout" && i === sel) {
         // 矢印：始点から番号が進む向き
         const len = lineLength(l);
@@ -269,16 +280,36 @@ export function IslandEditor() {
         g.fill();
       }
     });
-    // 拡大したら机ごとの番号
-    if (k * DESK_L >= 22) {
-      g.font = `600 ${Math.round(Math.min(13, k * 0.7))}px system-ui, sans-serif`;
-      g.fillStyle = "#fff";
+    // 番号（メインの地図と同じ考え方）：引いているときは島の端の番号、寄ると机ごとの番号、もっと寄るとスペースごと（05a）
+    const label = (text: string, [sx, sy]: [number, number], px: number) => {
+      if (sx < -30 || sy < -30 || sx > W + 30 || sy > H + 30) return;
+      g.font = `600 ${px}px system-ui, sans-serif`;
+      g.strokeStyle = "rgba(255,255,255,.9)";
+      g.lineWidth = 3;
+      g.strokeText(text, sx, sy);
+      g.fillStyle = "#1d1d1b";
+      g.fillText(text, sx, sy);
+    };
+    if (k * (DESK_L / 2) >= 26) {
+      // スペースごと
+      for (const b of booths) if (onLevel.has(b.hall)) label(`${String(b.num).padStart(2, "0")}${b.half}`, toS(drawnCenter(b)), Math.round(Math.min(14, k * 0.42)));
+    } else if (k * DESK_L >= 22) {
+      // 机ごと
       for (let i = 0; i + 1 < booths.length; i++) {
         const a = booths[i], b = booths[i + 1];
         if (!onLevel.has(a.hall) || a.half !== "a" || b.num !== a.num || b.line !== a.line) continue;
-        const [sx, sy] = toS([(a.at[0] + b.at[0]) / 2, (a.at[1] + b.at[1]) / 2]);
-        if (sx < -20 || sy < -20 || sx > W + 20 || sy > H + 20) continue;
-        g.fillText(String(a.num).padStart(2, "0"), sx, sy);
+        const [ax, az] = drawnCenter(a), [bx, bz] = drawnCenter(b);
+        label(String(a.num).padStart(2, "0"), toS([(ax + bx) / 2, (az + bz) / 2]), Math.round(Math.min(13, k * 0.7)));
+      }
+    } else if (k >= 3) {
+      // 島の端：区間の両端に、A側・B側の端の机の番号（端の机の上、太く描いた列の真ん中）
+      for (const e of ends) {
+        const l = lines[e.line];
+        if (!onLevel.has(l.hall)) continue;
+        const c = Math.cos(l.angle), s = Math.sin(l.angle);
+        const u = e.u - e.out * (DESK_L / 2);
+        const v = e.side * Math.max((DESK_D / 2) * THICK, 8 / k);
+        label(String(e.num).padStart(2, "0"), toS([l.start[0] + u * c - v * s, l.start[1] + u * s + v * c]), 11);
       }
     }
     // 囲んで選んでいる四角
@@ -370,8 +401,10 @@ export function IslandEditor() {
       const r = Math.max(8, k * 1.1);
       return lines.findIndex((l) => {
         if (l.hall !== hallId) return false;
-        const [x, y] = toS([l.start[0] - Math.cos(l.angle) * 2.2, l.start[1] - Math.sin(l.angle) * 2.2]);
-        return Math.hypot(x - sx, y - sy) <= r;
+        return blockSpots(l).some((spot) => {
+          const [x, y] = toS(spot);
+          return Math.hypot(x - sx, y - sy) <= r;
+        });
       });
     },
     [lines, hallId, tf],
