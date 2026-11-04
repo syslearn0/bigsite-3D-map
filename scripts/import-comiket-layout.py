@@ -428,7 +428,7 @@ def read_features(doc, desks):
     return {"pillars": pillars, "openings": openings}
 
 
-# ---- 会場案内図（PDF の2ページ目）：待機列・通行不可・サークル入場経路・サークル入口・待ち合わせの大玉 ----
+# ---- 会場案内図（PDF の2ページ目）：通行不可の場所・サークル入口 ----
 # 案内図は略図で、全体を1つの式で写すと 10〜27m ずれる。そこで、ホールの角・駅などの対応点を集め、
 # 写したい点の近くの対応点ほど重く見て、その点ごとに式を決める（近いほど対応点どおりに合う）
 GUIDE = 1
@@ -555,7 +555,8 @@ def read_guide(doc):
             marks.append({"kind": "meeting", "name": f"大玉（{color}・{where}）", "level": level, "at": to_v((w[0] + w[2]) / 2, (w[1] + w[3]) / 2)})
     err = max(math.hypot(*(a - b for a, b in zip(to_v(*s_), d_))) for s_, d_ in zip(src, dst))
     print(f"案内図：対応点 {len(src)}（いちばんのずれ {err:.1f}m）・待機列と通行不可 {len(areas)}・経路 {len(routes)}・入口と大玉 {len(marks)}")
-    return {"areas": areas, "routes": routes, "marks": marks}
+    # 地図に出すのは、通行不可の場所とサークル入口だけ（待機列・入場経路・待ち合わせの大玉は、略図からでは分かりにくいので入れない）
+    return {"areas": [x for x in areas if x["kind"] == "closed"], "routes": [], "marks": [m for m in marks if m["kind"] == "circle-entrance"]}
 
 
 def main():

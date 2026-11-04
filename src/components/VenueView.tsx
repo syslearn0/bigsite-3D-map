@@ -31,6 +31,7 @@ type Venue = {
   toilets: { at: XZ; level: number | null; kinds?: string[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
+  stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number }[];
 };
 const venue = venueJson as unknown as Venue;
 // 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
@@ -211,7 +212,7 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors
     const gaps: [number, number][] = [];
     for (const [dx, dz] of doors) {
       const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
-      if (Math.abs(v) > 5 || u < 0 || u > len) continue;
+      if (Math.abs(v) > 15 || u < 0 || u > len) continue; // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い
       gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2)]);
     }
     // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
@@ -277,6 +278,31 @@ export function VenueView() {
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
+  const [walkPending, setWalkPending] = useState(false);
+  const afterPick = useRef<(i: number) => void>(() => {}); // 机を選んだすぐあとにすること（「歩く」を待っているとき）
+  const startWalkAt = useCallback((i: number) => {
+    afterPick.current = () => {};
+    setWalkPending(false);
+    setView("walk");
+    requestAnimationFrame(() => api.current?.focusBooth(i));
+  }, []);
+  const cancelWalk = () => {
+    afterPick.current = () => {};
+    setWalkPending(false);
+  };
+  const chooseView = (v: View) => {
+    if (v === "walk" && view !== "walk") {
+      if (selected !== null) startWalkAt(selected);
+      else {
+        afterPick.current = startWalkAt;
+        setWalkPending(true);
+      }
+      return;
+    }
+    cancelWalk();
+    setView(v);
+  };
   // 机を選ぶ欄：列（lines の何番目か）→ 番号 → a・b。地図で机を押したときも、その机に合わせる
   const [pickLine, setPickLine] = useState<number | null>(null);
   const [pickNum, setPickNum] = useState(1);
@@ -419,35 +445,49 @@ export function VenueView() {
       partsOf(h.level).solid.push(label);
       addLabel(label, "hall");
     }
-    // 会場案内図から写したもの：一般参加者の待機列（橙）・通行不可（灰）の場所、サークル入場経路（水色・紺）、サークル入口・待ち合わせの大玉
-    for (const a of features?.areas ?? []) {
-      const wait = a.kind === "wait";
+    // 会場案内図から写したもの：通行不可（灰）の場所と、サークル入口（待機列・入場経路・待ち合わせの大玉は、分かりにくいので出さない）
+    for (const a of (features?.areas ?? []).filter((x) => x.kind === "closed")) {
       const y = floorY(a.level);
-      const m = flatPoly(a.poly, wait ? 0xf3a45b : 0x9a9d9a, y + 0.06, wait ? 0.55 : 0.6);
+      const m = flatPoly(a.poly, 0x9a9d9a, y + 0.06, 0.6);
       scene.add(m);
       partsOf(a.level).floors.push(m);
-      const label = textSprite(wait ? "一般参加者 待機列" : "通行不可", { bg: wait ? "rgba(200,110,30,.9)" : "rgba(90,92,90,.85)", height: 2.6, px: 30 });
+      const label = textSprite("通行不可", { bg: "rgba(90,92,90,.85)", height: 2.6, px: 30 });
       const [cx, cz] = centroid(a.poly);
       label.position.set(cx, y + 2.6, cz);
       scene.add(label);
       partsOf(a.level).solid.push(label);
-      addLabel(label, wait ? "area" : "shutter");
+      addLabel(label, "shutter");
     }
-    for (const r of features?.routes ?? []) {
-      const m = new THREE.Mesh(
-        ribbons([{ pts: r.pts, y: 0.12, w: r.kind === "recommended" ? 3.5 : 2.4 }]),
-        new THREE.MeshBasicMaterial({ color: r.kind === "recommended" ? 0x3cb4f0 : 0x2a3f8f, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
-      );
-      scene.add(m);
-      partsOf(1).floors.push(m);
-    }
-    for (const mk of features?.marks ?? []) {
+    for (const mk of (features?.marks ?? []).filter((x) => x.kind === "circle-entrance")) {
       const entrance = mk.kind === "circle-entrance";
       const s = textSprite(entrance ? `▶ ${mk.name}` : `● ${mk.name}`, { bg: entrance ? "rgba(20,90,170,.92)" : "rgba(180,40,110,.92)", height: 2.6, px: 30 });
       s.position.set(mk.at[0], floorY(mk.level) + 3, mk.at[1]);
       scene.add(s);
       partsOf(mk.level).solid.push(s);
       addLabel(s, "door");
+    }
+    // 階段（屋上展示場からエントランスプラザへ）。段は 0.2m ほどの高さで、どの階を見ていても出す
+    for (const st of venue.stairs ?? []) {
+      const y0 = floorY(st.toLevel), y1 = floorY(st.fromLevel);
+      const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
+      const n = Math.max(3, Math.round((y1 - y0) / 0.2));
+      const geo = new THREE.BoxGeometry(st.width, 1, run / n + 0.02);
+      const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xc9c7bd }), n);
+      const t = new THREE.Object3D();
+      for (let i = 0; i < n; i++) {
+        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n;
+        t.position.set(st.to[0] + dx * f, (y0 + top) / 2, st.to[1] + dz * f);
+        t.rotation.set(0, Math.atan2(dx, dz), 0);
+        t.scale.set(1, top - y0, 1);
+        t.updateMatrix();
+        m.setMatrixAt(i, t.matrix);
+      }
+      m.computeBoundingSphere();
+      scene.add(m);
+      const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(90,80,60,.88)", height: 2.6, px: 30 });
+      label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
+      scene.add(label);
+      addLabel(label, "door");
     }
     // 柱（配置図から写したとき）。0.8m 角、壁の高さまで
     if (features?.pillars.length) {
@@ -825,6 +865,7 @@ export function VenueView() {
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
       setSelected(i);
+      afterPick.current(i);
       setPickLine(booths[i].line);
       setPickNum(booths[i].num);
       setPickHalf(booths[i].half);
@@ -1427,6 +1468,7 @@ export function VenueView() {
   const select = useCallback(
     (i: number) => {
       setSelected(i);
+      afterPick.current(i);
       const lv = hallById.get(booths[i].hall)!.level;
       setFloor(floorOf(lv));
       api.current?.focusBooth(i);
@@ -1532,7 +1574,7 @@ export function VenueView() {
         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
           <div className="seg" role="group" aria-label="見方">
             {VIEWS.map((v) => (
-              <button key={v.id} aria-pressed={view === v.id} onClick={() => setView(v.id)}>
+              <button key={v.id} aria-pressed={view === v.id || (v.id === "walk" && walkPending)} onClick={() => chooseView(v.id)}>
                 {v.label}
               </button>
             ))}
@@ -1649,6 +1691,12 @@ export function VenueView() {
           </div>
         )}
         {here && <div style={{ ...OVER, top: 8, right: 8, fontWeight: 700 }}>{here}</div>}
+        {walkPending && (
+          <div role="status" style={{ position: "absolute", left: "50%", top: 12, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
+            <span>歩き始める机を押してください（上の「列を選ぶ」でも選べます）。その机の前に立ちます</span>
+            <button className="chip small" onClick={cancelWalk}>やめる</button>
+          </div>
+        )}
         {view === "walk" && (
           <div style={{ position: "absolute", right: 12, bottom: sel ? 150 : 40, display: "flex", flexDirection: "column", gap: 8 }}>
             {(
@@ -1755,10 +1803,7 @@ export function VenueView() {
               {view !== "walk" && (
                 <button
                   style={{ minHeight: 44 }}
-                  onClick={() => {
-                    setView("walk");
-                    requestAnimationFrame(() => api.current?.focusBooth(selected!));
-                  }}
+                  onClick={() => startWalkAt(selected!)}
                 >
                   机の前に立つ
                 </button>

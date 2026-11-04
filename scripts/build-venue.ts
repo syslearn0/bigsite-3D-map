@@ -119,6 +119,15 @@ halls.push({ id: "S4", name: "南4ホール", building: "南", level: 4, poly: s
 // 南展示棟の建物の、ホール以外（エントランスホールなど）も床として見せる
 const southRest: XZ[] = southHall;
 
+// 辺の真ん中（poly の i 番目の辺）と、2点をむすぶ幅 w の通路
+const mid = (p: XZ[], i: number): XZ => [(p[i][0] + p[(i + 1) % p.length][0]) / 2, (p[i][1] + p[(i + 1) % p.length][1]) / 2];
+function corridor(a: XZ, b: XZ, w: number): XZ[] {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const nx = (-(b[1] - a[1]) / L) * (w / 2), nz = ((b[0] - a[0]) / L) * (w / 2);
+  const r = (v: number) => Math.round(v * 10) / 10;
+  return [[r(a[0] + nx), r(a[1] + nz)], [r(b[0] + nx), r(b[1] + nz)], [r(b[0] - nx), r(b[1] - nz)], [r(a[0] - nx), r(a[1] - nz)]];
+}
+
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[] };
 const areas: Area[] = [
@@ -136,8 +145,44 @@ const areas: Area[] = [
   // 東1〜3 と東4〜6 のあいだの通路（ガレリア）。OSM では名前が「西２F」と書かれている（way 543048845、東展示棟の通路）
   { name: "東ガレリア", level: 1, poly: poly(byId(543048845)) },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
+  // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
+  // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする
+  { name: "南展示棟への通路（4F）", level: 4, poly: corridor(mid(halls.find((h) => h.id === "W4")!.poly, 1), mid(halls.find((h) => h.id === "S3")!.poly, 3), 14) },
   { name: "南展示棟", level: 1, poly: southRest },
 ];
+
+// 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ下りる外の階段：
+// 2つの床の形がいちばん近い所どうしを、それぞれの内側へ 2m ずつのばしてむすぶ（OSM に階段の形がないので、その位置の目安）
+type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number };
+const stairs: Stair[] = [];
+{
+  const roof = areas.find((a) => a.name === "屋上展示場")!.poly, plaza = areas.find((a) => a.name === "エントランスプラザ")!.poly;
+  let best: [number, XZ, XZ] = [Infinity, [0, 0], [0, 0]];
+  const near = (p: XZ, poly: XZ[]): [number, XZ] => {
+    let b: [number, XZ] = [Infinity, p];
+    poly.forEach((a, i) => {
+      const c = poly[(i + 1) % poly.length];
+      const dx = c[0] - a[0], dz = c[1] - a[1], L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+      const q: XZ = [a[0] + t * dx, a[1] + t * dz];
+      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (d < b[0]) b = [d, q];
+    });
+    return b;
+  };
+  for (const p of roof) {
+    const [d, q] = near(p, plaza);
+    if (d < best[0]) best = [d, p, q];
+  }
+  for (const q of plaza) {
+    const [d, p] = near(q, roof);
+    if (d < best[0]) best = [d, p, q];
+  }
+  const [, a, b] = best;
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
+  const r = (v: number) => Math.round(v * 10) / 10;
+  stairs.push({ name: "屋上展示場への階段", from: [r(a[0] - ux * 2), r(a[1] - uz * 2)], fromLevel: 4, to: [r(b[0] + ux * 2), r(b[1] + uz * 2)], toLevel: 2, width: 6 });
+}
 
 // まわりの建物（位置の手がかり。足元の形だけ）
 const context = osm.elements
@@ -229,6 +274,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
