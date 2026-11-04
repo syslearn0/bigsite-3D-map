@@ -212,6 +212,7 @@ type Api = {
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
   setSurround: (on: boolean) => void;
+  snapshot: (hallId: string, marked: { booth: number; mark: Mark }[]) => string;
 };
 
 export function VenueView() {
@@ -223,6 +224,8 @@ export function VenueView() {
   const [floor, setFloor] = useState<Floor>(1);
   const [byGenre, setByGenre] = useState(true);
   const [surround, setSurround] = useState(false); // 周辺の建物（会議棟の逆ピラミッドなど）も立体で出す
+  // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
+  const [print, setPrint] = useState<{ made: string; sections: { hall: Hall; img: string; codes: { code: string; mark: Mark }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // 机を選ぶ欄：列（lines の何番目か）→ 番号 → a・b。地図で机を押したときも、その机に合わせる
   const [pickLine, setPickLine] = useState<number | null>(null);
@@ -951,7 +954,88 @@ export function VenueView() {
     ortho.updateProjectionMatrix();
     setView("top");
     setFloor(1);
-    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, hold: (d) => (hold = d), setSurround: (on) => {
+    // 印刷用：ホール1つを真上から（北が上）描いた絵。印の机に配置番号、列の両端に列の名前を書き足す。
+    // いまの画面とは別の描き手（WebGLRenderer）で描き、終わったら階・机の置き方・札を元に戻す
+    const snapshot = (hallId: string, marked: { booth: number; mark: Mark }[]) => {
+      const h = hallById.get(hallId)!;
+      const prevFloor = currentFloor;
+      setFloor(floorOf(h.level));
+      placeDesks(true);
+      const hiddenSprites: THREE.Sprite[] = [];
+      scene.traverse((o) => {
+        if (o instanceof THREE.Sprite && o.visible) {
+          o.visible = false;
+          hiddenSprites.push(o);
+        }
+      });
+      const pinWas = pin.visible;
+      pin.visible = false;
+      const xs = h.poly.map((p) => p[0]), zs = h.poly.map((p) => p[1]);
+      const PAD = 8;
+      const x0 = Math.min(...xs) - PAD, x1 = Math.max(...xs) + PAD, z0 = Math.min(...zs) - PAD, z1 = Math.max(...zs) + PAD;
+      const W = x1 - x0, Hh = z1 - z0;
+      const pxW = Math.round(Math.min(1800, (1800 * W) / Math.max(W, Hh))), pxH = Math.round(Math.min(1800, (1800 * Hh) / Math.max(W, Hh)));
+      const cam = new THREE.OrthographicCamera(-W / 2, W / 2, Hh / 2, -Hh / 2, 0.1, 3000);
+      const y = floorY(h.level);
+      cam.position.set((x0 + x1) / 2, y + 600, (z0 + z1) / 2 + 0.01);
+      cam.lookAt((x0 + x1) / 2, y, (z0 + z1) / 2);
+      const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      r.setSize(pxW, pxH, false);
+      r.render(scene, cam);
+      const c = document.createElement("canvas");
+      c.width = pxW;
+      c.height = pxH;
+      const g = c.getContext("2d")!;
+      g.drawImage(r.domElement, 0, 0);
+      r.dispose();
+      r.forceContextLoss();
+      // 元に戻す（札の大きさと見せ方は、次のフレームの placeLabels が決め直す）
+      for (const o of hiddenSprites) o.visible = true;
+      pin.visible = pinWas;
+      placeDesks(current === "top");
+      setFloor(prevFloor);
+      const px = (x: number, z: number): [number, number] => [((x - x0) / W) * pxW, ((z - z0) / Hh) * pxH];
+      const k = pxW / W; // 1m の px
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      // 文字の大きさは絵の幅に合わせる（A4 に印刷して、配置番号が 4mm ほど・列の名前が 3mm ほど）
+      const big = Math.max(pxW, pxH);
+      const codePx = Math.round(big / 45), blockPx = Math.round(big / 60);
+      // 列の名前（両端）
+      g.font = `700 ${blockPx}px system-ui, sans-serif`;
+      for (const l of lines) {
+        if (l.hall !== hallId) continue;
+        for (const u of [-2.5, lineLength(l) + 2.5]) {
+          const [sx, sy] = px(l.start[0] + Math.cos(l.angle) * u, l.start[1] + Math.sin(l.angle) * u);
+          g.fillStyle = "#fff";
+          g.beginPath();
+          g.arc(sx, sy, blockPx * 0.8, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#1d1d1b";
+          g.fillText(l.block, sx, sy);
+        }
+      }
+      // 印の机：丸と配置番号
+      g.font = `700 ${codePx}px system-ui, sans-serif`;
+      for (const { booth, mark } of marked) {
+        const b = booths[booth];
+        const [sx, sy] = px(b.at[0], b.at[1]);
+        const label = `${MARK[mark].icon} ${b.block}-${String(b.num).padStart(2, "0")}${b.half}`;
+        const w = g.measureText(label).width + codePx * 0.6, hh = codePx * 1.4;
+        g.fillStyle = hexCss(MARK[mark].color);
+        g.beginPath();
+        g.arc(sx, sy, Math.max(codePx * 0.3, k * 0.6), 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.roundRect(sx - w / 2, sy - hh - codePx * 0.4, w, hh, codePx * 0.25);
+        g.fill();
+        g.fillStyle = "#fff";
+        g.fillText(label, sx, sy - hh / 2 - codePx * 0.4);
+      }
+      return c.toDataURL("image/png");
+    };
+
+    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
         surroundings.visible = on;
       },
     };
@@ -1028,8 +1112,44 @@ export function VenueView() {
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
   const openHalls = venue.halls.filter((h) => !h.closed);
 
+  // 印をつけた机を、ホールごとの絵と一覧にして印刷する（印刷の画面で「PDF に保存」も選べる）
+  const startPrint = () => {
+    const byHall = new Map<string, { booth: number; mark: Mark }[]>();
+    for (const m of MARKS)
+      for (const c of lists[m]) {
+        const i = codeIndex.get(c)!;
+        const hid = booths[i].hall;
+        if (!byHall.has(hid)) byHall.set(hid, []);
+        byHall.get(hid)!.push({ booth: i, mark: m });
+      }
+    const sections = venue.halls
+      .filter((h) => byHall.has(h.id))
+      .map((h) => {
+        const marked = byHall.get(h.id)!;
+        return {
+          hall: h,
+          img: api.current?.snapshot(h.id, marked) ?? "",
+          codes: marked.map(({ booth, mark }) => ({ code: booths[booth].code, mark })).sort((a, b) => a.code.localeCompare(b.code, "ja", { numeric: true })),
+        };
+      });
+    setListOpen(false);
+    setPrint({ made: new Date().toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" }), sections });
+  };
+  useEffect(() => {
+    if (!print) return;
+    const done = () => setPrint(null);
+    addEventListener("afterprint", done);
+    // 絵が描き終わってから印刷の画面を開く
+    const t = setTimeout(() => print.sections.length && window.print(), 300);
+    return () => {
+      clearTimeout(t);
+      removeEventListener("afterprint", done);
+    };
+  }, [print]);
+
   return (
-    // 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app）
+    <>
+    {/* 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app） */}
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
       <header style={{ padding: "8px 12px 6px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
@@ -1171,9 +1291,14 @@ export function VenueView() {
           <div style={{ ...SHEET, top: 8, bottom: "auto", maxHeight: "60%", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong>印をつけたサークル</strong>
-              <button className="chip small" onClick={() => setListOpen(false)}>
-                閉じる
-              </button>
+              <span style={{ display: "flex", gap: 6 }}>
+                <button className="chip small" disabled={lists.want.length + lists.maybe.length === 0} onClick={startPrint}>
+                  印刷・PDF
+                </button>
+                <button className="chip small" onClick={() => setListOpen(false)}>
+                  閉じる
+                </button>
+              </span>
             </div>
             {lists.want.length + lists.maybe.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>机を押して「★ 行きたい」か「◆ 候補」をつけられます。この端末の中だけに保存します。</p>
@@ -1249,6 +1374,50 @@ export function VenueView() {
         )}
       </div>
     </div>
+    {print && (
+      <div className="print-sheet">
+        <h1>行きたいサークルの配置</h1>
+        <p className="print-note">
+          {print.made} 作成。コミックマーケット準備会とは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>印</th>
+              <th>配置番号</th>
+              <th>ホール</th>
+            </tr>
+          </thead>
+          <tbody>
+            {print.sections.flatMap((sec) =>
+              sec.codes.map(({ code, mark }) => (
+                <tr key={code}>
+                  <td style={{ color: hexCss(MARK[mark].color) }}>
+                    {MARK[mark].icon} {MARK[mark].label}
+                  </td>
+                  <td>{code}</td>
+                  <td>
+                    {sec.hall.name}（{sec.hall.level}F）
+                  </td>
+                </tr>
+              )),
+            )}
+          </tbody>
+        </table>
+        {print.sections.map((sec) => (
+          <section key={sec.hall.id} className="print-hall">
+            <h2>
+              {sec.hall.name}（{sec.hall.level}F）　{sec.codes.length} か所
+            </h2>
+            {/* eslint-disable-next-line @next/next/no-img-element -- その場で描いた絵（data URL）なので next/image は使わない */}
+            <img src={sec.img} alt={`${sec.hall.name}の配置（北が上）`} />
+            <p className="print-note">北が上。{sec.codes.map((c) => `${MARK[c.mark].icon}${c.code}`).join("　")}</p>
+          </section>
+        ))}
+        <p className="print-note">{venue.attribution}</p>
+      </div>
+    )}
+    </>
   );
 }
 
