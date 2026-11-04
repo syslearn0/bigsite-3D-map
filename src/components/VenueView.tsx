@@ -28,6 +28,7 @@ type Venue = {
   };
   toilets: { at: XZ; level: number | null; kinds?: string[] }[];
   firstAid: { at: XZ; level: number }[];
+  doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
 };
 const venue = venueJson as unknown as Venue;
 const lines = (layoutJson as unknown as { lines: Line[] }).lines;
@@ -321,8 +322,8 @@ export function VenueView() {
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
     // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
     // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
-    type LabelKind = "hall" | "area" | "wc" | "aid" | "block";
-    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, block: 15 };
+    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block";
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15 };
     const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
     const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
     const levels = new Map<number, LevelParts>();
@@ -368,6 +369,14 @@ export function VenueView() {
       scene.add(m);
       partsOf(lv).solid.push(m);
       addLabel(m, "wc");
+    }
+    // 出入口（緑）・搬入口（シャッター、灰）。図面から読んだもの
+    for (const d of venue.doors) {
+      const m = textSprite(d.kind === "出入口" ? "⇄ 出入口" : "搬入口", { bg: d.kind === "出入口" ? "rgba(20,120,60,.92)" : "rgba(95,100,95,.85)", height: 2.6, px: 32 });
+      m.position.set(d.at[0], floorY(d.level) + 2.6, d.at[1]);
+      scene.add(m);
+      partsOf(d.level).solid.push(m);
+      addLabel(m, d.kind === "出入口" ? "door" : "shutter");
     }
     for (const a of venue.firstAid) {
       const m = textSprite("＋ 救護室", { bg: "rgba(200,30,30,.92)", height: 3, px: 34 });
@@ -813,7 +822,7 @@ export function VenueView() {
             s.visible = !b || !hits(b);
             if (b && s.visible) placed.push(b);
           }
-        for (const k of ["aid", "wc"] as const)
+        for (const k of ["aid", "door", "wc", "shutter"] as const)
           for (const { s, kind } of labels) {
             if (kind !== k || !s.visible) continue;
             const b = box(s, LABEL_PX[k], false);
@@ -984,7 +993,8 @@ export function VenueView() {
       if (Math.cos(th) < 0) th += Math.PI;
       const ct = Math.cos(th), st = Math.sin(th);
       const toUV = (x: number, z: number): [number, number] => [x * ct + z * st, -x * st + z * ct];
-      const uv = all.map(([x, z]) => toUV(x, z));
+      // 図の範囲：ホールと、そのホールの出入口・搬入口まで（南のエントランスはホールの手前 36m ほど）
+      const uv = [...all, ...venue.doors.filter((d) => hallIds.includes(d.hall)).map((d) => d.at)].map(([x, z]) => toUV(x, z));
       const PAD = 8;
       const u0 = Math.min(...uv.map((q) => q[0])) - PAD, u1 = Math.max(...uv.map((q) => q[0])) + PAD;
       const v0 = Math.min(...uv.map((q) => q[1])) - PAD, v1 = Math.max(...uv.map((q) => q[1])) + PAD;
@@ -1077,6 +1087,24 @@ export function VenueView() {
           g.fillText(l.block, sx, sy);
         }
       }
+      // 出入口・搬入口・トイレ・救護室（このページの階のもの。紙の上で 2mm ほどの文字）
+      const facPx = Math.round(mm(1.9));
+      g.font = `700 ${facPx}px system-ui, sans-serif`;
+      const tag = (x: number, z: number, text: string, bg: string) => {
+        const [sx, sy] = px(x, z);
+        if (sx < 0 || sy < 0 || sx > pxW || sy > pxH) return;
+        const w = g.measureText(text).width + facPx * 0.5, hh = facPx * 1.35;
+        g.fillStyle = bg;
+        g.beginPath();
+        g.roundRect(sx - w / 2, sy - hh / 2, w, hh, facPx * 0.2);
+        g.fill();
+        g.fillStyle = "#fff";
+        g.fillText(text, sx, sy);
+      };
+      for (const d of venue.doors) if (floorOf(d.level) === floorOf(level)) tag(d.at[0], d.at[1], d.kind === "出入口" ? "出入口" : "搬入", d.kind === "出入口" ? "#14783c" : "#6b706b");
+      for (const t of venue.toilets) if (floorOf(t.level ?? 1) === floorOf(level)) tag(t.at[0], t.at[1], t.kinds?.includes("多機能") ? "WC♿" : "WC", "#1f5fbf");
+      for (const a of venue.firstAid) if (floorOf(a.level) === floorOf(level)) tag(a.at[0], a.at[1], "＋救護", "#c81e1e");
+      g.fillStyle = "#1d1d1b";
       // 印の机：丸と配置番号の札（紙の上で 3mm ほどの文字）
       const codePx = Math.round(mm(3));
       g.font = `700 ${codePx}px system-ui, sans-serif`;
@@ -1099,8 +1127,12 @@ export function VenueView() {
         g.fillStyle = "#fff";
         g.fillText(label, sx, sy - hh / 2 - codePx * 0.5);
       }
-      // 北の矢印（右上）
-      const ar = mm(6), ax = pxW - mm(10), ay = mm(10);
+      // 北の矢印（右下。白い丸の上に）
+      const ar = mm(6), ax = pxW - mm(11), ay = pxH - mm(11);
+      g.fillStyle = "rgba(255,255,255,.9)";
+      g.beginPath();
+      g.arc(ax, ay, ar * 1.9, 0, Math.PI * 2);
+      g.fill();
       const nx = -st, ny = -ct; // 会場の北（z の負の向き）が、絵の上でどちらか
       g.strokeStyle = "#1d1d1b";
       g.fillStyle = "#1d1d1b";
@@ -1468,7 +1500,7 @@ export function VenueView() {
           <section key={sec.title} className="print-hall">
             {i === 0 && (
               <p className="print-note">
-                配置図　{print.made} 作成。コミックマーケット準備会とは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。○の文字が列の名前、島の端の数字がその列の端の机の番号。地図：
+                配置図　{print.made} 作成。コミックマーケット準備会とは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。○の文字が列の名前、島の端の数字がその列の端の机の番号。緑が出入口、灰が搬入口（シャッター）、青がトイレ、赤が救護室（ビッグサイトの図面から読んだ位置で、数m ずれることがあります。当日の出入口は運営の案内に従ってください）。地図：
                 {venue.attribution}
               </p>
             )}

@@ -66,9 +66,12 @@ HC = re.compile(r"^ＨＣ$|^HC$")  # 多機能トイレ（「HC=2,285」のよ�
 MALE = re.compile(r"男子")
 FEMALE = re.compile(r"女子")
 AID = re.compile(r"救護室")
+DOOR = re.compile(r"出入口|エントランス")  # 人が出入りする口
+SHUTTER = re.compile(r"搬入口")  # 搬入口（シャッター）。イベントによっては出入口に使われる
 
 out = []
 aids = []
+doors = []  # {"hall", "level", "at", "kind": "出入口" | "搬入口"}
 report = []
 for hid, name in PLANS.items():
     f = ROOT / "data/private" / f"{name}.pdf"
@@ -96,10 +99,14 @@ for hid, name in PLANS.items():
     words = page.get_text("words")
     pts = []
     aid = []
+    door = []
     for w in words:
         t = w[4]
         if AID.search(t):
             aid.append((hid, ((w[0] + w[2]) / 2 - cx) * PT, ((w[1] + w[3]) / 2 - cy) * PT))
+        dk = "出入口" if DOOR.search(t) else "搬入口" if SHUTTER.search(t) else None
+        if dk:
+            door.append((dk, ((w[0] + w[2]) / 2 - cx) * PT, ((w[1] + w[3]) / 2 - cy) * PT))
         kind = "wc" if WC.search(t) else "hc" if HC.search(t) else None
         if not kind: continue
         px, py = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
@@ -124,6 +131,7 @@ for hid, name in PLANS.items():
         size_err = abs(along_u[0] - L) / L + abs(along_u[1] - W) / W
         world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz, kd) for x, y, kd in pts]
         aid_world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz) for _, x, y in aid]
+        door_world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz, dk) for dk, x, y in door]
         ins = sum(1 for x, z, _ in world if any(inside((x, z), b) for b in buildings))
         score = ins / max(1, len(world)) - size_err
         if hid in ORIENT:
@@ -134,8 +142,10 @@ for hid, name in PLANS.items():
             ux, uz = (dx, dz) if axis == "down" else (rx, rz)
             score = sign * (ux * vx + uz * vz) / math.hypot(vx, vz)  # 決めた向きにいちばん近いものを選ぶ
         if best is None or score > best[0]:
-            best = (score, k, world, ins, size_err, aid_world, (dx, dz))
-    score, k, world, ins, size_err, aid_world, down = best
+            best = (score, k, world, ins, size_err, aid_world, (dx, dz), door_world)
+    score, k, world, ins, size_err, aid_world, down, door_world = best
+    for x, z, dk in door_world:
+        doors.append({"hall": hid, "level": h["level"], "at": [round(x, 1), round(z, 1)], "kind": dk})
     for x, z in aid_world:
         aids.append({"level": h["level"], "at": [round(x, 1), round(z, 1)], "hall": hid})
     report.append(f"{hid}: ホールの範囲 {pw:.0f}×{ph:.0f}m（会場データ {L:.0f}×{W:.0f}m）、向き {k * 90}°、トイレの文字 {len(world)}（建物の中 {ins}）{"、向きは図面から" if hid in ORIENT else ""}")
@@ -163,6 +173,12 @@ def toward(hid, ref):
     rp = halls[ref]["poly"]
     return math.atan2(sum(p[1] for p in rp) / len(rp) - c[1], sum(p[0] for p in rp) / len(rp) - c[0])
 
+def place_doors(hid, a, anchor_world, pts):
+    """出入口・搬入口を place と同じやり方で会場の座標に"""
+    rx, rz = math.cos(a), math.sin(a); dx, dz = -rz, rx
+    for (x, y), kind in pts:
+        doors.append({"hall": hid, "level": halls[hid]["level"], "at": [round(anchor_world[0] + x * rx + y * dx, 1), round(anchor_world[1] + x * rz + y * dz, 1)], "kind": kind})
+
 def place(hid, a, anchor_world, pts):
     """図面の点（anchor からの m。図面の右・下）を会場の座標に。a：図面の右が向く角"""
     rx, rz = math.cos(a), math.sin(a); dx, dz = -rz, rx
@@ -179,7 +195,11 @@ place("E3", a3, c3, [(((x - 487) * s3, (y - 505) * s3), k) for (x, y), k in [
     ((760, 965), ["男子", "女子", "多機能"]),  # 右下、通路の側
     ((610, 1210), ["男子", "女子", "多機能"]),  # 通路の向こう側
 ]])
-report.append("E3: 画像から手で読んだ 3 か所")
+place_doors("E3", a3, c3, [(((x - 487) * s3, (y - 505) * s3), k) for (x, y), k in [
+    ((420, 932), "出入口"), ((575, 932), "出入口"),  # 通路の側
+    ((420, 115), "搬入口"), ((575, 115), "搬入口"), ((45, 330), "搬入口"), ((45, 690), "搬入口"),  # 東3-B・A・C・D
+]])
+report.append("E3: 画像から手で読んだ 3 か所（出入口・搬入口 6）")
 
 # 東7・東8
 s7 = 72 / 140 * 0.0254 / 72 * 600
@@ -191,7 +211,11 @@ e8 = [((740, 925), ["男子", "女子", "多機能"]), ((1430, 1320), ["男子",
 pts7 = [(((x - 1440) * s7, (y - 1290) * s7), k) for (x, y), k in e7 + [((x + 460, y - 1035), k) for (x, y), k in e8]]
 place("E7", a7, corner, pts7[:4])
 place("E8", a7, corner, pts7[4:])
-report.append("E7・E8: 画像から手で読んだ 6 か所")
+place_doors("E7", a7, corner, [(((x - 1440) * s7, (y - 1290) * s7), k) for (x, y), k in [
+    ((790, 1310), "搬入口"), ((1070, 1310), "搬入口"),  # 東7-A・B
+    ((1520, 145), "出入口"),  # エントランス（リンクスペースの東）
+]])
+report.append("E7・E8: 画像から手で読んだ 6 か所（出入口・搬入口 3）")
 
 # 西3・西4
 c_w3, _, _, _ = min_rect(halls["W3"]["poly"])
@@ -204,7 +228,16 @@ place("W3", a_w3, c_w3, [(((x - 849) * PT, (y - 1503) * PT), k) for (x, y), k in
     (w4(1449, 732), ["女子"]),
     (w4(1451, 1062), ["男子"]),
 ]])
-report.append("W3・W4: 図面の文字の位置から手で読んだ 5 か所")
+# 西3・西4 の出入口・搬入口は、図面の文字の位置（西4 は西3 の図面に重ねる）
+wd = []
+for name, conv in [("E_W3_c", lambda x, y: (x, y)), ("E_W4_c", w4)]:
+    for w in fitz.open(ROOT / "data/private" / f"{name}.pdf")[0].get_text("words"):
+        dk = "出入口" if DOOR.search(w[4]) else "搬入口" if SHUTTER.search(w[4]) else None
+        if dk:
+            x, y = conv((w[0] + w[2]) / 2, (w[1] + w[3]) / 2)
+            wd.append((((x - 849) * PT, (y - 1503) * PT), dk))
+place_doors("W3", a_w3, c_w3, wd)
+report.append(f"W3・W4: 図面の文字の位置から手で読んだ 5 か所（出入口・搬入口 {len(wd)}）")
 
 # 同じトイレ（隣の図面にも描かれているもの・男女が並ぶもの）を、6m 以内でまとめる
 merged = []
@@ -220,6 +253,11 @@ aid_merged = []
 for a in aids:
     if not any(b["level"] == a["level"] and math.hypot(b["at"][0] - a["at"][0], b["at"][1] - a["at"][1]) < 10 for b in aid_merged):
         aid_merged.append(a)
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged}, ensure_ascii=False, indent=1), encoding="utf-8")
+# 出入口・搬入口：同じ種類で 5m 以内は同じもの
+door_merged = []
+for d in doors:
+    if not any(e["level"] == d["level"] and e["kind"] == d["kind"] and math.hypot(e["at"][0] - d["at"][0], e["at"][1] - d["at"][1]) < 5 for e in door_merged):
+        door_merged.append(d)
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
-print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所を data/plan-toilets.json に")
+print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")

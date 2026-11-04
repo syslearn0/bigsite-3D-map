@@ -164,8 +164,12 @@ const parts3d = osm.elements
 // 図面を読めていない所は OSM のトイレで補う（図面のトイレから 15m 以内の OSM のトイレは同じものとみなす）
 type Toilet = { at: XZ; level: number | null; kinds?: string[]; src: string };
 const plan = existsSync("data/plan-toilets.json")
-  ? (JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { toilets: { at: XZ; level: number; kinds: string[] }[]; firstAid: { at: XZ; level: number }[] })
-  : { toilets: [], firstAid: [] };
+  ? (JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as {
+      toilets: { at: XZ; level: number; kinds: string[] }[];
+      firstAid: { at: XZ; level: number }[];
+      doors?: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
+    })
+  : { toilets: [], firstAid: [], doors: [] };
 const osmToilets: Toilet[] = osm.elements
   .filter((e) => e.tags?.amenity === "toilets")
   .map((e) => {
@@ -178,6 +182,8 @@ const toilets: Toilet[] = [
   ...osmToilets.filter((o) => !plan.toilets.some((t) => Math.hypot(t.at[0] - o.at[0], t.at[1] - o.at[1]) < 15)),
 ];
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
+// 出入口・搬入口（シャッター）。図面から読んだもの
+const doors = (plan.doors ?? []).map((d) => ({ at: d.at, level: d.level, kind: d.kind, hall: d.hall }));
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層 6m（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
@@ -216,6 +222,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors }),
 );
-console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
+console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
