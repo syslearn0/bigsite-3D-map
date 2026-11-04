@@ -257,6 +257,7 @@ type Api = {
   recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
+  standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
   setSurround: (on: boolean) => void;
@@ -280,24 +281,27 @@ export function VenueView() {
   const [selected, setSelected] = useState<number | null>(null);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
-  const afterPick = useRef<(i: number) => void>(() => {}); // 机を選んだすぐあとにすること（「歩く」を待っているとき）
+  // 「歩く」を待っている間は、地図を押した所にピンを立てて、そこから歩き始める（机の上でなくてよい）
+  const standPick = useRef<((x: number, z: number) => void) | null>(null);
   const startWalkAt = useCallback((i: number) => {
-    afterPick.current = () => {};
+    standPick.current = null;
     setWalkPending(false);
     setView("walk");
     requestAnimationFrame(() => api.current?.focusBooth(i));
   }, []);
   const cancelWalk = () => {
-    afterPick.current = () => {};
+    standPick.current = null;
     setWalkPending(false);
   };
   const chooseView = (v: View) => {
     if (v === "walk" && view !== "walk") {
-      if (selected !== null) startWalkAt(selected);
-      else {
-        afterPick.current = startWalkAt;
-        setWalkPending(true);
-      }
+      standPick.current = (x, z) => {
+        standPick.current = null;
+        setWalkPending(false);
+        setView("walk");
+        requestAnimationFrame(() => api.current?.standAt(x, z));
+      };
+      setWalkPending(true);
       return;
     }
     cancelWalk();
@@ -818,6 +822,12 @@ export function VenueView() {
         focus.copy(p);
       } else focusPoint(p, true);
     };
+    // 歩く：(x, z) に立つ。向きは、それまで見ていた向き（真上から見ていたときは北）
+    const standAt = (x: number, z: number) => {
+      persp.position.set(x, eyeY(), z);
+      pitch = -0.1;
+      focus.set(x, floorY(currentFloor), z);
+    };
     const focusHall = (id: string) => {
       const h = hallById.get(id)!;
       if (floorOf(h.level) !== currentFloor) setFloor(floorOf(h.level));
@@ -865,7 +875,6 @@ export function VenueView() {
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
       setSelected(i);
-      afterPick.current(i);
       setPickLine(booths[i].line);
       setPickNum(booths[i].num);
       setPickHalf(booths[i].half);
@@ -910,6 +919,15 @@ export function VenueView() {
           return;
         }
         lastTap = { t: now, x: e.clientX, y: e.clientY };
+      }
+      if (standPick.current) {
+        const p = floorAt(e);
+        if (p) {
+          // 立つ場所のピンを見せてから歩き始める
+          pin.position.set(p.x, floorY(currentFloor), p.z);
+          standPick.current(p.x, p.z);
+        }
+        return;
       }
       const r = renderer.domElement.getBoundingClientRect();
       // ピンを押したら、その机。ピンは画面の上の形（先から頭まで）のまわり 10px までを押せる所にする
@@ -1426,7 +1444,7 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { setView, setFloor, recolor, setPins, focusBooth, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
+    api.current = { setView, setFloor, recolor, setPins, focusBooth, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
         surroundings.visible = on;
       },
     };
@@ -1468,7 +1486,6 @@ export function VenueView() {
   const select = useCallback(
     (i: number) => {
       setSelected(i);
-      afterPick.current(i);
       const lv = hallById.get(booths[i].hall)!.level;
       setFloor(floorOf(lv));
       api.current?.focusBooth(i);
@@ -1693,7 +1710,7 @@ export function VenueView() {
         {here && <div style={{ ...OVER, top: 8, right: 8, fontWeight: 700 }}>{here}</div>}
         {walkPending && (
           <div role="status" style={{ position: "absolute", left: "50%", top: 12, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
-            <span>歩き始める机を押してください（上の「列を選ぶ」でも選べます）。その机の前に立ちます</span>
+            <span>歩き始める場所を、地図の上で押してください。そこにピンを立てて、その場所から歩きます</span>
             <button className="chip small" onClick={cancelWalk}>やめる</button>
           </div>
         )}
