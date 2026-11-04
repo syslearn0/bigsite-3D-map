@@ -21,6 +21,11 @@ type Venue = {
   areas: { name: string; level: number; poly: XZ[] }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
+  surroundings: {
+    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" }[];
+    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" }[];
+    stations: { name: string; line: string; at: XZ; y: number }[];
+  };
   toilets: { at: XZ; level: number | null; kinds?: string[] }[];
   firstAid: { at: XZ; level: number }[];
 };
@@ -149,6 +154,30 @@ function flatPoly(poly: XZ[], color: number, y: number, opacity = 1) {
   return m;
 }
 
+// 道・線路の帯（線の両側に幅 w/2 ずつ）。種類ごとに1つの形にまとめて描く。skirt があれば、帯のふちから下へ厚みもつける（高架）
+function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
+  const pos: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+  for (const { pts, y, w } of list) {
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 0.01) continue;
+      const nx = (-(bz - az) / len) * (w / 2), nz = ((bx - ax) / len) * (w / 2);
+      const l0 = [ax + nx, y, az + nz], r0 = [ax - nx, y, az - nz], l1 = [bx + nx, y, bz + nz], r1 = [bx - nx, y, bz - nz];
+      quad(l0, l1, r1, r0);
+      if (skirt > 0) {
+        quad([l0[0], y - skirt, l0[2]], [l1[0], y - skirt, l1[2]], l1, l0);
+        quad(r0, r1, [r1[0], y - skirt, r1[2]], [r0[0], y - skirt, r0[2]]);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 function walls(poly: XZ[], y: number, height: number, mat: THREE.Material) {
   const g = new THREE.Group();
   for (let i = 0; i < poly.length; i++) {
@@ -252,6 +281,36 @@ export function VenueView() {
       m.rotation.x = -Math.PI / 2;
       m.position.y = b.min;
       surroundings.add(m);
+    }
+    // 道・歩道（2F の歩行者デッキを含む）・ゆりかもめの高架・駅のホーム
+    const sur = venue.surroundings;
+    const SUR_COLOR = { road: 0x8f938e, walk: 0xe6e2d6, steps: 0xc9c2b0, rail: 0xb4bac0 };
+    for (const kind of ["road", "walk", "steps"] as const) {
+      const m = new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === kind)), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide }));
+      m.position.y = -0.08; // 地面（-0.2）より上、ホールの床より下
+      surroundings.add(m);
+    }
+    const elevated = sur.lines.filter((l) => l.kind === "rail" && l.y > 1);
+    surroundings.add(new THREE.Mesh(ribbons(elevated, 1.5), new THREE.MeshLambertMaterial({ color: SUR_COLOR.rail, side: THREE.DoubleSide })));
+    // 高架の上の線路（2本の細い線）
+    const rails = elevated.flatMap((l) => [-1, 1].map((k) => ({ ...l, w: 0.4, y: l.y + 0.05, pts: l.pts.map(([x, z], i) => {
+      const [bx, bz] = l.pts[Math.min(i + 1, l.pts.length - 1)], [ax, az] = l.pts[Math.max(i - 1, 0)];
+      const len = Math.hypot(bx - ax, bz - az) || 1;
+      return [x - ((bz - az) / len) * k * 1.6, z + ((bx - ax) / len) * k * 1.6] as XZ;
+    }) })));
+    surroundings.add(new THREE.Mesh(ribbons(rails), new THREE.MeshLambertMaterial({ color: 0x5b5148, side: THREE.DoubleSide })));
+    surroundings.add(new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === "rail" && l.y <= 1)), new THREE.MeshLambertMaterial({ color: 0x9c9488, side: THREE.DoubleSide })));
+    for (const a of sur.areas) surroundings.add(flatPoly(a.poly, a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0)));
+    // 駅の名前（画面の上で同じ大きさ。毎フレーム placeLabels で大きさを決める）
+    const stationLabels: { s: THREE.Sprite; base: THREE.Vector3 }[] = [];
+    // 重なったときに残す順（来場者がよく使う駅から）
+    const STATION_ORDER = ["東京ビッグサイト駅", "国際展示場駅"];
+    const rank = (n: string) => (STATION_ORDER.includes(n) ? STATION_ORDER.indexOf(n) : STATION_ORDER.length);
+    for (const st of [...sur.stations].sort((a, b) => rank(a.name) - rank(b.name))) {
+      const sp = textSprite(`🚉 ${st.name}（${st.line}）`, { bg: st.line === "ゆりかもめ" ? "rgba(0,120,90,.92)" : "rgba(20,80,160,.92)", height: 6, px: 36 });
+      sp.position.set(st.at[0], st.y + 8, st.at[1]);
+      surroundings.add(sp);
+      stationLabels.push({ s: sp, base: sp.scale.clone() });
     }
     scene.add(surroundings);
 
@@ -717,6 +776,11 @@ export function VenueView() {
         }
         s.visible = show;
       }
+      for (const { s, base } of stationLabels) {
+        s.scale.copy(base);
+        if (!walk) s.scale.multiplyScalar(18 / (base.y * pxPerM(s.position)));
+        s.material.depthTest = current !== "top";
+      }
       for (const { s, level, base } of pins) {
         s.visible = floorOf(level) === currentFloor;
         s.material.depthTest = !(current === "top");
@@ -739,6 +803,13 @@ export function VenueView() {
         const hits = (b: [number, number, number, number]) => placed.some((r) => b[0] < r[2] + 3 && b[2] > r[0] - 3 && b[1] < r[3] + 3 && b[3] > r[1] - 3);
         for (const { s, kind } of labels) if (kind === "hall" && s.visible) { const b = box(s, LABEL_PX.hall, false); if (b) placed.push(b); }
         for (const { s } of pins) if (s.visible) { const b = box(s, 34, true); if (b) placed.push(b); }
+        // 駅の名前（「周辺も表示」のとき）。重なったら後の駅を隠す
+        if (surroundings.visible)
+          for (const { s } of stationLabels) {
+            const b = box(s, 18, false);
+            s.visible = !b || !hits(b);
+            if (b && s.visible) placed.push(b);
+          }
         for (const k of ["aid", "wc"] as const)
           for (const { s, kind } of labels) {
             if (kind !== k || !s.visible) continue;

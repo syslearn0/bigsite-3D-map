@@ -10,6 +10,7 @@
     "lint": "eslint",
     "test": "tsx --test tests/*.test.ts",
     "fetch:osm": "tsx scripts/fetch-osm.ts",
+    "fetch:surroundings": "tsx scripts/fetch-osm-surroundings.ts",
     "build:venue": "tsx scripts/build-venue.ts",
     "build:layout": "tsx scripts/build-layout.ts",
     "make:icons": "tsx scripts/make-icons.ts"

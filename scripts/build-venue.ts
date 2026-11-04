@@ -179,9 +179,43 @@ const toilets: Toilet[] = [
 ];
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 
+// 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
+// 高さは OSM の layer（何層目か）から：歩道・道路は 1層 6m（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
+// 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
+type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
+type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" };
+type SStation = { name: string; line: string; at: XZ; y: number };
+const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
+if (existsSync("data/osm/surroundings.json")) {
+  const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
+  const WIDTH: Record<string, number> = { motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 7, unclassified: 6, residential: 6, service: 4, pedestrian: 6, footway: 2.5, path: 2, cycleway: 2, steps: 2.5 };
+  for (const e of so.elements) {
+    const t = e.tags ?? {};
+    const layer = Number(t.layer) || 0;
+    if (t.tunnel === "yes" || layer < 0 || Number(t.level) < 0) continue;
+    if (e.type === "node" && (t.railway === "station" || (t.public_transport === "station" && t.railway))) {
+      const line = t.light_rail === "yes" ? "ゆりかもめ" : "りんかい線";
+      sur.stations.push({ name: `${t.name}駅`, line, at: project(ORIGIN, e.lat!, e.lon!), y: line === "ゆりかもめ" ? 9 : 0 });
+      continue;
+    }
+    if (!e.geometry) continue;
+    const pts = e.geometry.map((g) => project(ORIGIN, g.lat, g.lon));
+    if (t.railway === "platform") {
+      sur.areas.push({ poly: pts, y: 4 + Math.max(2, layer) * 2.5 + 0.5, kind: "platform" });
+    } else if (t.railway && t.railway !== "station") {
+      sur.lines.push({ pts, y: layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
+    } else if (t.highway) {
+      const walk = /^(pedestrian|footway|path|cycleway)$/.test(t.highway);
+      const y = layer * 6 + (walk ? 0.06 : 0.03);
+      if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
+      else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
+    }
+  }
+}
+
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, toilets, firstAid }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid }),
 );
-console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length} を src/data/venue.json に`);
+console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
