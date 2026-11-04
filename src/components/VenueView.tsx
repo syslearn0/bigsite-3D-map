@@ -8,6 +8,7 @@ import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout } from "@/lib/saved-layout";
+import { DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, SAMPLE_GENRES, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -36,6 +37,8 @@ const venue = venueJson as unknown as Venue;
 // （この画面はブラウザでだけ描くので、読み込むときに端末の保存を読める）
 const savedLines = loadLayout(LAYOUT_KEY);
 const lines = savedLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
+// 作品・キャラ（島のエディタで入れたもの）。なければ見本の作品で色分けする
+const savedTags = loadTags(TAGS_KEY);
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
@@ -211,7 +214,7 @@ const subscribeOnline = (cb: () => void) => {
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
-  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null) => void;
+  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
   focusHall: (id: string) => void;
@@ -228,6 +231,9 @@ export function VenueView() {
   const [view, setView] = useState<View>("top");
   const [floor, setFloor] = useState<Floor>(1);
   const [byGenre, setByGenre] = useState(true);
+  const [day, setDay] = useState<Day>(1); // 何日目（作品・キャラは日ごと）
+  const dayTags = useMemo(() => (savedTags ? (savedTags[day] ?? {}) : null), [day]);
+  const dayWorks = useMemo(() => (savedTags ? worksOf(savedTags, day) : []), [day]);
   const [surround, setSurround] = useState(false); // 周辺の建物（会議棟の逆ピラミッドなど）も立体で出す
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string }[] }[] } | null>(null);
@@ -625,14 +631,19 @@ export function VenueView() {
       }
     };
 
-    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null) => {
+    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null) => {
       const col = new THREE.Color();
       for (const { mesh, index } of deskMeshes.values()) {
         index.forEach((bi, k) => {
           const b = booths[bi];
           if (bi === sel) col.setHex(SELECT_COLOR);
           else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
-          else if (colorByGenre) {
+          else if (colorByGenre && dayTags) {
+            // 入れた作品の色（作品が入っていない机は白）
+            const w = dayTags[b.code]?.work;
+            if (w) col.setStyle(workColor(w)).lerp(new THREE.Color(0xffffff), 0.2);
+            else col.setHex(DESK_COLOR);
+          } else if (colorByGenre) {
             const g = SAMPLE_GENRES.indexOf(lines[b.line].genre ?? "");
             col.setHex(g >= 0 ? GENRE_COLOR[g] : DESK_COLOR).lerp(new THREE.Color(0xffffff), 0.35);
           } else col.setHex(DESK_COLOR);
@@ -1186,7 +1197,7 @@ export function VenueView() {
   useEffect(() => {
     api.current?.setSurround(surround);
   }, [surround]);
-  useEffect(() => api.current?.recolor(byGenre, marks, selected), [byGenre, marks, selected]);
+  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags), [byGenre, marks, selected, dayTags]);
   useEffect(() => {
     const list = Object.entries(marks)
       .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
@@ -1307,6 +1318,15 @@ export function VenueView() {
               </button>
             ))}
           </div>
+          {savedTags && (
+            <div className="seg" role="group" aria-label="日">
+              {DAYS.map((d) => (
+                <button key={d} aria-pressed={day === d} onClick={() => setDay(d)}>
+                  {d}日目
+                </button>
+              ))}
+            </div>
+          )}
           <div className="seg" role="group" aria-label="階">
             {([1, 4] as Floor[]).map((f) => (
               <button key={f} aria-pressed={floor === f} onClick={() => setFloor(f)}>
@@ -1387,7 +1407,19 @@ export function VenueView() {
       </header>
 
       <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
-        {byGenre && (
+        {byGenre && dayTags && (
+          <div style={{ ...OVER, top: 8, left: 8, fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 260 }}>
+            {!dayWorks.length && <span>{day}日目の作品はまだ入っていません</span>}
+            {dayWorks.slice(0, 12).map((w) => (
+              <span key={w.work} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                <i style={{ width: 10, height: 10, borderRadius: 2, background: workColor(w.work), display: "inline-block" }} />
+                {w.work}
+              </span>
+            ))}
+            {dayWorks.length > 12 && <span>ほか {dayWorks.length - 12}</span>}
+          </div>
+        )}
+        {byGenre && !dayTags && (
           <div style={{ ...OVER, top: 8, left: 8, fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 260 }}>
             {SAMPLE_GENRES.map((g, i) => (
               <span key={g} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
@@ -1484,7 +1516,15 @@ export function VenueView() {
               </span>
             </div>
             <div style={{ fontSize: ".9rem", marginTop: 2 }}>
-              作品（見本）：{lines[sel.line].genre}　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
+              {dayTags ? (
+                <>
+                  作品：{dayTags[sel.code]?.work ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
+                  {dayTags[sel.code]?.chars?.length ? `　／　キャラ：${dayTags[sel.code]!.chars!.join("、")}` : ""}
+                </>
+              ) : (
+                <>作品（見本）：{lines[sel.line].genre}</>
+              )}
+              　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               {MARKS.map((m) => (

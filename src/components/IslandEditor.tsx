@@ -6,8 +6,11 @@ import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
 import { DESK_D, DESK_L, expandBooths, layoutProblems, lineLength, nextBlock, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type Line } from "@/lib/layout";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, saveLayout } from "@/lib/saved-layout";
+import { applyTag, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
-// 島のエディタ。カタログの配置図を下絵に重ねて、島の列（ブロック）を並べる。
+// 島のエディタ。2つの作業がある。
+// ・作品・キャラを入れる（協力者）：スペースを選んで、作品（ブルーアーカイブ・原神など）を広い範囲に入れ、次にキャラを入れる。日ごとに分けて持つ
+// ・机の配置（管理用）：カタログの配置図を下絵に重ねて、島の列（ブロック）を並べる。机の位置は作者が用意する
 // 見方は上から（2D）。ホールを、島がまっすぐ（横か縦）になる向きに回して見せる。
 // 島の列 = 始点・向き・区切りごとの机の数（layout.ts の Line）。番号は始点から A側を進み、B側を戻る。
 // 下絵の画像は端末の中だけで使い、保存も送信もしない（カタログの配置図をそのまま配らないため）。
@@ -22,6 +25,11 @@ type Tool = "select" | "add" | "image";
 type Bg = { img: HTMLImageElement; x: number; z: number; mPerPx: number; rot: number; opacity: number };
 const floorOf = (lv: number) => (lv >= 4 ? 4 : 1);
 const THICK = 6; // 机の奥行きを何倍に描くか（島 1 本が約 5.4m。島どうしの間 7m なら、間が 1.6m ほど残る）
+// 上から描いている机の真ん中（机の奥行きを THICK 倍に描き、島の外側へのばした分だけずらす）
+const drawnCenter = (b: { at: XZ; angle: number; side: number }): XZ => {
+  const off = (b.side * DESK_D * (THICK - 1)) / 2;
+  return [b.at[0] - Math.sin(b.angle) * off, b.at[1] + Math.cos(b.angle) * off];
+};
 const clone = (l: Line[]) => l.map((x) => ({ ...x, start: [...x.start] as XZ, segments: [...x.segments] }));
 
 // ホールを島がまっすぐになる向きに回す角（ホールの長い辺を横に。北がなるべく上）
@@ -41,13 +49,23 @@ export function IslandEditor() {
   const [copyGap, setCopyGap] = useState(PITCH);
   const [bgs, setBgs] = useState<Record<string, Bg>>({});
   const [msg, setMsg] = useState("");
+  // いまの作業：作品・キャラを入れる（協力者）／机の配置（管理用）
+  const [mode, setMode] = useState<"tags" | "layout">("tags");
+  const [day, setDay] = useState<Day>(1);
+  const [tags, setTags] = useState<Tags>(() => loadTags(TAGS_DRAFT_KEY) ?? loadTags(TAGS_KEY) ?? {});
+  const [picked, setPicked] = useState<Set<string>>(new Set()); // 選んだスペース（配置番号）
+  const [workInput, setWorkInput] = useState("");
+  const [charInput, setCharInput] = useState("");
+  const anchor = useRef<string | null>(null); // Shift＋押すで範囲を選ぶときの始まり
+  const tagHistory = useRef<Tags[]>([]);
+  const boxSel = useRef<{ x0: number; y0: number; x1: number; y1: number; add: boolean } | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const cv = useRef<HTMLCanvasElement>(null);
   const history = useRef<Line[][]>([]);
   const view = useRef({ k: 4, u: 0, v: 0 }); // 1m の px・画面の真ん中に見る位置（回した座標）
   const pointer = useRef<XZ | null>(null);
   const addStart = useRef<XZ | null>(null);
-  const drag = useRef<{ kind: "pan" | "line" | "image"; sx: number; sy: number; u: number; v: number; start?: XZ; bg?: { x: number; z: number } } | null>(null);
+  const drag = useRef<{ kind: "pan" | "line" | "image" | "box"; sx: number; sy: number; u: number; v: number; start?: XZ; bg?: { x: number; z: number } } | null>(null);
   const [, redraw] = useState(0);
   const repaint = useCallback(() => redraw((n) => n + 1), []);
 
@@ -59,6 +77,8 @@ export function IslandEditor() {
   }, [hall]);
   const levelHalls = useMemo(() => halls.filter((h) => floorOf(h.level) === floorOf(hall.level)), [hall]);
   const booths = useMemo(() => expandBooths(lines, halls), [lines]);
+  const codeIdx = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
+  const dayTags = tags[day] ?? {};
   const problems = useMemo(() => layoutProblems(lines, halls), [lines]);
   const badLines = useMemo(() => new Set(problems.map((p) => p.line)), [problems]);
 
@@ -66,6 +86,21 @@ export function IslandEditor() {
   useEffect(() => {
     saveLayout(DRAFT_KEY, lines);
   }, [lines]);
+  useEffect(() => {
+    saveTags(TAGS_DRAFT_KEY, tags);
+  }, [tags]);
+  const changeTags = useCallback(
+    (next: Tags) => {
+      tagHistory.current.push(tags);
+      if (tagHistory.current.length > 80) tagHistory.current.shift();
+      setTags(next);
+    },
+    [tags],
+  );
+  const undoTags = useCallback(() => {
+    const prev = tagHistory.current.pop();
+    if (prev) setTags(prev);
+  }, []);
 
   // ホールを変えたら、ホール全体が入る大きさに
   useEffect(() => {
@@ -171,8 +206,18 @@ export function IslandEditor() {
       const hl = DESK_L / 4 - 0.02, hd = (DESK_D / 2) * THICK, off = (b.side * DESK_D * (THICK - 1)) / 2;
       const corner = (du: number, dv: number): XZ => [b.at[0] + du * c - (dv + off) * s, b.at[1] + du * s + (dv + off) * c];
       poly([corner(-hl, -hd), corner(hl, -hd), corner(hl, hd), corner(-hl, hd)]);
-      g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
+      const dt = dayTags[b.code];
+      if (mode === "tags") g.fillStyle = picked.has(b.code) ? "#ffb000" : dt?.work ? workColor(dt.work) : b.hall === hallId ? "#c3cad4" : "#dde1e6";
+      else g.fillStyle = b.line === sel ? "#ffb000" : badLines.has(b.line) ? "#e05a5a" : b.hall === hallId ? "#7d93b6" : "#b7c2cf";
       g.fill();
+      // キャラが入っているスペースには白い点
+      if (mode === "tags" && dt?.chars?.length && k * DESK_L >= 12) {
+        const [sx, sy] = toS(corner(0, 0));
+        g.fillStyle = "#fff";
+        g.beginPath();
+        g.arc(sx, sy, Math.max(2, k * 0.25), 0, Math.PI * 2);
+        g.fill();
+      }
     }
     // 列の名前（始点）と、番号の進む向き（始点から A側へ）
     g.textAlign = "center";
@@ -182,7 +227,7 @@ export function IslandEditor() {
       const c = Math.cos(l.angle), s = Math.sin(l.angle);
       const [sx, sy] = toS([l.start[0] - c * 2.2, l.start[1] - s * 2.2]);
       const r = Math.max(8, k * 1.1);
-      g.fillStyle = i === sel ? "#ffb000" : "#fff";
+      g.fillStyle = mode === "layout" && i === sel ? "#ffb000" : "#fff";
       g.strokeStyle = "#1d1d1b";
       g.lineWidth = 1;
       g.beginPath();
@@ -192,7 +237,7 @@ export function IslandEditor() {
       g.fillStyle = "#1d1d1b";
       g.font = `700 ${Math.round(r * 1.1)}px system-ui, sans-serif`;
       g.fillText(l.block, sx, sy);
-      if (i === sel) {
+      if (mode === "layout" && i === sel) {
         // 矢印：始点から番号が進む向き
         const len = lineLength(l);
         const [ax, ay] = toS(l.start);
@@ -225,8 +270,19 @@ export function IslandEditor() {
         g.fillText(String(a.num).padStart(2, "0"), sx, sy);
       }
     }
+    // 囲んで選んでいる四角
+    if (boxSel.current) {
+      const b = boxSel.current;
+      g.fillStyle = "rgba(212,85,154,.08)";
+      g.fillRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      g.strokeStyle = "#d4559a";
+      g.lineWidth = 1.5;
+      g.setLineDash([6, 4]);
+      g.strokeRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      g.setLineDash([]);
+    }
     // 置いている途中の島
-    if (tool === "add" && addStart.current && pointer.current) {
+    if (mode === "layout" && tool === "add" && addStart.current && pointer.current) {
       const a = addStart.current, p = pointer.current;
       const ang = snapAngle(Math.atan2(p[1] - a[1], p[0] - a[0]));
       const len = (p[0] - a[0]) * Math.cos(ang) + (p[1] - a[1]) * Math.sin(ang);
@@ -282,6 +338,34 @@ export function IslandEditor() {
     [tf, repaint],
   );
 
+  // 押した所のスペース（太く描いた机の中）
+  const spaceAt = useCallback(
+    (p: XZ) => {
+      for (const b of booths) {
+        if (b.hall !== hallId) continue;
+        const [cx, cz] = drawnCenter(b);
+        const c = Math.cos(b.angle), s = Math.sin(b.angle);
+        const du = (p[0] - cx) * c + (p[1] - cz) * s, dv = -(p[0] - cx) * s + (p[1] - cz) * c;
+        if (Math.abs(du) <= DESK_L / 4 && Math.abs(dv) <= (DESK_D / 2) * THICK) return b.code;
+      }
+      return null;
+    },
+    [booths, hallId],
+  );
+  // 押した所の列の名前（○）。その列を全部選ぶ
+  const blockAt = useCallback(
+    (sx: number, sy: number) => {
+      const { toS, k } = tf();
+      const r = Math.max(8, k * 1.1);
+      return lines.findIndex((l) => {
+        if (l.hall !== hallId) return false;
+        const [x, y] = toS([l.start[0] - Math.cos(l.angle) * 2.2, l.start[1] - Math.sin(l.angle) * 2.2]);
+        return Math.hypot(x - sx, y - sy) <= r;
+      });
+    },
+    [lines, hallId, tf],
+  );
+
   const onDown = (e: React.PointerEvent) => {
     const r = cv.current!.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -303,6 +387,46 @@ export function IslandEditor() {
       return;
     }
     const panStart = { sx, sy, u: view.current.u, v: view.current.v };
+    if (mode === "tags") {
+      // 右・真ん中のボタンのドラッグで地図を動かす
+      if (e.button === 1 || e.button === 2) {
+        drag.current = { kind: "pan", ...panStart };
+        return;
+      }
+      const li = blockAt(sx, sy);
+      if (li >= 0) {
+        const codes = booths.filter((b) => b.line === li).map((b) => b.code);
+        setPicked((prev) => (e.shiftKey || e.ctrlKey || e.metaKey ? new Set([...prev, ...codes]) : new Set(codes)));
+        anchor.current = null;
+        return;
+      }
+      const code = spaceAt(p);
+      if (code) {
+        const a = anchor.current !== null ? codeIdx.get(anchor.current) : undefined;
+        const i = codeIdx.get(code)!;
+        if (e.shiftKey && a !== undefined && booths[a].line === booths[i].line) {
+          // 同じ列の中で、前に押した所からここまで（番号の並びの順に）
+          const [i0, i1] = a < i ? [a, i] : [i, a];
+          setPicked((prev) => new Set([...prev, ...booths.slice(i0, i1 + 1).map((b) => b.code)]));
+        } else if (e.ctrlKey || e.metaKey) {
+          setPicked((prev) => {
+            const n = new Set(prev);
+            if (n.has(code)) n.delete(code);
+            else n.add(code);
+            return n;
+          });
+          anchor.current = code;
+        } else {
+          setPicked(new Set([code]));
+          anchor.current = code;
+        }
+        return;
+      }
+      // 何もない所からドラッグ：囲んで選ぶ
+      boxSel.current = { x0: sx, y0: sy, x1: sx, y1: sy, add: e.shiftKey || e.ctrlKey || e.metaKey };
+      drag.current = { kind: "box", ...panStart };
+      return;
+    }
     if (tool === "add") {
       if (!addStart.current) {
         addStart.current = p;
@@ -363,7 +487,11 @@ export function IslandEditor() {
     const du = (sx - d.sx) / k, dv = (sy - d.sy) / k;
     const c = Math.cos(theta), s = Math.sin(theta);
     const dx = du * c - dv * s, dz = du * s + dv * c; // 画面の動き → 会場の動き
-    if (d.kind === "pan") {
+    if (d.kind === "box" && boxSel.current) {
+      boxSel.current.x1 = sx;
+      boxSel.current.y1 = sy;
+      repaint();
+    } else if (d.kind === "pan") {
       view.current.u = d.u - du;
       view.current.v = d.v - dv;
       repaint();
@@ -378,6 +506,23 @@ export function IslandEditor() {
   const onUp = (e: React.PointerEvent) => {
     fingers.current.delete(e.pointerId);
     if (fingers.current.size < 2) pinch.current = null;
+    if (drag.current?.kind === "box" && boxSel.current) {
+      const b = boxSel.current;
+      const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+      if (x1 - x0 + (y1 - y0) > 6) {
+        const { toS } = tf();
+        const codes = booths
+          .filter((bt) => {
+            if (bt.hall !== hallId) return false;
+            const [x, y] = toS(drawnCenter(bt));
+            return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+          })
+          .map((bt) => bt.code);
+        setPicked((prev) => (b.add ? new Set([...prev, ...codes]) : new Set(codes)));
+      } else if (!b.add) setPicked(new Set());
+      boxSel.current = null;
+      repaint();
+    }
     drag.current = null;
   };
 
@@ -411,6 +556,18 @@ export function IslandEditor() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (mode === "tags") {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+          e.preventDefault();
+          undoTags();
+        } else if (e.key === "Escape") setPicked(new Set());
+        else if ((e.key === "Delete" || e.key === "Backspace") && picked.size) {
+          // 選んだ所の作品・キャラを消す（Ctrl+Z で戻せる）
+          e.preventDefault();
+          changeTags(applyTag(tags, day, [...picked], { work: "", mode: "clear" }));
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         undo();
@@ -440,7 +597,7 @@ export function IslandEditor() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [sel, lines, theta, undo, change, updateSel, repaint]);
+  }, [sel, lines, theta, undo, change, updateSel, repaint, mode, undoTags, picked, changeTags, tags, day]);
 
   // ---- 選んだ島の操作 ----
   const selLine = sel !== null ? lines[sel] : null;
@@ -506,8 +663,35 @@ export function IslandEditor() {
       setMsg("ファイルを読めませんでした");
     }
   };
+  // ---- 作品・キャラ ----
+  const pickedList = [...picked];
+  const pickedWorks = [...new Set(pickedList.map((c) => dayTags[c]?.work).filter(Boolean))] as string[];
+  const pickedChars = [...new Set(pickedList.flatMap((c) => dayTags[c]?.chars ?? []))];
+  const works = worksOf(tags, day);
+  const setWork = (w: string) => picked.size && changeTags(applyTag(tags, day, pickedList, { work: w }));
+  const setChars = (how: "set" | "add" | "clear") => picked.size && changeTags(applyTag(tags, day, pickedList, { chars: splitChars(charInput), mode: how }));
+  const selectWork = (w: string) => setPicked(new Set(Object.entries(dayTags).filter(([, t]) => t.work === w).map(([c]) => c)));
+  const downloadTags = () => {
+    const blob = new Blob([JSON.stringify(toTagsFile(tags), null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `tags-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const uploadTags = async (file: File) => {
+    try {
+      const got = parseTagsFile(JSON.parse(await file.text()));
+      if (!got) return setMsg("作品・キャラのファイルとして読めませんでした");
+      changeTags(got);
+      setMsg("作品・キャラを読み込みました");
+    } catch {
+      setMsg("ファイルを読めませんでした");
+    }
+  };
+
   const showOnMap = () => {
-    if (!saveLayout(LAYOUT_KEY, lines)) return setMsg("端末に保存できませんでした");
+    if (!saveLayout(LAYOUT_KEY, lines) || !saveTags(TAGS_KEY, tags)) return setMsg("端末に保存できませんでした");
     // メインの地図は、開いたときに保存した配置を読むので、ページごと開き直す
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 読み込み直しが要るため
     location.href = "/";
@@ -521,6 +705,14 @@ export function IslandEditor() {
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       <header style={{ padding: "8px 12px", background: "var(--card)", borderBottom: "1px solid var(--line)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <strong>島のエディタ</strong>
+        <div className="seg" role="group" aria-label="作業">
+          <button aria-pressed={mode === "tags"} onClick={() => ((addStart.current = null), setMode("tags"))}>
+            作品・キャラを入れる
+          </button>
+          <button aria-pressed={mode === "layout"} onClick={() => (setPicked(new Set()), setMode("layout"))}>
+            机の配置（管理用）
+          </button>
+        </div>
         <select aria-label="ホール" value={hallId} onChange={(e) => (setHallId(e.target.value), setSel(null), (addStart.current = null))}>
           {openHalls.map((h) => (
             <option key={h.id} value={h.id}>
@@ -528,7 +720,16 @@ export function IslandEditor() {
             </option>
           ))}
         </select>
-        <div className="seg" role="group" aria-label="道具">
+        {mode === "tags" && (
+          <div className="seg" role="group" aria-label="日">
+            {DAYS.map((d) => (
+              <button key={d} aria-pressed={day === d} onClick={() => (setDay(d), setPicked(new Set()))}>
+                {d}日目
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === "layout" && <div className="seg" role="group" aria-label="道具">
           {(
             [
               ["select", "選ぶ・動かす"],
@@ -540,22 +741,27 @@ export function IslandEditor() {
               {label}
             </button>
           ))}
-        </div>
+        </div>}
         <button className="chip" onClick={() => setTurn((t) => (t + 1) % 4)}>
           見る向きを 90° 回す
         </button>
-        <button className="chip" onClick={undo} disabled={!history.current.length}>
+        <button className="chip" onClick={mode === "tags" ? undoTags : undo}>
           戻す
         </button>
         <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <button className="chip" onClick={download}>
+          <button className="chip" onClick={mode === "tags" ? downloadTags : download}>
             書き出す
           </button>
           <label className="chip" style={{ display: "inline-flex", alignItems: "center", cursor: "pointer", border: "1px solid var(--line)", padding: "6px 10px" }}>
             読み込む
-            <input type="file" accept="application/json,.json" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+            <input
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={(e) => e.target.files?.[0] && (mode === "tags" ? uploadTags(e.target.files[0]) : upload(e.target.files[0]))}
+            />
           </label>
-          <button
+          {mode === "layout" && <button
             className="chip"
             onClick={() => {
               if (confirm("見本の配置に戻しますか？いまの配置は消えます（書き出していなければ戻せません）")) {
@@ -565,7 +771,7 @@ export function IslandEditor() {
             }}
           >
             見本に戻す
-          </button>
+          </button>}
           <button onClick={showOnMap} style={{ fontWeight: 700 }}>
             3D で確かめる
           </button>
@@ -580,9 +786,12 @@ export function IslandEditor() {
             onPointerMove={onMove}
             onPointerUp={onUp}
             onPointerCancel={onUp}
+            onContextMenu={(e) => e.preventDefault()}
           />
           <div style={{ ...HINT }}>
-            {tool === "add"
+            {mode === "tags"
+              ? "スペースを押して選ぶ。列の名前（○）でその列を全部、何もない所からドラッグで囲んで選ぶ。Shift＋押すで同じ列の範囲、Ctrl＋押すで足す・外す。右ドラッグで地図を動かす。Delete で消す"
+              : tool === "add"
               ? addStart.current
                 ? "終わりの場所を押す（向きは壁にそろう。Shift で自由な向き）。Esc でやめる"
                 : "島の列の始まり（番号 01 の側の端）を押す"
@@ -592,6 +801,91 @@ export function IslandEditor() {
           </div>
         </div>
         <aside style={PANEL}>
+          {mode === "tags" && (
+            <>
+              <section>
+                <h3 style={H3}>
+                  {hall.name}・{day}日目
+                </h3>
+                <div style={{ fontSize: ".85rem", color: "var(--muted)" }}>
+                  作品が入ったスペース {booths.filter((b) => b.hall === hallId && dayTags[b.code]?.work).length} ／ {booths.filter((b) => b.hall === hallId).length}
+                </div>
+                {msg && <div style={{ fontSize: ".85rem", marginTop: 4 }}>{msg}</div>}
+              </section>
+              <section>
+                <h3 style={H3}>選んだスペース {picked.size}</h3>
+                {!picked.size && <p style={NOTE}>まず作品を広い範囲に入れ、そのあとキャラを入れます。列の名前（○）を押すと、その列を全部選べます。</p>}
+                {picked.size > 0 && (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontSize: ".85rem" }}>
+                      作品：{pickedWorks.length ? pickedWorks.join("・") : "（なし）"}
+                      <br />
+                      キャラ：{pickedChars.length ? pickedChars.slice(0, 12).join("、") + (pickedChars.length > 12 ? " …" : "") : "（なし）"}
+                    </div>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <strong style={{ fontSize: ".9rem" }}>① 作品</strong>
+                      <input list="works" value={workInput} onChange={(e) => setWorkInput(e.target.value)} placeholder="ブルーアーカイブ" aria-label="作品" />
+                      <datalist id="works">
+                        {works.map((w) => (
+                          <option key={w.work} value={w.work} />
+                        ))}
+                      </datalist>
+                      <span style={{ display: "flex", gap: 4 }}>
+                        <button className="chip small" disabled={!workInput.trim()} onClick={() => setWork(workInput)}>
+                          この作品にする
+                        </button>
+                        <button className="chip small" onClick={() => setWork("")}>
+                          作品を外す
+                        </button>
+                      </span>
+                    </div>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <strong style={{ fontSize: ".9rem" }}>② キャラ</strong>
+                      <input value={charInput} onChange={(e) => setCharInput(e.target.value)} placeholder="アリス、ユウカ" aria-label="キャラ" />
+                      <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <button className="chip small" disabled={!splitChars(charInput).length} onClick={() => setChars("set")}>
+                          この内容にする
+                        </button>
+                        <button className="chip small" disabled={!splitChars(charInput).length} onClick={() => setChars("add")}>
+                          足す
+                        </button>
+                        <button className="chip small" onClick={() => setChars("clear")}>
+                          キャラを消す
+                        </button>
+                      </span>
+                      <p style={NOTE}>キャラは「、」かカンマで区切って何人でも。</p>
+                    </div>
+                    <div style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+                      <strong style={{ fontSize: ".9rem" }}>③ お品書き・サークルの画像</strong>
+                      <p style={NOTE}>準備会に確認してから、サークル本人に入れてもらう予定です（まだ入れられません）。</p>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section>
+                <h3 style={H3}>この日の作品 {works.length ? `（${works.length}）` : ""}</h3>
+                {!works.length && <p style={NOTE}>まだありません。</p>}
+                <div style={{ display: "grid", gap: 3 }}>
+                  {works.map((w) => (
+                    <button
+                      key={w.work}
+                      className="chip small"
+                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, textAlign: "left" }}
+                      onClick={() => (selectWork(w.work), setWorkInput(w.work))}
+                      title="この作品のスペースを全部選ぶ"
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <i style={{ width: 12, height: 12, borderRadius: 3, background: workColor(w.work), display: "inline-block" }} />
+                        {w.work}
+                      </span>
+                      <span style={{ color: "var(--muted)" }}>{w.count}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+          {mode === "layout" && <>
           <section>
             <h3 style={H3}>{hall.name}</h3>
             <div style={{ fontSize: ".85rem", color: "var(--muted)" }}>
@@ -715,6 +1009,7 @@ export function IslandEditor() {
               ))}
             </ul>
           </section>
+          </>}
         </aside>
       </div>
     </div>
