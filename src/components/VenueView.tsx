@@ -564,10 +564,11 @@ export function VenueView() {
       const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : LINK_COLOR }), n);
       const t = new THREE.Object3D();
       for (let i = 0; i < n; i++) {
-        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n;
-        t.position.set(st.to[0] + dx * f, (y0 + top) / 2, st.to[1] + dz * f);
+        // 段は 1 段ずつ、厚さ 0.6m の板（下まで埋めた塊にすると、下の階から壁のように見える）
+        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(0.6, top - y0);
+        t.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
         t.rotation.set(0, Math.atan2(dx, dz), 0);
-        t.scale.set(1, top - y0, 1);
+        t.scale.set(1, th, 1);
         t.updateMatrix();
         m.setMatrixAt(i, t.matrix);
       }

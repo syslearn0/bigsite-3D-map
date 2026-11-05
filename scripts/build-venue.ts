@@ -125,6 +125,20 @@ const southRest: XZ[] = southHall;
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
 // その階の床（ホール・通路）の上か
+function hull(pts: XZ[]): XZ[] {
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: XZ, a: XZ, b: XZ) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo: XZ[] = [], up: XZ[] = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  for (const q of [...p].reverse()) {
+    while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return [...lo.slice(0, -1), ...up.slice(0, -1)];
+}
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
 }
@@ -248,7 +262,8 @@ const areas: Area[] = [
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
   ...southConcourse(),
   // 南コンコース（西）：エントランスプラザと西の 4F アトリウムのあいだの 2F の通路（OSM way 154080986）。公式の図ではここに 4F・1F へのエスカレーターが着く
-  { name: "南コンコース", level: 2, poly: poly(byId(154080986)) },
+  // OSM の形は線が交差していて、そのまま面にすると三角が飛び出すので、外まわり（凸包）にする
+  { name: "南コンコース", level: 2, poly: hull(poly(byId(154080986))) },
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
