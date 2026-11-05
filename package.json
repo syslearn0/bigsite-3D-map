@@ -28,6 +28,7 @@
     "@types/three": "^0.187.0",
     "eslint": "^9",
     "eslint-config-next": "^16.4.3",
+    "polygon-clipping": "^0.15.7",
     "tsx": "^4.20.6",
     "typescript": "^5"
   }

@@ -2,6 +2,7 @@
 // 座標は会場の中のメートル（x：東、z：南）。位置関係は OSM の緯度経度のまま（ホール同士の並びは地図どおり）。
 // 南展示棟は OSM に外形1つ（ホール＋西展示棟へつなぐ通路）しかないので、ホールの部分を切り出して「形は概略」とする。
 
+import polygonClipping from "polygon-clipping";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "../src/lib/geo";
 
@@ -124,26 +125,8 @@ const southRest: XZ[] = southHall;
 
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）。part：穴で切れた床のかけら（名前の札を出さない）
 // その階の床（ホール・通路）の上か
-function widenToCenter(voids: XZ[][], deck: XZ[]): XZ[][] {
-  // ガレリアの長い向き（いちばん長い辺）と、真ん中の線（形の重心を通る）
-  let best: [number, XZ] = [0, [1, 0]];
-  deck.forEach((a, i) => {
-    const b = deck[(i + 1) % deck.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (L > best[0]) best = [L, [(b[0] - a[0]) / L, (b[1] - a[1]) / L]];
-  });
-  const c = centroid(deck), n: XZ = [-best[1][1], best[1][0]];
-  return voids.map((v) => {
-    const d = v.map((p) => (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1]);
-    const side = Math.sign(d.reduce((s2, x) => s2 + x, 0)) || 1;
-    const nearSide = Math.min(...d.map((x) => Math.abs(x)));
-    const move = Math.max(0, nearSide - 0.5);
-    // 真ん中の線に近い 2 つの角を、真ん中へ move だけ寄せる
-    const order = d.map((x, i) => [Math.abs(x), i]).sort((p, q) => p[0] - q[0]).slice(0, 2).map((x) => x[1]);
-    return v.map((p, i) => (order.includes(i) ? [Math.round((p[0] - n[0] * side * move) * 10) / 10, Math.round((p[1] - n[1] * side * move) * 10) / 10] as XZ : p));
-  });
-}
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
 }
@@ -266,12 +249,8 @@ const areas: Area[] = [
     poly: poly(byId(543048845)),
     see: true,
     // 吹き抜け：施設案内の 2F全体図のガレリアの上の ×印の四角（scripts/extract-plan-toilets.py が data/plan-toilets.json に書く）
-    // 吹き抜けは、ガレリアの真ん中の線の手前 0.5m まで内側へ広げる（公式フロアマップでは、2F のガレリアは真ん中が開いている）
-    holes: widenToCenter(
-      (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
-        pointInPolygon(centroid(v), poly(byId(543048845))),
-      ),
-      poly(byId(543048845)),
+    holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
+      pointInPolygon(centroid(v), poly(byId(543048845))),
     ),
   },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
@@ -449,38 +428,53 @@ const stairs: Stair[] = [];
   }
 }
 
-// 階段・エスカレーターの上にかかる床に穴をあける：段の上（頭の高さ 2.5m）がその床の高さを越える所から上の端（その階なら 1m 手前）まで、
-// 段の幅 +0.6m の四角。床の形の中に収まる区間だけ（はみ出す所は、もともと床がない）
-for (const st of stairs) {
-  const len = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]);
-  if (len < 1) continue;
-  // 穴は、段のまわりに 2.5m ずつ広く、段の下の端の 2m 先まで（実物の吹き抜けは段よりずっと大きい）
-  const ux = (st.from[0] - st.to[0]) / len, uz = (st.from[1] - st.to[1]) / len, nx = -uz, nz = ux, hw = st.width / 2 + 2.5;
-  const y0 = FLOOR_Y[st.toLevel], y1 = FLOOR_Y[st.fromLevel];
-  for (const a of areas) {
-    if (!(a.level > st.toLevel && a.level <= st.fromLevel)) continue;
-    const fy = FLOOR_Y[a.level];
-    const tStart = Math.max(-2 / len, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)) - 2 / len);
-    const tEnd = a.level === st.fromLevel ? Math.max(tStart, 1 - 1 / len) : Math.min(1, (fy - y0) / (y1 - y0) + 0.5 / len);
-    // 床の中に収まる区間に縮める（端から 0.5m ずつ）
-    const rect = (t0: number, t1: number): XZ[] => {
-      const p0: XZ = [st.to[0] + ux * len * t0, st.to[1] + uz * len * t0], p1: XZ = [st.to[0] + ux * len * t1, st.to[1] + uz * len * t1];
-      return [[p0[0] + nx * hw, p0[1] + nz * hw], [p1[0] + nx * hw, p1[1] + nz * hw], [p1[0] - nx * hw, p1[1] - nz * hw], [p0[0] - nx * hw, p0[1] - nz * hw]];
-    };
-    // 穴の四角が床の形の中に収まるか（四すみが中にあり、辺が床のふちと交わらない。へこんだ形で辺がはみ出すと、面が壊れて三角が飛び出す）
-    const cross = (p: XZ, q: XZ, r2: XZ) => (q[0] - p[0]) * (r2[1] - p[1]) - (q[1] - p[1]) * (r2[0] - p[0]);
-    const hits = (p1: XZ, p2: XZ, q1: XZ, q2: XZ) => cross(p1, p2, q1) * cross(p1, p2, q2) < 0 && cross(q1, q2, p1) * cross(q1, q2, p2) < 0;
-    const inside = (r2: XZ[]) =>
-      r2.every((q) => pointInPolygon(q, a.poly)) &&
-      !r2.some((q, i) => a.poly.some((p, j) => hits(q, r2[(i + 1) % 4], p, a.poly[(j + 1) % a.poly.length])));
-    let t0 = tStart, t1 = tEnd;
-    while (t1 - t0 > 0.02 && !inside(rect(t0, t1))) {
-      if (!inside(rect(t0, t0 + 0.02))) t0 += 0.5 / len;
-      else t1 -= 0.5 / len;
+// 階段・エスカレーターの上にかかる床に穴をあける：段の上（頭の高さ 2.5m）がその床の高さを越える所から、上の端（その階なら 1m 手前）まで。
+// 穴は段のまわりに 2.5m ずつ広い四角（実物の吹き抜けは段よりずっと大きい）。床の形から四角を引き算するので、
+// 床のふちにかかる穴は「切り欠き」に、もとの吹き抜けと重なる穴は吹き抜けとひとつになる。
+// 引き算で床が切れて分かれてしまうときは、穴のまわりの余白を 1m・0.3m とせまくしてみて、それでも分かれるなら、かけらも床として残す
+{
+  const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+  const unring = (r: [number, number][]): XZ[] => {
+    const out: XZ[] = [];
+    for (const [x, z] of r.slice(0, -1)) {
+      const q: XZ = [Math.round(x * 10) / 10, Math.round(z * 10) / 10];
+      if (!out.length || out[out.length - 1][0] !== q[0] || out[out.length - 1][1] !== q[1]) out.push(q);
     }
-    const cr = rect(t0, t1), cc: XZ = [(cr[0][0] + cr[2][0]) / 2, (cr[0][1] + cr[2][1]) / 2];
-    if ((a.holes ?? []).some((h) => pointInPolygon(cc, h) || cr.some((q) => pointInPolygon(q, h)))) continue; // もう吹き抜けがある所
-    if (t1 - t0 > 0.02 && inside(cr)) (a.holes ??= []).push(rect(t0, t1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ));
+    if (out.length > 1 && out[0][0] === out[out.length - 1][0] && out[0][1] === out[out.length - 1][1]) out.pop();
+    return out;
+  };
+  const areaOfRing = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
+  for (const st of stairs) {
+    const len = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]);
+    if (len < 1) continue;
+    const ux = (st.from[0] - st.to[0]) / len, uz = (st.from[1] - st.to[1]) / len, nx = -uz, nz = ux;
+    const y0 = FLOOR_Y[st.toLevel], y1 = FLOOR_Y[st.fromLevel];
+    for (const a of [...areas]) {
+      if (!(a.level > st.toLevel && a.level <= st.fromLevel)) continue;
+      const fy = FLOOR_Y[a.level];
+      const t0 = Math.max(-2 / len, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)) - 2 / len);
+      const t1 = a.level === st.fromLevel ? Math.max(t0, 1 - 1 / len) : Math.min(1, (fy - y0) / (y1 - y0) + 0.5 / len);
+      if (t1 - t0 < 0.02) continue;
+      const rect = (hw: number): XZ[] => {
+        const p0: XZ = [st.to[0] + ux * len * t0, st.to[1] + uz * len * t0], p1: XZ = [st.to[0] + ux * len * t1, st.to[1] + uz * len * t1];
+        return [[p0[0] + nx * hw, p0[1] + nz * hw], [p1[0] + nx * hw, p1[1] + nz * hw], [p1[0] - nx * hw, p1[1] - nz * hw], [p0[0] - nx * hw, p0[1] - nz * hw]];
+      };
+      const floor: [number, number][][] = [ring(a.poly), ...(a.holes ?? []).map(ring)];
+      if (!polygonClipping.intersection(floor, [ring(rect(st.width / 2))]).length) continue; // 段の上にこの床はない
+      let res: ReturnType<typeof polygonClipping.difference> = [];
+      for (const margin of [2.5, 1, 0.3]) {
+        res = polygonClipping.difference(floor, [ring(rect(st.width / 2 + margin))]);
+        if (res.length <= 1) break;
+      }
+      const pieces = res
+        .map((pg) => ({ poly: unring(pg[0]), holes: pg.slice(1).map(unring).filter((h) => h.length >= 3) }))
+        .filter((pg) => pg.poly.length >= 3)
+        .sort((p, q) => areaOfRing(q.poly) - areaOfRing(p.poly));
+      if (!pieces.length) continue;
+      a.poly = pieces[0].poly;
+      a.holes = pieces[0].holes.length ? pieces[0].holes : undefined;
+      for (const pc of pieces.slice(1)) if (areaOfRing(pc.poly) > 4) areas.push({ ...a, poly: pc.poly, holes: pc.holes.length ? pc.holes : undefined, part: true });
+    }
   }
 }
 

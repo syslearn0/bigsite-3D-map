@@ -20,7 +20,7 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
@@ -475,7 +475,7 @@ export function VenueView() {
           partsOf(a.level).solid.push(rail);
         }
       }
-      if (a.under) continue;
+      if (a.under || a.part) continue;
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
       const [cx, cz] = centroid(a.poly);
       label.position.set(cx, y + 3, cz);
