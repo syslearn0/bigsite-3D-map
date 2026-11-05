@@ -23,7 +23,7 @@ import fitz
 ROOT = Path(__file__).resolve().parent.parent
 DESK_L, DESK_D = 1.8, 0.45
 venue = json.loads((ROOT / "src/data/venue.json").read_text(encoding="utf-8"))
-HALLS = {h["id"]: h for h in venue["halls"]}
+HALLS = {h["id"]: {**h, "poly": h.get("inner", h["poly"])} for h in venue["halls"]}  # 展示場の床の形（外壁をトイレの外までずらす前）
 
 KATA = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨ"
 HIRA = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよ"

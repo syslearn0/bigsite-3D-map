@@ -29,7 +29,7 @@ const poly = (e: El): XZ[] => {
 };
 
 // C109（2026年冬）：東4〜6ホールは改修工事で使わない
-type Hall = { id: string; name: string; building: "東" | "西" | "南"; level: number; poly: XZ[]; closed?: string; rough?: boolean; osm: string };
+type Hall = { id: string; name: string; building: "東" | "西" | "南"; level: number; poly: XZ[]; closed?: string; rough?: boolean; osm: string; inner?: XZ[] };
 const halls: Hall[] = [];
 const hall = (id: string, name: string, building: Hall["building"], level: number, extra: Partial<Hall> = {}) => {
   const e = byName(name);
@@ -125,20 +125,6 @@ const southRest: XZ[] = southHall;
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
 // その階の床（ホール・通路）の上か
-function hull(pts: XZ[]): XZ[] {
-  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cross = (o: XZ, a: XZ, b: XZ) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const lo: XZ[] = [], up: XZ[] = [];
-  for (const q of p) {
-    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
-    lo.push(q);
-  }
-  for (const q of [...p].reverse()) {
-    while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
-    up.push(q);
-  }
-  return [...lo.slice(0, -1), ...up.slice(0, -1)];
-}
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
 }
@@ -262,8 +248,7 @@ const areas: Area[] = [
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
   ...southConcourse(),
   // 南コンコース（西）：エントランスプラザと西の 4F アトリウムのあいだの 2F の通路（OSM way 154080986）。公式の図ではここに 4F・1F へのエスカレーターが着く
-  // OSM の形は線が交差していて、そのまま面にすると三角が飛び出すので、外まわり（凸包）にする
-  { name: "南コンコース", level: 2, poly: hull(poly(byId(154080986))) },
+  { name: "南コンコース", level: 2, poly: poly(byId(154080986)) },
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
@@ -340,9 +325,12 @@ const stairs: Stair[] = [];
       const ic = Math.hypot(c4[0] - corner[0], c4[1] - corner[1]);
       const ax = along[0] - corner[0], az = along[1] - corner[1], al = Math.hypot(ax, az);
       const off: XZ = [(-az / al) * 4, (ax / al) * 4]; // 線から 2F の南コンコース（西）の側へ
-      // 上の端は 4F アトリウムの中（角から 4m 内側）、下の端は帯の真下の 2F の南コンコース（西）の中（同じ線から 4m 西）へ斜めに
+      // 上の端は 4F アトリウムの中（角から 4m 内側）。公式の図では、下の端は 2F の南コンコースの「エントランスホール」寄り
+      // （点線の 17 は、西3 の角から左下＝エントランスホールの方へ斜めに下りる）。なので、2F の南コンコース（西）の、
+      // エントランスホール側の端 (11, 45) へ向かって下りる
       const top: XZ = [r(corner[0] + ((c4[0] - corner[0]) / ic) * 4), r(corner[1] + ((c4[1] - corner[1]) / ic) * 4)];
-      const to: XZ = [along[0] + off[0], along[1] + off[1]];
+      const to: XZ = [11, 45];
+      void off;
       const L = run(2, 4), d = Math.hypot(to[0] - top[0], to[1] - top[1]), ux = (to[0] - top[0]) / d, uz = (to[1] - top[1]) / d;
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ux * L), r(top[1] + uz * L)], toLevel: 2, width: 2 });
     }
@@ -418,7 +406,12 @@ for (const st of stairs) {
       const p0: XZ = [st.to[0] + ux * len * t0, st.to[1] + uz * len * t0], p1: XZ = [st.to[0] + ux * len * t1, st.to[1] + uz * len * t1];
       return [[p0[0] + nx * hw, p0[1] + nz * hw], [p1[0] + nx * hw, p1[1] + nz * hw], [p1[0] - nx * hw, p1[1] - nz * hw], [p0[0] - nx * hw, p0[1] - nz * hw]];
     };
-    const inside = (r2: XZ[]) => r2.every((q) => pointInPolygon(q, a.poly));
+    // 穴の四角が床の形の中に収まるか（四すみが中にあり、辺が床のふちと交わらない。へこんだ形で辺がはみ出すと、面が壊れて三角が飛び出す）
+    const cross = (p: XZ, q: XZ, r2: XZ) => (q[0] - p[0]) * (r2[1] - p[1]) - (q[1] - p[1]) * (r2[0] - p[0]);
+    const hits = (p1: XZ, p2: XZ, q1: XZ, q2: XZ) => cross(p1, p2, q1) * cross(p1, p2, q2) < 0 && cross(q1, q2, p1) * cross(q1, q2, p2) < 0;
+    const inside = (r2: XZ[]) =>
+      r2.every((q) => pointInPolygon(q, a.poly)) &&
+      !r2.some((q, i) => a.poly.some((p, j) => hits(q, r2[(i + 1) % 4], p, a.poly[(j + 1) % a.poly.length])));
     let t0 = tStart, t1 = tEnd;
     while (t1 - t0 > 0.02 && !inside(rect(t0, t1))) {
       if (!inside(rect(t0, t0 + 0.02))) t0 += 0.5 / len;
@@ -529,6 +522,45 @@ const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; pol
   const c = centroid(r.poly), w = toWall(r.hall, c, 0);
   return Math.hypot(w[0] - c[0], w[1] - c[1]) <= 15;
 });
+// ホールの外壁：会場データのホールの形（OSM）は展示場の床だけで、トイレ・事務室などの部屋の帯はその外に出ている。
+// コミケの配置図でもビッグサイトの図面でも、トイレは外壁の内側にあるので、トイレ（図面の位置・部屋の囲み）がはみ出している辺を、
+// トイレを囲むところまで外へずらす（20m まで。ほかのホールと分け合う辺は動かさない）。展示場の床の形は inner に残す
+// コミケの配置図で確かめられた東1〜3 だけ（西・南は、トイレがアトリウムや通路の側にあり、ホールの中ではないものがある）
+for (const h of halls) {
+  if (h.closed || !["E1", "E2", "E3"].includes(h.id)) continue;
+  const pts: XZ[] = [
+    ...planToilets.filter((t) => t.hall === h.id).map((t) => t.at),
+    ...toiletRooms.filter((r) => r.hall === h.id).flatMap((r) => r.poly),
+  ].filter((p) => !pointInPolygon(p, h.poly));
+  if (!pts.length) continue;
+  const poly0 = h.poly.map((q) => [...q] as XZ);
+  const shift = poly0.map(() => [0, 0] as XZ);
+  poly0.forEach((a, i) => {
+    const b = poly0[(i + 1) % poly0.length];
+    if (sharedEdge(h.id, a, b)) return;
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L < 1) return;
+    const ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
+    let nx = -uz, nz = ux;
+    const m: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    if (pointInPolygon([m[0] + nx * 0.1, m[1] + nz * 0.1], poly0)) [nx, nz] = [-nx, -nz]; // 外向き
+    let far = 0;
+    for (const p of pts) {
+      const t = (p[0] - a[0]) * ux + (p[1] - a[1]) * uz, d = (p[0] - a[0]) * nx + (p[1] - a[1]) * nz;
+      if (t >= -1 && t <= L + 1 && d > 0 && d <= 20) far = Math.max(far, d);
+    }
+    if (far <= 0) return;
+    const k = far + 1.5;
+    for (const j of [i, (i + 1) % poly0.length]) {
+      shift[j][0] += nx * k;
+      shift[j][1] += nz * k;
+    }
+  });
+  if (shift.every((q) => q[0] === 0 && q[1] === 0)) continue;
+  h.inner = poly0;
+  h.poly = poly0.map((q, i) => [Math.round((q[0] + shift[i][0]) * 10) / 10, Math.round((q[1] + shift[i][1]) * 10) / 10] as XZ);
+}
+
 // 床のない所（ホール・通路の床の外）にあるトイレ：近くに部屋の囲みがあれば札をその部屋の真ん中へ、なければ壁ぎわ（壁の 1m 外）へ。
 // 会場から離れた OpenStreetMap のトイレ（会場の床から 15m より遠い）は「周辺」の扱いにして、「周辺も表示」のときだけ出す
 {

@@ -455,7 +455,6 @@ export function VenueView() {
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース";
       const f = flatPoly(a.poly, south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
-      if (south) f.userData.fadeOn1 = true; // 1F を見ているときは色を薄く（下の 1F の通路と重なるので。透かすと重なった所が濃くなるので色で）
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -993,11 +992,6 @@ export function VenueView() {
         for (const m of p.floors) {
           const mat = m.material as THREE.MeshLambertMaterial;
           const see = m.userData.see as number | undefined;
-          if (m.userData.fadeOn1) {
-            m.userData.baseColor ??= mat.color.clone();
-            mat.color.copy(m.userData.baseColor as THREE.Color);
-            if (currentFloor === 1 && on) mat.color.lerp(new THREE.Color(0xffffff), 0.45);
-          }
           mat.transparent = !on || see !== undefined;
           mat.opacity = on ? (see ?? 1) : 0.18;
           mat.depthWrite = on && see === undefined;
