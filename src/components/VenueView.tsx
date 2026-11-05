@@ -453,7 +453,7 @@ export function VenueView() {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース";
-      const f = flatPoly(a.poly, south ? 0xf3a65a : link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const f = flatPoly(a.poly, south ? 0xf3a65a : link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (south) f.userData.fadeOn1 = true; // 1F を見ているときは薄く（下の 1F の通路と重なるので）
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);

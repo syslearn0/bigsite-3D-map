@@ -124,6 +124,10 @@ const southRest: XZ[] = southHall;
 
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+// その階の床（ホール・通路）の上か
+function onFloor(p: XZ, lv: number): boolean {
+  return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
+}
 let southLine: XZ[] = [];
 function southConcourse(): Area[] {
   if (!existsSync("data/osm/surroundings.json")) return [];
@@ -131,7 +135,11 @@ function southConcourse(): Area[] {
   const e = so.elements.find((x) => x.id === 1127507757 && x.geometry);
   if (!e) return [];
   const line = e.geometry!.map((g) => project(ORIGIN, g.lat, g.lon));
-  const pts: XZ[] = line;
+  // 線の始めのうち、ほかの 2F の床（イベントプラザ・エントランスプラザ）の中を通る所は、その床があるので帯にしない
+  const plazas = ["イベントプラザ", "エントランスプラザ"].map((n) => poly(byName(n)));
+  let k0 = 0;
+  while (k0 + 2 < line.length && plazas.some((pl) => pointInPolygon(line[k0 + 1], pl) || pointInPolygon([(line[k0][0] + line[k0 + 1][0]) / 2, (line[k0][1] + line[k0 + 1][1]) / 2], pl))) k0++;
+  const pts: XZ[] = line.slice(k0);
   southLine = pts;
   const w = 4; // 半分の幅
   const left: XZ[] = [], right: XZ[] = [];
@@ -283,7 +291,11 @@ const stairs: Stair[] = [];
   {
     const run = (lo: number, hi: number) => (FLOOR_Y[hi] - FLOOR_Y[lo]) * 1.8; // 30° ほどの傾き
     const put = (center: XZ, dir: XZ, lo: number, hi: number, width = 2) => {
-      const L = run(lo, hi) / 2, n = Math.hypot(dir[0], dir[1]), ux = dir[0] / n, uz = dir[1] / n;
+      const L = run(lo, hi) / 2, n = Math.hypot(dir[0], dir[1]);
+      let ux = dir[0] / n, uz = dir[1] / n;
+      // 上の端がその階の床に乗らないときは、向きを反対にする（反対なら乗るとき）
+      const top = (k: number): XZ => [center[0] + ux * L * k, center[1] + uz * L * k];
+      if (!onFloor(top(1), hi) && onFloor(top(-1), hi)) [ux, uz] = [-ux, -uz];
       stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(center[0] + ux * L), r(center[1] + uz * L)], fromLevel: hi, to: [r(center[0] - ux * L), r(center[1] - uz * L)], toLevel: lo, width });
     };
     const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
@@ -351,6 +363,35 @@ const stairs: Stair[] = [];
     void es;
     void ux;
     void uz;
+  }
+}
+
+// 階段・エスカレーターの上にかかる床に穴をあける：段の上（頭の高さ 2.5m）がその床の高さを越える所から上の端（その階なら 1m 手前）まで、
+// 段の幅 +0.6m の四角。床の形の中に収まる区間だけ（はみ出す所は、もともと床がない）
+for (const st of stairs) {
+  const len = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]);
+  if (len < 1) continue;
+  const ux = (st.from[0] - st.to[0]) / len, uz = (st.from[1] - st.to[1]) / len, nx = -uz, nz = ux, hw = st.width / 2 + 0.3;
+  const y0 = FLOOR_Y[st.toLevel], y1 = FLOOR_Y[st.fromLevel];
+  for (const a of areas) {
+    if (!(a.level > st.toLevel && a.level <= st.fromLevel)) continue;
+    const fy = FLOOR_Y[a.level];
+    const tStart = Math.max(0, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)));
+    const tEnd = a.level === st.fromLevel ? Math.max(tStart, 1 - 1 / len) : Math.min(1, (fy - y0) / (y1 - y0) + 0.5 / len);
+    // 床の中に収まる区間に縮める（端から 0.5m ずつ）
+    const rect = (t0: number, t1: number): XZ[] => {
+      const p0: XZ = [st.to[0] + ux * len * t0, st.to[1] + uz * len * t0], p1: XZ = [st.to[0] + ux * len * t1, st.to[1] + uz * len * t1];
+      return [[p0[0] + nx * hw, p0[1] + nz * hw], [p1[0] + nx * hw, p1[1] + nz * hw], [p1[0] - nx * hw, p1[1] - nz * hw], [p0[0] - nx * hw, p0[1] - nz * hw]];
+    };
+    const inside = (r2: XZ[]) => r2.every((q) => pointInPolygon(q, a.poly));
+    let t0 = tStart, t1 = tEnd;
+    while (t1 - t0 > 0.02 && !inside(rect(t0, t1))) {
+      if (!inside(rect(t0, t0 + 0.02))) t0 += 0.5 / len;
+      else t1 -= 0.5 / len;
+    }
+    const cr = rect(t0, t1), cc: XZ = [(cr[0][0] + cr[2][0]) / 2, (cr[0][1] + cr[2][1]) / 2];
+    if ((a.holes ?? []).some((h) => pointInPolygon(cc, h) || cr.some((q) => pointInPolygon(q, h)))) continue; // もう吹き抜けがある所
+    if (t1 - t0 > 0.02 && inside(cr)) (a.holes ??= []).push(rect(t0, t1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ));
   }
 }
 
