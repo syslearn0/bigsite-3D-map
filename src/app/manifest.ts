@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "即売会 3D マップ（見本）",
     short_name: "3D マップ",
-    description: "東京ビッグサイトの会場を 3D で見て、行きたいサークルの計画を立てる（コミックマーケット準備会とは関係のない非公式の試作）",
+    description: "東京ビッグサイトの会場を 3D で見て、行きたいサークルの計画を立てる（コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作）",
     start_url: "/",
     display: "standalone",
     background_color: "#e9ece9",
