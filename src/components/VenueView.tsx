@@ -533,11 +533,14 @@ export function VenueView() {
       });
       if (best.d > 3) continue; // 壁から離れた出入口（ホールの外の建物など）は看板を貼らない
       const nx = -best.uz, nz = best.ux;
-      const sh = 0.9, sw = (sh * m.scale.x) / m.scale.y;
-      const signMat = new THREE.MeshBasicMaterial({ map: (m.material as THREE.SpriteMaterial).map, transparent: true });
+      // 看板は戸口の幅くらい（6m まで）、高さ 2m ほど。大きく描くので、細かい文字の絵を別に作る
+      const big = textSprite("⇄ 出入口", { bg: "rgba(20,120,60,.95)", height: 1, px: 128 });
+      const aspect = big.scale.x / big.scale.y;
+      const sh = Math.min(2.1, 6 / aspect), sw = sh * aspect;
+      const signMat = new THREE.MeshBasicMaterial({ map: (big.material as THREE.SpriteMaterial).map, transparent: true });
       for (const k of [1, -1]) {
         const sign = new THREE.Mesh(new THREE.PlaneGeometry(sw, sh), signMat);
-        sign.position.set(d.at[0] + nx * k * 0.22, floorY(d.level) + DOOR_H + 0.7, d.at[1] + nz * k * 0.22);
+        sign.position.set(d.at[0] + nx * k * 0.22, floorY(d.level) + DOOR_H + 0.25 + sh / 2, d.at[1] + nz * k * 0.22);
         sign.rotation.y = Math.atan2(nx * k, nz * k);
         scene.add(sign);
         partsOf(d.level).solid.push(sign);
