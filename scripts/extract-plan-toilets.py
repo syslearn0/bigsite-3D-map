@@ -331,7 +331,9 @@ def read_voids():
         stair_x = tx
         esc_x = q[0] + w * 0.8 if tx < (q[0] + q[2]) / 2 else q[0] + w * 0.2
         voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye + sgn * 0.3), "to": to_v(stair_x, ye + sgn * (0.3 + run)), "width": round(w * 0.4 * 1.64, 1)})
-        voidStairs.append({"kind": "escalator", "from": to_v(esc_x, ye + sgn * 0.3), "to": to_v(esc_x, ye + sgn * (0.3 + run)), "width": 1.6})
+        # エスカレーターは、階段と反対の端で 2F に着く（ストリートビュー・写真：吹き抜けの下で、階段とエスカレーターが逆の向きに上がっている）
+        yo = q[3] if top_at_y0 else q[1]
+        voidStairs.append({"kind": "escalator", "from": to_v(esc_x, yo - sgn * 0.3), "to": to_v(esc_x, yo - sgn * (0.3 + run)), "width": 1.6})
     report.append(f"東展示棟 2F の吹き抜け {len(voids)}（ホールの真ん中のずれ 最大 {err:.1f}m）")
     return voids
 
