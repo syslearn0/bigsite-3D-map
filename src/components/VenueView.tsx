@@ -484,13 +484,29 @@ export function VenueView() {
     // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない（穴は開けるが、出入口の看板・札は出さない）。
     // 出入口の区間（a〜b）の前 3m 以内に、壁ぞいの列の机が区間にかかって並んでいれば「ふさがっている」
     const wallBooths = booths.filter((b) => lines[b.line].wall);
-    const blocked = (hall: string, a: XZ, b: XZ) => {
+    // 出入口の区間 a〜b のうち、通れる所（壁サークルの机の前でも、建物の固い部分の前でもない所）のいちばん長い区間。2m より短ければ null
+    const freePart = (hall: string, a: XZ, b: XZ): [XZ, XZ] | null => {
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
-      return wallBooths.some((bt) => {
-        if (bt.hall !== hall) return false;
-        const u = (bt.at[0] - a[0]) * ux + (bt.at[1] - a[1]) * uz, v = -(bt.at[0] - a[0]) * uz + (bt.at[1] - a[1]) * ux;
-        return Math.abs(v) < 3 && u > 0.3 && u < L - 0.3;
-      });
+      const near = wallBooths.filter((bt) => bt.hall === hall).map((bt) => ({
+        u: (bt.at[0] - a[0]) * ux + (bt.at[1] - a[1]) * uz, v: -(bt.at[0] - a[0]) * uz + (bt.at[1] - a[1]) * ux,
+      })).filter((q) => Math.abs(q.v) < 3);
+      const structs = (features?.structures ?? []).filter((st) => st.hall === hall).map((st) => st.poly);
+      const step = 0.25, n = Math.ceil(L / step);
+      let best: [number, number] = [0, 0], start = -1;
+      for (let i = 0; i <= n; i++) {
+        const u = Math.min(L, i * step);
+        const p: XZ = [a[0] + ux * u, a[1] + uz * u];
+        const byDesk = near.some((q) => Math.abs(q.u - u) < DESK_L / 4 + 0.4);
+        const byStruct = structs.some((sp) => [-1.5, 1.5].some((v) => pointInPolygon([p[0] - uz * v, p[1] + ux * v], sp)));
+        const free = !byDesk && !byStruct && i < n;
+        if (free && start < 0) start = u;
+        if (!free && start >= 0) {
+          if (u - start > best[1] - best[0]) best = [start, u];
+          start = -1;
+        }
+      }
+      if (best[1] - best[0] < 2) return null;
+      return [[a[0] + ux * best[0], a[1] + uz * best[0]], [a[0] + ux * best[1], a[1] + uz * best[1]]];
     };
     const doorSpan = (hall: string, at: XZ, w: number): [XZ, XZ] => {
       // 出入口の点に、いちばん近い壁の向きで幅 w の区間
@@ -505,8 +521,12 @@ export function VenueView() {
       });
       return [[at[0] - best.ux * w / 2, at[1] - best.uz * w / 2], [at[0] + best.ux * w / 2, at[1] + best.uz * w / 2]];
     };
-    const openDoors = venue.doors.filter((d) => d.kind === "出入口" && !blocked(d.hall, ...doorSpan(d.hall, d.at, DOOR_W)));
-    const openGaps = (features?.openings ?? []).filter((o) => !blocked(o.hall, o.a, o.b));
+    const openDoors = venue.doors.filter((d) => d.kind === "出入口" && freePart(d.hall, ...doorSpan(d.hall, d.at, DOOR_W)));
+    // 配置図の切れ目は、通れる所だけに縮める（看板はその真ん中に）
+    const openGaps = (features?.openings ?? []).flatMap((o) => {
+      const f = freePart(o.hall, o.a, o.b);
+      return f ? [{ ...o, a: f[0], b: f[1] }] : [];
+    });
     for (const h of venue.halls) {
       const y = floorY(h.level);
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
