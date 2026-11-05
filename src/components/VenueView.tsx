@@ -56,6 +56,10 @@ const WALK_SPEED = 6; // m/秒（見て回りやすいよう、歩く速さよ�
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
+// ホールの外の歩く所（通路・広場）の色。東展示棟からの連絡路（連絡ブリッジ・北コンコース）は、ほかの通路と分ける
+const AREA_COLOR = 0xece3b6;
+const LINK_COLOR = 0xf0b48a;
+const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 7.5; // ホールの壁の高さ（見やすさの目安）
 
@@ -415,7 +419,7 @@ export function VenueView() {
 
     for (const a of venue.areas) {
       const y = floorY(a.level);
-      const f = flatPoly(a.poly, 0xf3f1ea, y + 0.02);
+      const f = flatPoly(a.poly, LINK_AREAS.has(a.name) ? LINK_COLOR : AREA_COLOR, y + 0.02);
       scene.add(f);
       partsOf(a.level).floors.push(f);
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
