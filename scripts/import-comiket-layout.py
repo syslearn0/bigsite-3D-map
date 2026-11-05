@@ -512,7 +512,8 @@ def read_features(doc, desks):
                 if not dedup or math.hypot(q[0] - dedup[-1][0], q[1] - dedup[-1][1]) > 0.05:
                     dedup.append(q)
             mxv = sum(q[0] for q in dedup) / len(dedup); mzv = sum(q[1] for q in dedup) / len(dedup)
-            near_hall = point_in((mxv, mzv), HALLS[z["hall"]]["poly"]) or math.hypot(*keep_in(z["hall"], (mxv, mzv), 0)) < 6
+            # ホールの床に少しでもかかるものだけ（ホールとガレリアのあいだの部屋の帯は、会場データにないので出さない）
+            near_hall = any(point_in(q, HALLS[z["hall"]]["poly"]) for q in dedup)
             if len(dedup) >= 3 and near_hall:  # ホールから離れた所（アトリウムの案内のアイコンなど）は除く
                 structures.append({"hall": z["hall"], "poly": [[round(x, 2), round(y, 2)] for x, y in dedup]})
     return {"pillars": pillars, "openings": openings, "structures": structures}

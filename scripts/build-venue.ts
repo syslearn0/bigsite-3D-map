@@ -154,7 +154,7 @@ const areas: Area[] = [
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
 // 会議棟の横のエントランスプラザの辺（プラザの1本目の辺の 55% の所）から、1F アトリウム（低くなった中庭）の上を
 // まっすぐ渡って、屋上展示場の北東の辺につながる（航空写真の橋と階段の位置。OSM に階段の形がないので、その目安）
-type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number };
+type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" };
 const stairs: Stair[] = [];
 {
   const roof = areas.find((a) => a.name === "屋上展示場")!.poly, plaza = areas.find((a) => a.name === "エントランスプラザ")!.poly;
@@ -176,6 +176,52 @@ const stairs: Stair[] = [];
   const r = (v: number) => Math.round(v * 10) / 10;
   // 両端を、それぞれの床の内側へ 1.5m のばす
   stairs.push({ name: "屋上展示場への階段", from: [r(P[0] + n[0] * (hit + 1.5)), r(P[1] + n[1] * (hit + 1.5))], fromLevel: 4, to: [r(P[0] - n[0] * 1.5), r(P[1] - n[1] * 1.5)], toLevel: 2, width: 6 });
+}
+
+// エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
+{
+  const r = (v: number) => Math.round(v * 10) / 10;
+  const areaOf = (n: string) => areas.find((a) => a.name === n)!.poly;
+  const near = (p: XZ, poly: XZ[]): [number, XZ] => {
+    let b: [number, XZ] = [Infinity, p];
+    poly.forEach((a, i) => {
+      const c = poly[(i + 1) % poly.length];
+      const dx = c[0] - a[0], dz = c[1] - a[1], L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+      const q: XZ = [a[0] + t * dx, a[1] + t * dz];
+      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (d < b[0]) b = [d, q];
+    });
+    return b;
+  };
+  // 西のアトリウム：1F から 4F（4F アトリウム）へ、まっすぐ上がる大きなエスカレーター。4F アトリウムの、1F アトリウムの真ん中に向いた辺から下りる
+  {
+    const a1 = areaOf("1F アトリウム"), a4 = areaOf("４F アトリウム");
+    const c1 = centroid(a1);
+    const [, top] = near(c1, a4);
+    const L = Math.hypot(c1[0] - top[0], c1[1] - top[1]), ux = (c1[0] - top[0]) / L, uz = (c1[1] - top[1]) / L;
+    const run = 30; // 高さ 15m を 30° ほどで
+    stairs.push({ name: "エスカレーター（1F⇔4F）", kind: "escalator", from: [r(top[0] - ux * 1.5), r(top[1] - uz * 1.5)], fromLevel: 4, to: [r(top[0] + ux * run), r(top[1] + uz * run)], toLevel: 1, width: 5 });
+  }
+  // 東ガレリアの西の端：1F のガレリアから 2F の北コンコースへ
+  {
+    const g = areaOf("東ガレリア"), nc = areaOf("北コンコース");
+    let best: [number, XZ, XZ] = [Infinity, [0, 0], [0, 0]];
+    for (const p of nc) {
+      const [d, q] = near(p, g);
+      if (d < best[0]) best = [d, p, q];
+    }
+    const [, top, foot] = best;
+    // ガレリアの中へ、ガレリアの長い向きに 12m
+    const gi = g.map((p, i) => [p, g[(i + 1) % g.length]] as [XZ, XZ]).sort((x, y) => Math.hypot(y[1][0] - y[0][0], y[1][1] - y[0][1]) - Math.hypot(x[1][0] - x[0][0], x[1][1] - x[0][1]))[0];
+    const GL = Math.hypot(gi[1][0] - gi[0][0], gi[1][1] - gi[0][1]);
+    let ux = (gi[1][0] - gi[0][0]) / GL, uz = (gi[1][1] - gi[0][1]) / GL;
+    const gc = centroid(g);
+    if ((gc[0] - foot[0]) * ux + (gc[1] - foot[1]) * uz < 0) [ux, uz] = [-ux, -uz];
+    const start: XZ = [foot[0] + ux * 2, foot[1] + uz * 2];
+    stairs.push({ name: "エスカレーター（ガレリア⇔北コンコース 2F）", kind: "escalator", from: [r(start[0]), r(start[1])], fromLevel: 2, to: [r(start[0] + ux * 12), r(start[1] + uz * 12)], toLevel: 1, width: 5 });
+    void top;
+  }
 }
 
 // まわりの建物（位置の手がかり。足元の形だけ）
