@@ -8,7 +8,9 @@ import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "../src/
 type El = { type: string; id: number; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[]; lat?: number; lon?: number };
 const osm = JSON.parse(readFileSync("data/osm/bigsight.json", "utf8")) as { fetchedAt: string; elements: El[] };
 const ORIGIN = { lat: 35.6298, lon: 139.7942 };
-const FLOOR_Y: Record<number, number> = { 1: 0, 2: 6, 4: 15 }; // 床の高さ（m）。OSM の西展示棟 4F 部分の min_height=15、連絡ブリッジ 6〜8m から
+// 床の高さ（m）。2F は連絡ブリッジ 6〜8m から。4F は OSM の西展示棟 4F 部分の min_height=15 より高く見せる（下の 1F のホールの
+// 天井・壁との間が詰まって見えるので、見やすさのために 20m）
+const FLOOR_Y: Record<number, number> = { 1: 0, 2: 6, 4: 20 };
 
 const byName = (name: string) => {
   const e = osm.elements.find((x) => x.tags?.name === name && x.geometry);
@@ -202,7 +204,7 @@ const stairs: Stair[] = [];
     const c1 = centroid(a1);
     const [, top] = near(c1, a4);
     const L = Math.hypot(c1[0] - top[0], c1[1] - top[1]), ux = (c1[0] - top[0]) / L, uz = (c1[1] - top[1]) / L;
-    const run = 30; // 高さ 15m を 30° ほどで
+    const run = FLOOR_Y[4] * 1.8; // 30° ほどの傾き
     stairs.push({ name: "エスカレーター（1F⇔4F）", kind: "escalator", from: [r(top[0] - ux * 1.5), r(top[1] - uz * 1.5)], fromLevel: 4, to: [r(top[0] + ux * run), r(top[1] + uz * run)], toLevel: 1, width: 5 });
   }
   // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所に、ガレリアの長い向きに 12m。東3 の図面は文字を読めないので、
@@ -211,7 +213,15 @@ const stairs: Stair[] = [];
     const g = areaOf("東ガレリア");
     const gi = g.map((p, i) => [p, g[(i + 1) % g.length]] as [XZ, XZ]).sort((x, y) => Math.hypot(y[1][0] - y[0][0], y[1][1] - y[0][1]) - Math.hypot(x[1][0] - x[0][0], x[1][1] - x[0][1]))[0];
     const GL = Math.hypot(gi[1][0] - gi[0][0], gi[1][1] - gi[0][1]);
-    const ux = (gi[1][0] - gi[0][0]) / GL, uz = (gi[1][1] - gi[0][1]) / GL;
+    let ux = (gi[1][0] - gi[0][0]) / GL, uz = (gi[1][1] - gi[0][1]) / GL;
+    // 上る向き：東1〜3 の図面では、ES の「UP」の矢印は図面の右向き。図面の下が東4〜6 の側（ガレリア）なので、
+    // 図面の右 = 「東1 から東5 への向き」を時計回りに 90° 回した向き（scripts/extract-plan-toilets.py の向きの決め方と同じ）
+    {
+      const [ax, az] = centroid(halls.find((h) => h.id === "E1")!.poly), [bx, bz] = centroid(halls.find((h) => h.id === "E5")!.poly);
+      const dl = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / dl, dz = (bz - az) / dl;
+      const rx = dz, rz = -dx;
+      if (ux * rx + uz * rz < 0) [ux, uz] = [-ux, -uz];
+    }
     const planDoors = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { doors?: { at: XZ; kind: string; hall: string }[] }).doors ?? []) : [];
     const es = planDoors.filter((d) => d.kind === "ES" && /^E[123]$/.test(d.hall)).map((d) => ({ hall: d.hall, at: d.at }));
     const cOf = (id: string) => centroid(halls.find((h) => h.id === id)!.poly);
