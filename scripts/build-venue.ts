@@ -125,7 +125,7 @@ const southRest: XZ[] = southHall;
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
 // ホール a の、ホール b に向かい合う辺を、b の向かい合う辺の線まで直角にのばした四角
-function rectBetween(a: string, b: string): XZ[] {
+function rectBetween(a: string, b: string, extra: XZ[] = []): XZ[] {
   const pa = halls.find((h) => h.id === a)!.poly, pb = halls.find((h) => h.id === b)!.poly;
   const facing = (p: XZ[], toward: XZ): [XZ, XZ] => {
     let best: [number, [XZ, XZ]] = [Infinity, [p[0], p[1]]];
@@ -139,9 +139,16 @@ function rectBetween(a: string, b: string): XZ[] {
   const [p1, p2] = facing(pa, centroid(pb)), [q1, q2] = facing(pb, centroid(pa));
   const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]), ux = (p2[0] - p1[0]) / L, uz = (p2[1] - p1[1]) / L;
   const nx = -uz, nz = ux;
+  // extra の点のうち、a の辺の線の上（3m 以内）にあるものまで、辺をのばす
+  let t0 = 0, t1 = L;
+  for (const q of extra) {
+    const t = (q[0] - p1[0]) * ux + (q[1] - p1[1]) * uz, v = (q[0] - p1[0]) * nx + (q[1] - p1[1]) * nz;
+    if (Math.abs(v) <= 3) [t0, t1] = [Math.min(t0, t), Math.max(t1, t)];
+  }
+  const s1: XZ = [p1[0] + ux * t0, p1[1] + uz * t0], s2: XZ = [p1[0] + ux * t1, p1[1] + uz * t1];
   const off = (q1[0] - p1[0]) * nx + (q1[1] - p1[1]) * nz; // b の辺の線までの距離（a の辺に直角に）
   const r = (v: number) => Math.round(v * 10) / 10;
-  return [p1, p2, [r(p2[0] + nx * off), r(p2[1] + nz * off)], [r(p1[0] + nx * off), r(p1[1] + nz * off)]];
+  return [[r(s1[0]), r(s1[1])], [r(s2[0]), r(s2[1])], [r(s2[0] + nx * off), r(s2[1] + nz * off)], [r(s1[0] + nx * off), r(s1[1] + nz * off)]];
   void q2;
 }
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
@@ -173,6 +180,7 @@ function between(rowA: string[], rowB: string[]): XZ[] {
   } while (p0 !== hull[0] && hull.length < pts.length + 1);
   return hull;
 } // see：下が透けて見える床（半透明）、holes：吹き抜け
+const southLinkRoof: XZ[] = poly(byName("屋上展示場")); // 西4〜南3 の 4F の面を、屋上展示場の端までのばすのに使う
 const areas: Area[] = [
   ...[
     ["エントランスプラザ", 2],
@@ -205,8 +213,9 @@ const areas: Area[] = [
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
   // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする
   // 西4 と南3 のあいだの 4F の通路・広場。航空写真では、西4 と南3 の向かい合う壁のあいだが、壁に直角な四角い舗装面でつながっている。
-  // 西4 の向かい合う壁を、そのまま南3 の壁の線まで直角にのばした四角にする
-  { name: "南展示棟への通路（4F）", level: 4, poly: rectBetween("W4", "S3") },
+  // 西4 の向かい合う壁と、同じ線の上に続く屋上展示場の端（航空写真：ホールの外の屋上がそのまま南へ続く）を合わせた辺を、
+  // 南3 の壁の線まで直角にのばした四角にする
+  { name: "南展示棟への通路（4F）", level: 4, poly: rectBetween("W4", "S3", southLinkRoof) },
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
