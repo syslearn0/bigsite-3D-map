@@ -20,7 +20,7 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
@@ -60,6 +60,7 @@ const DESK_COLOR = 0xf2f1ea;
 // ホールの外の歩く所（通路・広場）の色。東展示棟からの連絡路（連絡ブリッジ・北コンコース）は、ほかの通路と分ける
 const AREA_COLOR = 0xece3b6;
 const LINK_COLOR = 0xf0b48a;
+const OUTDOOR_COLOR = 0xc3c7c4; // 屋外（屋上展示場・エントランスプラザなど。公式フロアマップの灰色）。屋内の通路は AREA_COLOR
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
@@ -453,7 +454,7 @@ export function VenueView() {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース";
-      const f = flatPoly(a.poly, south ? 0xf3a65a : link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const f = flatPoly(a.poly, south ? 0xf3a65a : link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (south) f.userData.fadeOn1 = true; // 1F を見ているときは薄く（下の 1F の通路と重なるので）
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);

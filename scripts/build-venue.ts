@@ -123,7 +123,7 @@ const southRest: XZ[] = southHall;
 
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
 // その階の床（ホール・通路）の上か
 function hull(pts: XZ[]): XZ[] {
   const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -269,6 +269,9 @@ const areas: Area[] = [
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
 ];
 
+// 屋外（屋根のない所）：公式フロアマップで灰色に塗られた所。ほかは屋内（白）
+for (const a of areas) if (["屋上展示場", "エントランスプラザ", "イベントプラザ", "中央ターミナル", "南展示棟への通路", "南展示棟への通路（4F）"].includes(a.name)) a.outdoor = true;
+
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
 // 会議棟の横のエントランスプラザの辺（プラザの1本目の辺の 55% の所）から、1F アトリウム（低くなった中庭）の上を
 // まっすぐ渡って、屋上展示場の北東の辺につながる（航空写真の橋と階段の位置。OSM に階段の形がないので、その目安）
@@ -314,8 +317,15 @@ const stairs: Stair[] = [];
       stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(center[0] + ux * L), r(center[1] + uz * L)], fromLevel: hi, to: [r(center[0] - ux * L), r(center[1] - uz * L)], toLevel: lo, width });
     };
     const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
-    // 西 13：1F アトリウム ⇔ 4F（4F アトリウムの西4 側の角）。印は 1F・4F とも同じ所 (31, 103)
-    put([31, 103], bearing(195), 1, 4, 4);
+    // 西 13：1F アトリウム ⇔ 4F アトリウム（屋内）。1F の端は公式の図の印の所 (31, 103)。上の端は屋内の 4F アトリウムの中
+    // （屋外の屋上展示場ではない）：公式の 4F 図で、エスカレーターは白い屋内の通路から吹き抜けへ下りている。
+    // 4F アトリウムの、1F の端からちょうど長さ（30° ほど）の所 (42, 138)。ストリートビューで見た南南西への向きとも 25° ほどの差
+    {
+      const top: XZ = [42, 138], bottom: XZ = [31, 103];
+      const L = run(1, 4), d = Math.hypot(bottom[0] - top[0], bottom[1] - top[1]);
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ((bottom[0] - top[0]) / d) * L), r(top[1] + ((bottom[1] - top[1]) / d) * L)], toLevel: 1, width: 4 });
+    }
+    void bearing;
     // 西 10：2F 南コンコース ⇔ 1F アトリウム（西1 の入口の近く、(44, 68)）。上は 2F の南コンコース（西）の側
     {
       const c2 = centroid(poly(byId(154080986)));
