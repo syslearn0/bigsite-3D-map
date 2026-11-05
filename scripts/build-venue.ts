@@ -366,7 +366,14 @@ function toWall(hid: string, p: XZ, inset: number): XZ {
 const usable = (hid: string | undefined) => !hid || (hallOf.has(hid) && !hallOf.get(hid)!.closed);
 const planToilets = (plan.toilets as { at: XZ; level: number; kinds: string[]; hall?: string }[]).filter((t) => usable(t.hall));
 const toilets: Toilet[] = [
-  ...planToilets.map((t) => ({ at: t.hall && !pointInPolygon(t.at, hallOf.get(t.hall)!.poly) ? toWall(t.hall, t.at, 1.5) : t.at, level: t.level, kinds: t.kinds, src: "plan" })),
+  // トイレはホールの外（壁の外の部屋）にある。図面の文字の位置をそのまま使う。ただし壁から 15m より離れたもの
+  // （文字がガレリアの真ん中などに書かれているもの）は、そのホールの壁の 3m 外に寄せる。ホールの中へは寄せない
+  ...planToilets.map((t) => {
+    if (!t.hall) return { at: t.at, level: t.level, kinds: t.kinds, src: "plan" };
+    const w = toWall(t.hall, t.at, 0);
+    const far = Math.hypot(w[0] - t.at[0], w[1] - t.at[1]) > 15;
+    return { at: far ? toWall(t.hall, t.at, -3) : t.at, level: t.level, kinds: t.kinds, src: "plan" };
+  }),
   ...osmToilets.filter((o) => !plan.toilets.some((t) => Math.hypot(t.at[0] - o.at[0], t.at[1] - o.at[1]) < 15)),
 ];
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
