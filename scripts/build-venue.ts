@@ -236,7 +236,7 @@ const stairs: Stair[] = [];
   if (!Number.isFinite(hit)) throw new Error("屋上展示場への階段：屋上展示場の辺が見つからない");
   const r = (v: number) => Math.round(v * 10) / 10;
   // 両端を、それぞれの床の内側へ 1.5m のばす
-  stairs.push({ name: "屋上展示場への階段", from: [r(P[0] + n[0] * (hit + 1.5)), r(P[1] + n[1] * (hit + 1.5))], fromLevel: 4, to: [r(P[0] - n[0] * 1.5), r(P[1] - n[1] * 1.5)], toLevel: 2, width: 6 });
+  stairs.push({ name: "階段", from: [r(P[0] + n[0] * (hit + 1.5)), r(P[1] + n[1] * (hit + 1.5))], fromLevel: 4, to: [r(P[0] - n[0] * 1.5), r(P[1] - n[1] * 1.5)], toLevel: 2, width: 6 });
 }
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
@@ -255,7 +255,7 @@ const stairs: Stair[] = [];
       let [ux, uz] = we.dir;
       if ((c1[0] - we.top[0]) * ux + (c1[1] - we.top[1]) * uz < 0) [ux, uz] = [-ux, -uz];
       const run = FLOOR_Y[4] * 1.8;
-      stairs.push({ name: "エスカレーター（1F⇔4F）", kind: "escalator", from: [r(we.top[0]), r(we.top[1])], fromLevel: 4, to: [r(we.top[0] + ux * run), r(we.top[1] + uz * run)], toLevel: 1, width: 5 });
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(we.top[0]), r(we.top[1])], fromLevel: 4, to: [r(we.top[0] + ux * run), r(we.top[1] + uz * run)], toLevel: 1, width: 5 });
     }
   }
   // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所（図面から読めたものだけ）に、ガレリアの長い向きに 12m
@@ -278,7 +278,7 @@ const stairs: Stair[] = [];
     // ストリートビューでも、吹き抜けの下で、エスカレーターと幅の広い階段が並んで 2F へ上がっている
     const vs = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidStairs?: { kind: string; from: XZ; to: XZ; width: number }[] }).voidStairs ?? []) : [];
     for (const v of vs)
-      stairs.push({ name: v.kind === "escalator" ? "エスカレーター（1F⇔2F）" : "階段・エスカレーター（1F⇔2F）", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
+      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
     // 2F の真ん中の通路の下の壁（ストリートビュー：三角の飾りのある壁。階段とエスカレーターはこの壁にそって上がる）
     const vw = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidWalls?: [XZ, XZ][] }).voidWalls ?? []) : [];
     for (const [a, b] of vw) coreWalls.push({ level: 1, height: FLOOR_Y[2], a, b });
