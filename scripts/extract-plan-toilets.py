@@ -68,7 +68,8 @@ FEMALE = re.compile(r"女子")
 AID = re.compile(r"救護室")
 DOOR = re.compile(r"出入口|エントランス")  # 人が出入りする口
 SHUTTER = re.compile(r"搬入口")
-ESC = re.compile(r"^(ＥＳ|ES)$")  # エスカレーター  # 搬入口（シャッター）。イベントによっては出入口に使われる
+ESC = re.compile(r"^(ＥＳ|ES)$")  # エスカレーター
+STAFF = re.compile(r"スタッフ|ｽﾀｯﾌ|従業員|控室")  # 搬入口（シャッター）。イベントによっては出入口に使われる
 
 out = []
 aids = []
@@ -138,6 +139,9 @@ for hid, name in PLANS.items():
         kind = "wc" if WC.search(t) else "hc" if HC.search(t) else None
         if not kind: continue
         px, py = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        # スタッフ用のトイレ（「女子ｽﾀｯﾌ WC」など）は、来場者は使えないので入れない
+        if any(STAFF.search(v[4]) and math.hypot((v[0] + v[2]) / 2 - px, (v[1] + v[3]) / 2 - py) < 30 for v in words):
+            continue
         # 近くの「男子」「女子」
         g = None
         for v in words:
