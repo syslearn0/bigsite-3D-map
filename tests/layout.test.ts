@@ -114,7 +114,7 @@ test("机1つずつの列（配置図から写した列）：番号・a/b・島�
 test("配置のファイルの会場のつくり（柱・壁の切れ目）", () => {
   const features = { pillars: [{ hall: "X", at: [1, 2] as [number, number], wall: true }], openings: [{ hall: "X", a: [0, 0] as [number, number], b: [4, 0] as [number, number] }] };
   const file = JSON.parse(JSON.stringify(toLayoutFile([], features)));
-  assert.deepEqual(parseLayoutFeatures(file), { ...features, areas: [], routes: [], marks: [] });
+  assert.deepEqual(parseLayoutFeatures(file), { ...features, areas: [], routes: [], marks: [], structures: [] });
   // 会場案内図からのもの：形の正しいものだけ残す
   const guide = {
     ...features,

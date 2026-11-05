@@ -469,7 +469,53 @@ def read_features(doc, desks):
                             openings.append({"hall": hid, "a": [round(va[0], 2), round(va[1], 2)], "b": [round(vb[0], 2), round(vb[1], 2)],
                                              "pdf": [pi, round(pa_[0], 1), round(pa_[1], 1), round(pb_[0], 1), round(pb_[1], 1)]})
                 end_t = max(end_t, sg["t1"])
-    return {"pillars": pillars, "openings": openings}
+    # 建物の固い部分と部屋の壁：配置図の黒い塗りのうち、柱（小さな四角）でも、ホールの外壁（外形の線の上）でもないもの。
+    # 大きな塊（自販機・ロッカーの棟、角の小部屋など）と、トイレ・給湯室などの囲みの壁。地図では低い箱にする
+    structures = []
+    for pi in ZONES:
+        p = doc[pi]
+        hids = {z["hall"] for z in ZONES[pi]}
+        for dr in p.get_drawings():
+            if not (dr.get("fill") and max(dr["fill"]) < 0.3) or any(it[0] == "c" for it in dr["items"]):
+                continue  # 丸い印（? の案内など）は除く
+            r = dr["rect"]
+            if abs(r.width - r.height) < 0.6 and r.width <= 8.5:
+                continue  # 柱
+            if r.width < 1 or r.height < 1:
+                continue
+            pts = path_points(dr)
+            if len(pts) < 3:
+                continue
+            # 細長い壁（部屋の囲み）か、大きな塊か
+            cx0 = sum(q[0] for q in pts) / len(pts); cy0 = sum(q[1] for q in pts) / len(pts)
+            sxx = sum((q[0] - cx0) ** 2 for q in pts); syy = sum((q[1] - cy0) ** 2 for q in pts); sxy = sum((q[0] - cx0) * (q[1] - cy0) for q in pts)
+            ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
+            us = [(q[0] - cx0) * math.cos(ang) + (q[1] - cy0) * math.sin(ang) for q in pts]
+            vs = [-(q[0] - cx0) * math.sin(ang) + (q[1] - cy0) * math.cos(ang) for q in pts]
+            length, thick = max(us) - min(us), max(vs) - min(vs)
+            near_out = min(min(nearest_edge(h, x, y)[0] for h in hids) for x, y in pts)
+            if thick <= 9:
+                # 細い壁：外壁（外形の線から 12pt 以内）と、長い線（ホールの境目など、120pt より長い）は除く
+                far = min(min(nearest_edge(h, x, y)[0] for h in hids) for x, y in [(cx0, cy0)])
+                if far < 12 or length > 120:
+                    continue
+            elif all(min(nearest_edge(h, x, y)[0] for h in hids) < 6 for x, y in pts):
+                continue  # 外壁そのもの
+            cx, cy = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
+            z = zone_at(pi, cx, cy, pad=20)
+            if not z:
+                continue
+            # 塗りの形の外まわり（四角ならその四すみ、ほかは点の並び）
+            poly = [to_venue(z, x, y) for x, y in pts]
+            dedup = []
+            for q in poly:
+                if not dedup or math.hypot(q[0] - dedup[-1][0], q[1] - dedup[-1][1]) > 0.05:
+                    dedup.append(q)
+            mxv = sum(q[0] for q in dedup) / len(dedup); mzv = sum(q[1] for q in dedup) / len(dedup)
+            near_hall = point_in((mxv, mzv), HALLS[z["hall"]]["poly"]) or math.hypot(*keep_in(z["hall"], (mxv, mzv), 0)) < 6
+            if len(dedup) >= 3 and near_hall:  # ホールから離れた所（アトリウムの案内のアイコンなど）は除く
+                structures.append({"hall": z["hall"], "poly": [[round(x, 2), round(y, 2)] for x, y in dedup]})
+    return {"pillars": pillars, "openings": openings, "structures": structures}
 
 
 def main():
@@ -614,7 +660,7 @@ def main():
     per = collections.Counter()
     for l in lines:
         per[l["hall"]] += len(l["desks"])
-    print(f"柱 {len(features['pillars'])}・壁の切れ目 {len(features['openings'])}")
+    print(f"柱 {len(features['pillars'])}・壁の切れ目 {len(features['openings'])}・塊と囲み {len(features['structures'])}")
     print(f"列 {len(lines)}・机 {sum(per.values())}（スペース {2 * sum(per.values())}）", dict(sorted(per.items())), "→", out_path)
 
 

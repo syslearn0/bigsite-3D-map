@@ -534,6 +534,19 @@ export function VenueView() {
       scene.add(label);
       addLabel(label, "door");
     }
+    // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
+    if (features?.structures?.length) {
+      const mat = new THREE.MeshLambertMaterial({ color: 0x7c827e });
+      for (const st of features.structures) {
+        const lv = hallById.get(st.hall)?.level ?? 1;
+        const geo = new THREE.ExtrudeGeometry(shapeOf(st.poly), { depth: 3, bevelEnabled: false });
+        const m = new THREE.Mesh(geo, mat);
+        m.rotation.x = -Math.PI / 2;
+        m.position.y = floorY(lv);
+        scene.add(m);
+        partsOf(lv).solid.push(m);
+      }
+    }
     // 柱（配置図から写したとき）。壁ぎわの柱は 0.8m 角で壁の高さまで。
     // 島の中の柱は、机を見やすく太く描いているので、本当の大きさだと机を突き抜けて見える。細く低い印（0.3m 角・高さ 1.6m、机は 0.7m）にする
     if (features?.pillars.length) {
