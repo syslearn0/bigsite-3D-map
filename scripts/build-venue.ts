@@ -131,7 +131,7 @@ function corridor(a: XZ, b: XZ, w: number): XZ[] {
 }
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[]; see?: boolean }; // see：下が透けて見える床（半透明）
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][] }; // see：下が透けて見える床（半透明）、holes：吹き抜け
 const areas: Area[] = [
   ...[
     ["エントランスプラザ", 2],
@@ -147,7 +147,16 @@ const areas: Area[] = [
   // 東1〜3 と東4〜6 のあいだの通路（ガレリア）。OSM では名前が「西２F」と書かれている（way 543048845、東展示棟の通路）
   { name: "東ガレリア", level: 1, poly: poly(byId(543048844)) },
   // ガレリアの上の 2F の通路（東展示棟 2F）。北コンコース・連絡ブリッジから段差なしで入る。下のガレリアが見えるよう、地図では半透明
-  { name: "東展示棟 2F", level: 2, poly: poly(byId(543048845)), see: true },
+  {
+    name: "東展示棟 2F",
+    level: 2,
+    poly: poly(byId(543048845)),
+    see: true,
+    // 吹き抜け：施設案内の 2F全体図のガレリアの上の ×印の四角（scripts/extract-plan-toilets.py が data/plan-toilets.json に書く）
+    holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
+      pointInPolygon(centroid(v), poly(byId(543048845))),
+    ),
+  },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
   // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする

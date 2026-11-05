@@ -20,7 +20,7 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[]; see?: boolean }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][] }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
@@ -154,14 +154,16 @@ function textSprite(text: string, opts: { bg?: string; fg?: string; height?: num
   return s;
 }
 
-function shapeOf(poly: XZ[]) {
+function shapeOf(poly: XZ[], holes: XZ[][] = []) {
   // ShapeGeometry は XY 平面。-90° 倒すと (x, y) → (x, 0, -y) なので、y に -z を入れる
-  return new THREE.Shape(poly.map(([x, z]) => new THREE.Vector2(x, -z)));
+  const sh = new THREE.Shape(poly.map(([x, z]) => new THREE.Vector2(x, -z)));
+  for (const h of holes) sh.holes.push(new THREE.Path(h.map(([x, z]) => new THREE.Vector2(x, -z))));
+  return sh;
 }
 
-function flatPoly(poly: XZ[], color: number, y: number, opacity = 1) {
+function flatPoly(poly: XZ[], color: number, y: number, opacity = 1, holes: XZ[][] = []) {
   const m = new THREE.Mesh(
-    new THREE.ShapeGeometry(shapeOf(poly)),
+    new THREE.ShapeGeometry(shapeOf(poly, holes)),
     new THREE.MeshLambertMaterial({ color, transparent: opacity < 1, opacity, side: THREE.DoubleSide }),
   );
   m.rotation.x = -Math.PI / 2;
@@ -449,7 +451,7 @@ export function VenueView() {
     for (const a of venue.areas) {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
-      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.8 : 1);
+      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -461,6 +463,12 @@ export function VenueView() {
         );
         scene.add(edge);
         partsOf(a.level).solid.push(edge);
+        // 吹き抜けのふちに手すり（高さ 1.1m の薄い板）
+        for (const h of a.holes ?? []) {
+          const rail = walls(h, y, 1.1, new THREE.MeshLambertMaterial({ color: 0xb4501c, transparent: true, opacity: 0.6 }));
+          scene.add(rail);
+          partsOf(a.level).solid.push(rail);
+        }
       }
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
       const [cx, cz] = centroid(a.poly);

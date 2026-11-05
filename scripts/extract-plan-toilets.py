@@ -259,6 +259,57 @@ door_merged = []
 for d in doors:
     if not any(e["level"] == d["level"] and e["kind"] == d["kind"] and math.hypot(e["at"][0] - d["at"][0], e["at"][1] - d["at"][1]) < 5 for e in door_merged):
         door_merged.append(d)
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged}, ensure_ascii=False, indent=1), encoding="utf-8")
+# ---- 東展示棟 2F の吹き抜け：施設案内の「2F全体図」（facility_all.pdf の5ページ目）の、ガレリアの上の ×印の四角 ----
+# 図面は90°回して描かれているので、回さない向き（PDF の中の座標）で読む。東1〜5 ホールの「上部」の ×印の四角の真ん中を
+# 会場データのホールの真ん中に合わせる一次変換（裏返しも含む）で写す
+def read_voids():
+    f = ROOT / "data/private/facility_all.pdf"
+    if not f.exists():
+        return []
+    p = fitz.open(f)[4]
+    p.set_rotation(0)
+    # 斜めの線の外枠（×の2本は同じ外枠になる）。外枠ごとに、向きのちがう斜め線が両方あるかを数える
+    boxes = []  # [外枠, 向き(+1/-1) の集合]
+    for dr in p.get_drawings():
+        for it in dr["items"]:
+            if it[0] != "l":
+                continue
+            a, b = it[1], it[2]
+            if abs(b.x - a.x) > 3 and abs(b.y - a.y) > 6:
+                bx = (min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
+                sign = 1 if (b.x - a.x) * (b.y - a.y) > 0 else -1
+                hit = next((q for q in boxes if all(abs(u - v) < 1.5 for u, v in zip(bx, q[0]))), None)
+                if hit:
+                    hit[1].add(sign)
+                else:
+                    boxes.append([bx, {sign}])
+    xs = [q[0] for q in boxes if len(q[1]) == 2]  # × になっている四角だけ
+    # ホールの「上部」の×：一辺 50〜60pt の正方形。東1〜3 は左、東4〜6 は右
+    big = [q for q in xs if 50 < q[2] - q[0] < 60 and 50 < q[3] - q[1] < 60 and 330 < q[0] < 430 and 370 < q[1] < 600]
+    left = sorted([q for q in big if q[0] < 400], key=lambda q: q[1])
+    right = sorted([q for q in big if q[0] > 400], key=lambda q: q[1])
+    if len(left) < 3 or len(right) < 3:
+        return []
+    src = [((q[0] + q[2]) / 2, (q[1] + q[3]) / 2) for q in left[:3] + right[:3]]
+    def cen(hid):
+        poly = halls[hid]["poly"]
+        return (sum(x for x, _ in poly) / len(poly), sum(z for _, z in poly) / len(poly))
+    dst = [cen(h) for h in ["E1", "E2", "E3", "E4", "E5", "E6"]]
+    import numpy as np
+    A = np.array([[x, y, 1] for x, y in src]); B = np.array(dst)
+    M, *_ = np.linalg.lstsq(A, B, rcond=None)
+    err = float(np.max(np.hypot(*(A @ M - B).T)))
+    gx0, gx1 = left[0][2], right[0][0]  # ガレリア（左右のホールの × のあいだ）
+    gy0, gy1 = min(q[1] for q in big), max(q[3] for q in big)
+    voids = []
+    for q in xs:
+        if q[0] >= gx0 - 1 and q[2] <= gx1 + 1 and q[1] >= gy0 - 5 and q[3] <= gy1 + 5 and q[2] - q[0] >= 3 and q[3] - q[1] >= 8:
+            corners = [(q[0], q[1]), (q[2], q[1]), (q[2], q[3]), (q[0], q[3])]
+            voids.append([[round(float(v), 1) for v in np.array([x, y, 1]) @ M] for x, y in corners])
+    report.append(f"東展示棟 2F の吹き抜け {len(voids)}（ホールの真ん中のずれ 最大 {err:.1f}m）")
+    return voids
+
+voids = read_voids()
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
 print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")
