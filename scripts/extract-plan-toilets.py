@@ -381,8 +381,11 @@ def read_voids():
         gmid = (gx0 + gx1) / 2
         inner = q[2] if abs(q[2] - gmid) < abs(q[0] - gmid) else q[0]
         voidWalls.append([to_v(inner, q[1]), to_v(inner, q[3])])  # 真ん中の壁（2F の真ん中の通路の下）
-        stair_x = inner - (w * 0.22 if inner == q[2] else -w * 0.22)
-        esc_x = inner - (w * 0.1 if inner == q[2] else -w * 0.1)
+        # 公式フロアマップの 2F のガレリア：真ん中が吹き抜けで、エスカレーター・階段はその左右（ホールの側）にある。
+        # なので、吹き抜けの外側（ホールの側）の辺にそわせる
+        outer = q[0] if inner == q[2] else q[2]
+        stair_x = outer + (w * 0.22 if outer == q[0] else -w * 0.22)
+        esc_x = outer + (w * 0.08 if outer == q[0] else -w * 0.08)
         voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye - sgn * 0.3), "to": to_v(stair_x, ye + sgn * run), "width": round(w * 0.4 * 1.64, 1)})
         # エスカレーターは、階段と反対の端で 2F に着く（ストリートビュー・写真：吹き抜けの下で、階段とエスカレーターが逆の向きに上がっている）
         yo = q[3] if top_at_y0 else q[1]

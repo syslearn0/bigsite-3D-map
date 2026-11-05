@@ -126,6 +126,24 @@ const southRest: XZ[] = southHall;
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
 // その階の床（ホール・通路）の上か
+function widenToCenter(voids: XZ[][], deck: XZ[]): XZ[][] {
+  // ガレリアの長い向き（いちばん長い辺）と、真ん中の線（形の重心を通る）
+  let best: [number, XZ] = [0, [1, 0]];
+  deck.forEach((a, i) => {
+    const b = deck[(i + 1) % deck.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L > best[0]) best = [L, [(b[0] - a[0]) / L, (b[1] - a[1]) / L]];
+  });
+  const c = centroid(deck), n: XZ = [-best[1][1], best[1][0]];
+  return voids.map((v) => {
+    const d = v.map((p) => (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1]);
+    const side = Math.sign(d.reduce((s2, x) => s2 + x, 0)) || 1;
+    const nearSide = Math.min(...d.map((x) => Math.abs(x)));
+    const move = Math.max(0, nearSide - 0.5);
+    // 真ん中の線に近い 2 つの角を、真ん中へ move だけ寄せる
+    const order = d.map((x, i) => [Math.abs(x), i]).sort((p, q) => p[0] - q[0]).slice(0, 2).map((x) => x[1]);
+    return v.map((p, i) => (order.includes(i) ? [Math.round((p[0] - n[0] * side * move) * 10) / 10, Math.round((p[1] - n[1] * side * move) * 10) / 10] as XZ : p));
+  });
+}
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
 }
@@ -248,8 +266,12 @@ const areas: Area[] = [
     poly: poly(byId(543048845)),
     see: true,
     // 吹き抜け：施設案内の 2F全体図のガレリアの上の ×印の四角（scripts/extract-plan-toilets.py が data/plan-toilets.json に書く）
-    holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
-      pointInPolygon(centroid(v), poly(byId(543048845))),
+    // 吹き抜けは、ガレリアの真ん中の線の手前 0.5m まで内側へ広げる（公式フロアマップでは、2F のガレリアは真ん中が開いている）
+    holes: widenToCenter(
+      (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
+        pointInPolygon(centroid(v), poly(byId(543048845))),
+      ),
+      poly(byId(543048845)),
     ),
   },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
@@ -400,8 +422,26 @@ const stairs: Stair[] = [];
     {
       // 上の端（2F）はそのまま、長さを 2F の高さに合わせる（30° ほど）
       const L0 = Math.hypot(v.to[0] - v.from[0], v.to[1] - v.from[1]) || 1, L = (FLOOR_Y[2] - FLOOR_Y[1]) * 1.8;
-      const to: XZ = [r(v.from[0] + ((v.to[0] - v.from[0]) / L0) * L), r(v.from[1] + ((v.to[1] - v.from[1]) / L0) * L)];
-      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to, toLevel: 1, width: v.width });
+      const ux = (v.to[0] - v.from[0]) / L0, uz = (v.to[1] - v.from[1]) / L0;
+      // 上の端が 2F の床に、下の端が 1F の床に乗るよう、向きに沿っていちばん少なく（15m まで）ずらす
+      // 床の端ぎりぎりに沿うもの（東1 の端の吹き抜け）は、横にも 4m まで内へ寄せる
+      const at = (k: number, w: number, t: number): XZ => [v.from[0] + ux * (k + t) - uz * w, v.from[1] + uz * (k + t) + ux * w];
+      // 段の両わき（幅の半分 + 0.3m）まで、上の端は 2F・下の端は 1F の床の中に入ること
+      const hw = v.width / 2 + 0.3;
+      const fits = (k: number, w: number): boolean => [w - hw, w, w + hw].every((x) => onFloor(at(k, x, 0), 2) && onFloor(at(k, x, L), 1));
+      let shift = 0, side = 0;
+      search: for (let w = 0; w <= 4; w += 0.5)
+        for (const ws of w ? [w, -w] : [0])
+          for (let d = 0; d <= 15; d += 0.5)
+            for (const k of d ? [-d, d] : [0])
+              if (fits(k, ws)) {
+                [shift, side] = [k, ws];
+                break search;
+              }
+      const f = at(shift, side, 0);
+      const from: XZ = [r(f[0]), r(f[1])];
+      const to: XZ = [r(from[0] + ux * L), r(from[1] + uz * L)];
+      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from, fromLevel: 2, to, toLevel: 1, width: v.width });
     }
     void es;
     void ux;

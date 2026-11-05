@@ -60,7 +60,8 @@ const DESK_COLOR = 0xf2f1ea;
 // ホールの外の歩く所（通路・広場）の色。東展示棟からの連絡路（連絡ブリッジ・北コンコース）は、ほかの通路と分ける
 const AREA_COLOR = 0xece3b6;
 const LINK_COLOR = 0xf0b48a;
-const OUTDOOR_COLOR = 0xc3c7c4; // 屋外（屋上展示場・エントランスプラザなど。公式フロアマップの灰色）。屋内の通路は AREA_COLOR
+const OUTDOOR_COLOR = 0xc3c7c4;
+const ROOF_COLOR = 0x5ec8f0; // 屋上展示場（水色で目立たせる） // 屋外（屋上展示場・エントランスプラザなど。公式フロアマップの灰色）。屋内の通路は AREA_COLOR
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
@@ -455,7 +456,7 @@ export function VenueView() {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース" || a.name === "コンコース";
-      const f = flatPoly(a.poly, south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const f = flatPoly(a.poly, a.name === "屋上展示場" ? ROOF_COLOR : south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -1020,7 +1021,7 @@ export function VenueView() {
           const mat = m.material as THREE.MeshLambertMaterial;
           const see = m.userData.see as number | undefined;
           mat.transparent = !on || see !== undefined;
-          mat.opacity = on ? (see ?? 1) : 0.18;
+          mat.opacity = on ? (see ?? 1) : 0.3;
           mat.depthWrite = on && see === undefined;
           m.visible = on || !walk;
         }
