@@ -349,6 +349,23 @@ def venue_edge_dir(hid, q):
     return best[1]
 
 
+def path_points(dr):
+    """描画の形の点（線・曲線の端・四角の四すみ）"""
+    pts = []
+    for it in dr["items"]:
+        if it[0] == "l":
+            pts += [(it[1].x, it[1].y), (it[2].x, it[2].y)]
+        elif it[0] == "c":
+            pts += [(it[1].x, it[1].y), (it[4].x, it[4].y)]
+        elif it[0] == "re":
+            r = it[1]
+            pts += [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)]
+        elif it[0] == "qu":
+            q = it[1]
+            pts += [(q.ul.x, q.ul.y), (q.ur.x, q.ur.y), (q.lr.x, q.lr.y), (q.ll.x, q.ll.y)]
+    return pts
+
+
 def read_features(doc, desks):
     """柱（小さな黒い四角）と、壁の切れ目（ホールの外形にそって、黒い壁が描かれていない所＝出入口・シャッター）"""
     pillars, openings = [], []
@@ -390,41 +407,68 @@ def read_features(doc, desks):
                     at = wall_point(hid, at, 0.0)
                     wall_pillar = True
             pillars.append({"hall": hid, "at": [round(at[0], 2), round(at[1], 2)], "wall": wall_pillar})
-        walls_ = [r for r in dark if not is_pillar(r)]
-        hids = {z["hall"] for z in ZONES[pi]}
-        for hid in hids:
-            poly = OUTLINES[hid]
-            for i in range(len(poly)):
-                a, b = poly[i], poly[(i + 1) % len(poly)]
-                # ほかのホールと分け合う辺（東1〜3・南1/2 の境）は、壁がなくてよいので数えない
-                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-                shared = any(o != hid and on_outline(mid, OUTLINES[o]) for o in hids)
-                if shared:
-                    continue
-                L = math.hypot(b[0] - a[0], b[1] - a[1])
-                ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
-                nx, ny = -uy, ux
-                cov = []
-                for k in range(int(L) + 1):
-                    px, py = a[0] + ux * k, a[1] + uy * k
-                    hit = any(r.x0 - 0.5 <= px + nx * t <= r.x1 + 0.5 and r.y0 - 0.5 <= py + ny * t <= r.y1 + 0.5 for t in range(-10, 11, 2) for r in walls_)
-                    cov.append(hit)
-                # 壁のない区間（角の近くの 4pt は数えない）。6pt（2m ほど）より短いものは描き方のすき間
-                k = 4
-                while k < len(cov) - 4:
-                    if cov[k]:
-                        k += 1
-                        continue
-                    j = k
-                    while j < len(cov) - 4 and not cov[j]:
-                        j += 1
-                    if j - k >= 6:
-                        z = zone_at(pi, a[0] + ux * (k + j) / 2, a[1] + uy * (k + j) / 2)
-                        if z:
-                            pa = to_venue(z, a[0] + ux * k, a[1] + uy * k)
-                            pb = to_venue(z, a[0] + ux * j, a[1] + uy * j)
-                            openings.append({"hall": hid, "a": [round(pa[0], 2), round(pa[1], 2)], "b": [round(pb[0], 2), round(pb[1], 2)]})
-                    k = j
+        # 壁の切れ目：配置図の黒い壁（細長い塗り）を、同じ線の上にあるものどうしでまとめ、となり合う壁のあいだのすき間を出入口とする。
+        # 壁が描かれていない辺（トラックヤード側など）や、壁の曲がり角・段差は、切れ目にしない
+        segs = []
+        for dr in p.get_drawings():
+            if not (dr.get("fill") and max(dr["fill"]) < 0.3):
+                continue
+            pts = path_points(dr)
+            if len(pts) < 3:
+                continue
+            cx = sum(q[0] for q in pts) / len(pts); cy = sum(q[1] for q in pts) / len(pts)
+            sxx = sum((q[0] - cx) ** 2 for q in pts); syy = sum((q[1] - cy) ** 2 for q in pts); sxy = sum((q[0] - cx) * (q[1] - cy) for q in pts)
+            ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
+            ux, uy = math.cos(ang), math.sin(ang)
+            us = [(q[0] - cx) * ux + (q[1] - cy) * uy for q in pts]
+            vs = [-(q[0] - cx) * uy + (q[1] - cy) * ux for q in pts]
+            length, thick = max(us) - min(us), max(vs) - min(vs)
+            if thick > 9 or length < max(3 * thick, 5):
+                continue  # 柱・大きな塊・小さな印
+            if not zone_at(pi, cx, cy, pad=15):
+                continue
+            if ux < 0 or (abs(ux) < 1e-6 and uy < 0):
+                ux, uy = -ux, -uy
+            off = -cx * uy + cy * ux  # 線の位置（向きに直角）
+            t0 = min((q[0] * ux + q[1] * uy) for q in pts); t1 = max((q[0] * ux + q[1] * uy) for q in pts)
+            segs.append({"ux": ux, "uy": uy, "off": off, "t0": t0, "t1": t1, "thick": thick})
+        groups = []
+        for sg in segs:
+            g = next((g for g in groups if abs(g[0]["ux"] * sg["uy"] - g[0]["uy"] * sg["ux"]) < 0.05 and abs(g[0]["off"] - sg["off"]) < 3), None)
+            if g:
+                g.append(sg)
+            else:
+                groups.append([sg])
+        for g in groups:
+            g.sort(key=lambda x: x["t0"])
+            ux, uy, off = g[0]["ux"], g[0]["uy"], sum(x["off"] for x in g) / len(g)
+            end_t = g[0]["t1"]
+            for sg in g[1:]:
+                gap = sg["t0"] - end_t
+                ta, tb = end_t, sg["t0"]
+                tm = (ta + tb) / 2
+                # 壁の段差（切れ目のすぐ内か外に、平行な壁がその切れ目をふさいでいる）は出入口ではない
+                jog = any(abs(o["ux"] * uy - o["uy"] * ux) < 0.05 and 2 < abs(o["off"] - off) < 30 and o["t0"] - 2 <= tm <= o["t1"] + 2 for o in segs)
+                if 4 <= gap <= 120 and not jog:
+                    pa_ = (ux * ta - uy * off, uy * ta + ux * off)
+                    pb_ = (ux * tb - uy * off, uy * tb + ux * off)
+                    mx, my = (pa_[0] + pb_[0]) / 2, (pa_[1] + pb_[1]) / 2
+                    z = zone_at(pi, mx, my, pad=15)
+                    e = None
+                    if z:
+                        # どのホールの壁か：配置図の外形のいちばん近い辺（15pt 以内）
+                        best = None
+                        for hid in {zz["hall"] for zz in ZONES[pi]}:
+                            ee = nearest_edge(hid, mx, my)
+                            if ee and (best is None or ee[0] < best[0][0]):
+                                best = (ee, hid)
+                        if best and best[0][0] < 15:
+                            hid = best[1]
+                            z = next((zz for zz in ZONES[pi] if zz["hall"] == hid), z)
+                            va, vb = to_venue(z, *pa_), to_venue(z, *pb_)
+                            openings.append({"hall": hid, "a": [round(va[0], 2), round(va[1], 2)], "b": [round(vb[0], 2), round(vb[1], 2)],
+                                             "pdf": [pi, round(pa_[0], 1), round(pa_[1], 1), round(pb_[0], 1), round(pb_[1], 1)]})
+                end_t = max(end_t, sg["t1"])
     return {"pillars": pillars, "openings": openings}
 
 

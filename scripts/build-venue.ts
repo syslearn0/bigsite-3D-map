@@ -227,11 +227,25 @@ const osmToilets: Toilet[] = osm.elements
 // 真ん中に札が出るので、そのホールの壁に寄せる：出入口・搬入口は壁の線の上、トイレは壁の 1.5m 内側。
 // 工事中のホール（東4〜6）のものは使えないので出さない
 const hallOf = new Map(halls.map((h) => [h.id, h]));
+// となりのホールと分け合う辺（東1〜3 の境など）。ここは壁がないので、出入口やトイレを寄せない
+function sharedEdge(hid: string, a: XZ, b: XZ): boolean {
+  const h = hallOf.get(hid)!;
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
+  const mid: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  return halls.some((o) => o.id !== hid && o.level === h.level && o.poly.some((p, j) => {
+    const q = o.poly[(j + 1) % o.poly.length];
+    const OL = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, ox = (q[0] - p[0]) / OL, oz = (q[1] - p[1]) / OL;
+    if (Math.abs(ux * oz - uz * ox) > 0.1) return false;
+    const v = Math.abs(-(mid[0] - p[0]) * oz + (mid[1] - p[1]) * ox), t = ((mid[0] - p[0]) * ox + (mid[1] - p[1]) * oz) / OL;
+    return v < 3 && t > 0 && t < 1;
+  }));
+}
 function toWall(hid: string, p: XZ, inset: number): XZ {
   const poly = hallOf.get(hid)!.poly;
   let best: [number, XZ, XZ] = [Infinity, p, [0, 0]];
   poly.forEach((a, i) => {
     const b = poly[(i + 1) % poly.length];
+    if (sharedEdge(hid, a, b)) return;
     const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1, L = Math.sqrt(L2);
     const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
     const q: XZ = [a[0] + t * dx, a[1] + t * dz];

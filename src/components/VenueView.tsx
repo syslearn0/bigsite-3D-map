@@ -254,13 +254,22 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors
         const o0 = Math.max(0, Math.min(up, uq)), o1 = Math.min(len, Math.max(up, uq));
         if (o1 - o0 > 1) open.push([o0, o1]);
       });
-    let u = 0;
+    // 辺の先に、となりのホールの角が 3m 以内でつづいていれば、そこまで壁をのばす（ホールの形のあいだのすき間をふさぐ）
+    let uStart = 0, uEnd = len;
+    for (const o of others)
+      for (const q of o) {
+        const uq = (q[0] - ax) * c + (q[1] - az) * s, vq = -(q[0] - ax) * s + (q[1] - az) * c;
+        if (Math.abs(vq) > 1) continue;
+        if (uq > len && uq < len + 3) uEnd = Math.max(uEnd, uq);
+        if (uq < 0 && uq > -3) uStart = Math.min(uStart, uq);
+      }
+    let u = uStart;
     for (const [g0, g1] of merged) {
       piece(ax, az, c, s, u, g0, 0, height);
       piece(ax, az, c, s, g0, g1, DOOR_H, height); // 戸口の上
       u = g1;
     }
-    piece(ax, az, c, s, u, len, 0, height);
+    piece(ax, az, c, s, u, uEnd, 0, height);
   }
   return g;
 }
@@ -459,6 +468,7 @@ export function VenueView() {
         y,
         WALL_H,
         wallMat,
+        // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
         venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
@@ -523,6 +533,31 @@ export function VenueView() {
         partsOf(lv).solid.push(m);
       }
     }
+    // となり合うホール（東1〜3・南1/2 など）の床のあいだのすき間を、同じ床の色でうめる
+    venue.halls.forEach((h, i) => {
+      for (const o of venue.halls.slice(i + 1)) {
+        if (o.level !== h.level) continue;
+        h.poly.forEach((a, k) => {
+          const b = h.poly[(k + 1) % h.poly.length];
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          if (len < 1) return;
+          const c = (b[0] - a[0]) / len, sn = (b[1] - a[1]) / len;
+          o.poly.forEach((p, j) => {
+            const q = o.poly[(j + 1) % o.poly.length];
+            const up = (p[0] - a[0]) * c + (p[1] - a[1]) * sn, vp = -(p[0] - a[0]) * sn + (p[1] - a[1]) * c;
+            const uq = (q[0] - a[0]) * c + (q[1] - a[1]) * sn, vq = -(q[0] - a[0]) * sn + (q[1] - a[1]) * c;
+            if (Math.abs(vp) > 3 || Math.abs(vq) > 3 || Math.abs(uq - up) < 1) return;
+            const o0 = Math.max(0, Math.min(up, uq)), o1 = Math.min(len, Math.max(up, uq));
+            if (o1 - o0 < 1) return;
+            const vAt = (u: number) => vp + ((vq - vp) * (u - up)) / (uq - up);
+            const at = (u: number, v: number): XZ => [a[0] + c * u - sn * v, a[1] + sn * u + c * v];
+            const f = flatPoly([at(o0, 0), at(o1, 0), at(o1, vAt(o1)), at(o0, vAt(o0))], h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], floorY(h.level) + 0.05);
+            scene.add(f);
+            partsOf(h.level).floors.push(f);
+          });
+        });
+      }
+    });
     for (const t of venue.toilets) {
       const lv = t.level ?? 1;
       // 多機能トイレがあるときは「WC♿」
@@ -539,32 +574,66 @@ export function VenueView() {
       scene.add(m);
       partsOf(d.level).solid.push(m);
       addLabel(m, d.kind === "出入口" ? "door" : "shutter");
-      if (d.kind !== "出入口") continue;
-      // 3D・歩くでは、戸口の上（梁）の両側（ホールの内と外）に看板を貼る。浮いた札は上から見るときだけ
-      m.userData.topOnly = true;
-      const h = hallById.get(d.hall);
+      // 出入口の浮いた札は上から見るときだけ（3D・歩くでは、戸口の上の看板）。配置図の切れ目を使うときは、図面の札は出さない
+      if (d.kind === "出入口") {
+        m.userData.topOnly = true;
+
+      }
+    }
+    // 出入口の看板：戸口の真上、壁の高い所の両側（ホールの内と外）に、戸口の幅くらいの大きさで
+    type Entrance = { hall: string; level: number; at: XZ; width: number };
+    const fromPlan: Entrance[] = venue.doors.filter((d) => d.kind === "出入口").map((d) => ({ hall: d.hall, level: d.level, at: d.at, width: DOOR_W }));
+    // 配置図の切れ目のうち、図面の出入口と重ならないもの（8m より離れている）を足す
+    const fromLayout: Entrance[] = (features?.openings ?? [])
+      .map((o) => ({ hall: o.hall, level: hallById.get(o.hall)?.level ?? 1, at: [(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2] as XZ, width: Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) }))
+      .filter((e) => !fromPlan.some((d) => Math.hypot(d.at[0] - e.at[0], d.at[1] - e.at[1]) < 8));
+    const entrances: Entrance[] = [...fromPlan, ...fromLayout];
+    const signPx = textSprite("⇄ 出入口", { bg: "rgba(20,120,60,.95)", height: 1, px: 128 });
+    const signAspect = signPx.scale.x / signPx.scale.y;
+    const signMat = new THREE.MeshBasicMaterial({ map: (signPx.material as THREE.SpriteMaterial).map, transparent: true });
+    for (const e of entrances) {
+      const h = hallById.get(e.hall);
       if (!h) continue;
-      let best = { d: Infinity, ux: 1, uz: 0 };
+      // いちばん近い、となりのホールと分け合っていない辺に貼る
+      let best = { d: Infinity, q: e.at as XZ, ux: 1, uz: 0 };
       h.poly.forEach((a, i) => {
         const b = h.poly[(i + 1) % h.poly.length];
         const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1, L = Math.sqrt(L2);
-        const t = Math.max(0, Math.min(1, ((d.at[0] - a[0]) * dx + (d.at[1] - a[1]) * dz) / L2));
-        const dist = Math.hypot(d.at[0] - a[0] - t * dx, d.at[1] - a[1] - t * dz);
-        if (dist < best.d) best = { d: dist, ux: dx / L, uz: dz / L };
+        const ux = dx / L, uz = dz / L;
+        const mid: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const shared = venue.halls.some((o) => o.id !== h.id && o.level === h.level && o.poly.some((p, j) => {
+          const q = o.poly[(j + 1) % o.poly.length];
+          const ox = q[0] - p[0], oz = q[1] - p[1], OL = Math.hypot(ox, oz) || 1;
+          if (Math.abs(ux * oz / OL - uz * ox / OL) > 0.1) return false; // 平行でない
+          const v = Math.abs(-(mid[0] - p[0]) * oz / OL + (mid[1] - p[1]) * ox / OL);
+          const t = ((mid[0] - p[0]) * ox + (mid[1] - p[1]) * oz) / (OL * OL);
+          return v < 3 && t > 0 && t < 1;
+        }));
+        if (shared) return;
+        const t = Math.max(0, Math.min(1, ((e.at[0] - a[0]) * dx + (e.at[1] - a[1]) * dz) / L2));
+        const q: XZ = [a[0] + t * dx, a[1] + t * dz];
+        const dist = Math.hypot(e.at[0] - q[0], e.at[1] - q[1]);
+        if (dist < best.d) best = { d: dist, q, ux, uz };
       });
-      if (best.d > 3) continue; // 壁から離れた出入口（ホールの外の建物など）は看板を貼らない
+      if (best.d > 6) continue; // 壁から離れた出入口（ホールの外の建物など）は看板を貼らない
       const nx = -best.uz, nz = best.ux;
-      // 看板は戸口の幅くらい（6m まで）、高さ 2m ほど。大きく描くので、細かい文字の絵を別に作る
-      const big = textSprite("⇄ 出入口", { bg: "rgba(20,120,60,.95)", height: 1, px: 128 });
-      const aspect = big.scale.x / big.scale.y;
-      const sh = Math.min(2.1, 6 / aspect), sw = sh * aspect;
-      const signMat = new THREE.MeshBasicMaterial({ map: (big.material as THREE.SpriteMaterial).map, transparent: true });
+      const sw = Math.min(8, Math.max(DOOR_W, e.width) * 0.95), sh = Math.min(2.6, sw / signAspect);
+      const y = floorY(e.level) + Math.min(WALL_H - 0.3 - sh / 2, (DOOR_H + WALL_H) / 2 + 0.3);
       for (const k of [1, -1]) {
-        const sign = new THREE.Mesh(new THREE.PlaneGeometry(sw, sh), signMat);
-        sign.position.set(d.at[0] + nx * k * 0.22, floorY(d.level) + DOOR_H + 0.25 + sh / 2, d.at[1] + nz * k * 0.22);
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(sh * signAspect, sh), signMat);
+        sign.position.set(best.q[0] + nx * k * 0.22, y, best.q[1] + nz * k * 0.22);
         sign.rotation.y = Math.atan2(nx * k, nz * k);
         scene.add(sign);
-        partsOf(d.level).solid.push(sign);
+        partsOf(e.level).solid.push(sign);
+      }
+      // 上から見るときの札（配置図の切れ目のとき。図面の出入口には、上で作った札がある）
+      if (fromLayout.includes(e)) {
+        const m = textSprite("⇄ 出入口", { bg: "rgba(20,120,60,.92)", height: 2.6, px: 32 });
+        m.position.set(best.q[0], floorY(e.level) + 2.6, best.q[1]);
+        m.userData.topOnly = true;
+        scene.add(m);
+        partsOf(e.level).solid.push(m);
+        addLabel(m, "door");
       }
     }
     for (const a of venue.firstAid) {
@@ -828,7 +897,7 @@ export function VenueView() {
         }
         // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める
         for (const o of p.solid) {
-          if (o instanceof THREE.Sprite) o.userData.levelOn = on;
+          if (o instanceof THREE.Sprite) o.userData.levelOn = on && !o.userData.hidden;
           else o.visible = on;
         }
       }
