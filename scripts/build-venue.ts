@@ -199,6 +199,7 @@ const areas: Area[] = [
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
 // 会議棟の横のエントランスプラザの辺（プラザの1本目の辺の 55% の所）から、1F アトリウム（低くなった中庭）の上を
 // まっすぐ渡って、屋上展示場の北東の辺につながる（航空写真の橋と階段の位置。OSM に階段の形がないので、その目安）
+const coreWalls: { level: number; height: number; a: XZ; b: XZ }[] = []; // 床から上の階までの壁（ガレリアの真ん中の壁）
 type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" };
 const stairs: Stair[] = [];
 {
@@ -269,6 +270,9 @@ const stairs: Stair[] = [];
     const vs = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidStairs?: { kind: string; from: XZ; to: XZ; width: number }[] }).voidStairs ?? []) : [];
     for (const v of vs)
       stairs.push({ name: v.kind === "escalator" ? "エスカレーター（1F⇔2F）" : "階段・エスカレーター（1F⇔2F）", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
+    // 2F の真ん中の通路の下の壁（ストリートビュー：三角の飾りのある壁。階段とエスカレーターはこの壁にそって上がる）
+    const vw = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidWalls?: [XZ, XZ][] }).voidWalls ?? []) : [];
+    for (const [a, b] of vw) coreWalls.push({ level: 1, height: FLOOR_Y[2], a, b });
     void es;
     void ux;
     void uz;
@@ -405,6 +409,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs, coreWalls }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);

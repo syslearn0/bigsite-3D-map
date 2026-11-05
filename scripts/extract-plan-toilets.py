@@ -303,6 +303,7 @@ def read_voids():
     gy0, gy1 = min(q[1] for q in big), max(q[3] for q in big)
     voids = []
     voidStairs.clear()
+    voidWalls.clear()
     for q in xs:
         if q[0] >= gx0 - 1 and q[2] <= gx1 + 1 and q[1] >= gy0 - 5 and q[3] <= gy1 + 5 and q[2] - q[0] >= 3 and q[3] - q[1] >= 8:
             corners = [(q[0], q[1]), (q[2], q[1]), (q[2], q[3]), (q[0], q[3])]
@@ -327,9 +328,13 @@ def read_voids():
         top_at_y0 = sum(1 for _, y in treads if y < ym) >= sum(1 for _, y in treads if y >= ym)
         ye, sgn = (q[1], 1) if top_at_y0 else (q[3], -1)
         run = 7.0  # 図面の pt（約 11m）
-        tx = sum(x for x, _ in treads) / len(treads)  # 段のある側（左右）
-        stair_x = tx
-        esc_x = q[0] + w * 0.8 if tx < (q[0] + q[2]) / 2 else q[0] + w * 0.2
+        # ストリートビュー：ガレリアの真ん中に、2F の真ん中の通路を支える壁があり、その壁にそって、階段とエスカレーターが
+        # 吹き抜けの真ん中から両端へ（逆の向きに）上がっている。なので、どちらも吹き抜けの内側（ガレリアの真ん中の側）の辺にそわせる
+        gmid = (gx0 + gx1) / 2
+        inner = q[2] if abs(q[2] - gmid) < abs(q[0] - gmid) else q[0]
+        voidWalls.append([to_v(inner, q[1]), to_v(inner, q[3])])  # 真ん中の壁（2F の真ん中の通路の下）
+        stair_x = inner - (w * 0.22 if inner == q[2] else -w * 0.22)
+        esc_x = inner - (w * 0.1 if inner == q[2] else -w * 0.1)
         voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye + sgn * 0.3), "to": to_v(stair_x, ye + sgn * (0.3 + run)), "width": round(w * 0.4 * 1.64, 1)})
         # エスカレーターは、階段と反対の端で 2F に着く（ストリートビュー・写真：吹き抜けの下で、階段とエスカレーターが逆の向きに上がっている）
         yo = q[3] if top_at_y0 else q[1]
@@ -338,7 +343,8 @@ def read_voids():
     return voids
 
 voidStairs = []  # 吹き抜けの中の階段・エスカレーター（2F の端 from → 1F to）
+voidWalls = []  # 吹き抜けの内側の辺にそった壁（1F から 2F まで）
 voids = read_voids()
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs}, ensure_ascii=False, indent=1), encoding="utf-8")
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs, "voidWalls": voidWalls}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
 print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")
