@@ -232,9 +232,28 @@ const stairs: Stair[] = [];
     }
     const planDoors = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { doors?: { at: XZ; kind: string; hall: string }[] }).doors ?? []) : [];
     const es = planDoors.filter((d) => d.kind === "ES" && /^E[123]$/.test(d.hall)).map((d) => ({ hall: d.hall, at: d.at }));
+    // 写真では、エスカレーターは 2F の通路から吹き抜けの中を 1F へ下りている。図面の ES の位置にいちばん近い吹き抜けの中に、
+    // 吹き抜けの長い向き（ガレリアの向き）にそって置く（長さは吹き抜けの 8 割、12m まで）
+    const voids = areas.find((x) => x.name === "東展示棟 2F")?.holes ?? [];
+    const usedVoids = new Set<number>();
     for (const e of es) {
       if (!pointInPolygon(e.at, g)) continue;
-      stairs.push({ name: "エスカレーター（1F⇔2F）", kind: "escalator", from: [r(e.at[0] + ux * 6), r(e.at[1] + uz * 6)], fromLevel: 2, to: [r(e.at[0] - ux * 6), r(e.at[1] - uz * 6)], toLevel: 1, width: 3 });
+      let at = e.at, half = 6;
+      let best = -1, bestD = 25;
+      voids.forEach((v, i) => {
+        if (usedVoids.has(i)) return;
+        const c = centroid(v);
+        const d = Math.hypot(c[0] - e.at[0], c[1] - e.at[1]);
+        if (d < bestD) [best, bestD] = [i, d];
+      });
+      if (best >= 0) {
+        usedVoids.add(best);
+        const v = voids[best];
+        at = centroid(v);
+        const ts = v.map((p) => (p[0] - at[0]) * ux + (p[1] - at[1]) * uz);
+        half = Math.min(6, ((Math.max(...ts) - Math.min(...ts)) / 2) * 0.8);
+      }
+      stairs.push({ name: "エスカレーター（1F⇔2F）", kind: "escalator", from: [r(at[0] + ux * half), r(at[1] + uz * half)], fromLevel: 2, to: [r(at[0] - ux * half), r(at[1] - uz * half)], toLevel: 1, width: 3 });
     }
   }
 }
