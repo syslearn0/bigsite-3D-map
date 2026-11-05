@@ -188,6 +188,8 @@ const areas: Area[] = [
   // 向かい合う壁の端どうしを囲む面にする
   { name: "南展示棟への通路（4F）", level: 4, poly: between(["W4"], ["S3"]) },
   { name: "南展示棟", level: 1, poly: southRest },
+  // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
+  { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
 ];
 
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
