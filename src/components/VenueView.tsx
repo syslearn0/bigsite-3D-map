@@ -458,7 +458,7 @@ export function VenueView() {
       partsOf(a.level).solid.push(label);
       addLabel(label, "area");
     }
-    // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない。
+    // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない（穴は開けるが、出入口の看板・札は出さない）。
     // 出入口の区間（a〜b）の前 3m 以内に、壁ぞいの列の机が区間にかかって並んでいれば「ふさがっている」
     const wallBooths = booths.filter((b) => lines[b.line].wall);
     const blocked = (hall: string, a: XZ, b: XZ) => {
@@ -495,8 +495,9 @@ export function VenueView() {
         WALL_H,
         wallMat,
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
-        openDoors.filter((d) => d.hall === h.id).map((d) => d.at),
-        openGaps.filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
+        // 穴は、壁サークルがふさいでいる出入口も開ける（看板だけ出さない）
+        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
+        (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
       );
       scene.add(w);
