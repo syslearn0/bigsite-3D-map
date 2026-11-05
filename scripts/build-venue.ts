@@ -306,9 +306,18 @@ const stairs: Stair[] = [];
       const c2 = centroid(poly(byId(154080986)));
       put([44 + (c2[0] - 44) * 0.15, 68 + (c2[1] - 68) * 0.15], [c2[0] - 44, c2[1] - 68], 1, 2);
     }
-    // 西 17：4F（西3 の入口の角）⇔ 2F 南コンコース（西）。上の端は 4F アトリウムの西3 側の角、そこから 2F の南コンコースの西の端へ
+    // 西 17：4F（西3 の入口の角）⇔ 2F 南コンコース（西）。2F の南コンコース（西）は、4F アトリウムの西3 ぞいの帯の真下にある
+    // （OSM の形で、角 (56.6, 30.4)・(55.8, 64.8) を分け合う）。なので、4F アトリウムの西3 の入口の角の 4m 内側から、
+    // その帯にそって（西3 の壁と平行に）下りて、真下の 2F の南コンコース（西）に着く
     {
-      const top: XZ = [56.6, 30.4], to: XZ = [11, 45];
+      const a4 = areaOf("４F アトリウム"), c4 = centroid(a4);
+      const corner: XZ = [56.6, 30.4], along: XZ = [55.8, 64.8];
+      const ic = Math.hypot(c4[0] - corner[0], c4[1] - corner[1]);
+      const ax = along[0] - corner[0], az = along[1] - corner[1], al = Math.hypot(ax, az);
+      const off: XZ = [(-az / al) * 4, (ax / al) * 4]; // 線から 2F の南コンコース（西）の側へ
+      // 上の端は 4F アトリウムの中（角から 4m 内側）、下の端は帯の真下の 2F の南コンコース（西）の中（同じ線から 4m 西）へ斜めに
+      const top: XZ = [r(corner[0] + ((c4[0] - corner[0]) / ic) * 4), r(corner[1] + ((c4[1] - corner[1]) / ic) * 4)];
+      const to: XZ = [along[0] + off[0], along[1] + off[1]];
       const L = run(2, 4), d = Math.hypot(to[0] - top[0], to[1] - top[1]), ux = (to[0] - top[0]) / d, uz = (to[1] - top[1]) / d;
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ux * L), r(top[1] + uz * L)], toLevel: 2, width: 2 });
     }
@@ -371,12 +380,13 @@ const stairs: Stair[] = [];
 for (const st of stairs) {
   const len = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]);
   if (len < 1) continue;
-  const ux = (st.from[0] - st.to[0]) / len, uz = (st.from[1] - st.to[1]) / len, nx = -uz, nz = ux, hw = st.width / 2 + 0.3;
+  // 穴は、段のまわりに 2.5m ずつ広く、段の下の端の 2m 先まで（実物の吹き抜けは段よりずっと大きい）
+  const ux = (st.from[0] - st.to[0]) / len, uz = (st.from[1] - st.to[1]) / len, nx = -uz, nz = ux, hw = st.width / 2 + 2.5;
   const y0 = FLOOR_Y[st.toLevel], y1 = FLOOR_Y[st.fromLevel];
   for (const a of areas) {
     if (!(a.level > st.toLevel && a.level <= st.fromLevel)) continue;
     const fy = FLOOR_Y[a.level];
-    const tStart = Math.max(0, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)));
+    const tStart = Math.max(-2 / len, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)) - 2 / len);
     const tEnd = a.level === st.fromLevel ? Math.max(tStart, 1 - 1 / len) : Math.min(1, (fy - y0) / (y1 - y0) + 0.5 / len);
     // 床の中に収まる区間に縮める（端から 0.5m ずつ）
     const rect = (t0: number, t1: number): XZ[] => {
