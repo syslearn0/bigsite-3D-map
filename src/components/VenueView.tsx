@@ -28,7 +28,7 @@ type Venue = {
     areas: { poly: XZ[]; y: number; kind: "walk" | "platform" }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
   };
-  toilets: { at: XZ; level: number | null; kinds?: string[] }[];
+  toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
@@ -637,6 +637,12 @@ export function VenueView() {
       // 多機能トイレがあるときは「WC♿」
       const m = textSprite(t.kinds?.includes("多機能") ? "WC ♿" : "WC", { bg: "rgba(31,95,191,.9)", height: 3, px: 34 });
       m.position.set(t.at[0], floorY(lv) + 3, t.at[1]);
+      if (t.outside) {
+        // 会場の外の OpenStreetMap のトイレは「周辺も表示」のときだけ
+        surroundings.add(m);
+        stationLabels.push({ s: m, base: m.scale.clone() });
+        continue;
+      }
       scene.add(m);
       partsOf(lv).solid.push(m);
       addLabel(m, "wc");

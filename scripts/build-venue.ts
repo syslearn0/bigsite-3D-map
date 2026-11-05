@@ -390,6 +390,44 @@ const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; pol
   const c = centroid(r.poly), w = toWall(r.hall, c, 0);
   return Math.hypot(w[0] - c[0], w[1] - c[1]) <= 15;
 });
+// 床のない所（ホール・通路の床の外）にあるトイレ：近くに部屋の囲みがあれば札をその部屋の真ん中へ、なければ壁ぎわ（壁の 1m 外）へ。
+// 会場から離れた OpenStreetMap のトイレ（会場の床から 15m より遠い）は「周辺」の扱いにして、「周辺も表示」のときだけ出す
+{
+  const floorsAt = (lv: number) => [...halls.filter((h) => h.level === lv && !h.closed).map((h) => h.poly), ...areas.filter((a) => a.level === lv).map((a) => a.poly)];
+  const gap = (p: XZ, lv: number) => {
+    let best = Infinity;
+    for (const f of floorsAt(lv)) {
+      if (pointInPolygon(p, f)) return 0;
+      f.forEach((a, i) => {
+        const b = f[(i + 1) % f.length];
+        const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+        best = Math.min(best, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dz));
+      });
+    }
+    return best;
+  };
+  for (const t of toilets) {
+    const lv = t.level ?? 1;
+    const g = gap(t.at, lv);
+    if (g <= 1) continue;
+    if (t.src !== "plan") {
+      if (g > 15) (t as Toilet & { outside?: boolean }).outside = true;
+      continue;
+    }
+    const room = toiletRooms.find((r) => r.level === lv && (pointInPolygon(t.at, r.poly) || Math.hypot(centroid(r.poly)[0] - t.at[0], centroid(r.poly)[1] - t.at[1]) < 6));
+    if (room) {
+      const c = centroid(room.poly);
+      t.at = [Math.round(c[0] * 10) / 10, Math.round(c[1] * 10) / 10];
+    } else {
+      const hall = halls
+        .filter((h) => h.level === lv && !h.closed)
+        .map((h) => ({ h, d: Math.hypot(...(toWall(h.id, t.at, 0).map((v, i) => v - t.at[i]) as [number, number])) }))
+        .sort((x, y) => x.d - y.d)[0];
+      if (hall && hall.d < 20) t.at = toWall(hall.h.id, t.at, -1);
+    }
+  }
+}
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 // 出入口・搬入口（シャッター）。図面から読んだもの
 const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)).map((d) => {
