@@ -140,10 +140,8 @@ function southConcourse(): Area[] {
     left.push([r(p[0] + nx * w), r(p[1] + nz * w)]);
     right.push([r(p[0] - nx * w), r(p[1] - nz * w)]);
   });
-  southConcourseLine = pts;
   return [{ name: "南コンコース", level: 2, poly: [...left, ...right.reverse()] }];
 }
-let southConcourseLine: XZ[] = [];
 // ホール a の、ホール b に向かい合う辺を、b の向かい合う辺の線まで直角にのばした四角
 function rectBetween(a: string, b: string, extra: XZ[] = []): XZ[] {
   const pa = halls.find((h) => h.id === a)!.poly, pb = halls.find((h) => h.id === b)!.poly;
@@ -308,23 +306,6 @@ const stairs: Stair[] = [];
     const vs = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidStairs?: { kind: string; from: XZ; to: XZ; width: number }[] }).voidStairs ?? []) : [];
     for (const v of vs)
       stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
-    // 南展示棟の入口：南コンコース（2F）から 1F へ下りるエスカレーター。位置は南1 の図面（白図）の「ＥＳ」のうち、
-    // 南コンコースの線から 20m 以内のもの。向きはいちばん近い南コンコースの区間の向き、上（2F）が北（エントランスプラザ）の側
-    if (southConcourseLine.length >= 2) {
-      for (const d of planDoors.filter((x) => x.kind === "ES" && x.hall === "S1" && !halls.some((h) => h.level === 1 && pointInPolygon(x.at, h.poly)))) {
-        let best: [number, number, number] = [Infinity, 1, 0];
-        for (let k = 0; k + 1 < southConcourseLine.length; k++) {
-          const a = southConcourseLine[k], b = southConcourseLine[k + 1];
-          const ddx = b[0] - a[0], ddz = b[1] - a[1], L2 = ddx * ddx + ddz * ddz || 1, L = Math.sqrt(L2);
-          const t = Math.max(0, Math.min(1, ((d.at[0] - a[0]) * ddx + (d.at[1] - a[1]) * ddz) / L2));
-          const dist = Math.hypot(d.at[0] - a[0] - t * ddx, d.at[1] - a[1] - t * ddz);
-          if (dist < best[0]) best = [dist, ddx / L, ddz / L];
-        }
-        if (best[0] > 20) continue;
-        const [, dx, dz] = best;
-        stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(d.at[0] - dx * 6), r(d.at[1] - dz * 6)], fromLevel: 2, to: [r(d.at[0] + dx * 6), r(d.at[1] + dz * 6)], toLevel: 1, width: 2 });
-      }
-    }
     void es;
     void ux;
     void uz;

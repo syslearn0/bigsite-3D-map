@@ -452,7 +452,9 @@ export function VenueView() {
     for (const a of venue.areas) {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
-      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const south = a.name === "南コンコース";
+      const f = flatPoly(a.poly, south ? 0x9db7e0 : link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      if (south) f.userData.fadeOn1 = true; // 1F を見ているときは薄く（下の 1F の通路と重なるので）
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -968,7 +970,7 @@ export function VenueView() {
         const on = floorOf(lv) === currentFloor || (currentFloor === 1 && lv === 2 && !walk);
         for (const m of p.floors) {
           const mat = m.material as THREE.MeshLambertMaterial;
-          const see = m.userData.see as number | undefined;
+          const see = (m.userData.fadeOn1 && currentFloor === 1 ? 0.25 : m.userData.see) as number | undefined;
           mat.transparent = !on || see !== undefined;
           mat.opacity = on ? (see ?? 1) : 0.18;
           mat.depthWrite = on && see === undefined;
