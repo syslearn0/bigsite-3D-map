@@ -517,7 +517,7 @@ export function VenueView() {
       const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
       const n = Math.max(3, Math.round((y1 - y0) / 0.2));
       const geo = new THREE.BoxGeometry(st.width, 1, run / n + 0.02);
-      const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xc9c7bd }), n);
+      const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: LINK_COLOR }), n);
       const t = new THREE.Object3D();
       for (let i = 0; i < n; i++) {
         const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n;
@@ -529,7 +529,7 @@ export function VenueView() {
       }
       m.computeBoundingSphere();
       scene.add(m);
-      const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(90,80,60,.88)", height: 2.6, px: 30 });
+      const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(205,110,50,.92)", height: 2.6, px: 30 });
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
       scene.add(label);
       addLabel(label, "door");
