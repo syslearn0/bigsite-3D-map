@@ -29,6 +29,7 @@ type Venue = {
     stations: { name: string; line: string; at: XZ; y: number }[];
   };
   toilets: { at: XZ; level: number | null; kinds?: string[] }[];
+  toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" }[];
@@ -619,6 +620,18 @@ export function VenueView() {
         });
       }
     });
+    // トイレの部屋の囲み：床を薄い青にして、まわりに高さ 3m の壁
+    {
+      const roomWall = new THREE.MeshLambertMaterial({ color: 0x5f7fae, transparent: true, opacity: 0.75 });
+      for (const r of venue.toiletRooms ?? []) {
+        const f = flatPoly(r.poly, 0xc9d9f2, floorY(r.level) + 0.07);
+        scene.add(f);
+        partsOf(r.level).floors.push(f);
+        const w = walls(r.poly, floorY(r.level), 3, roomWall);
+        scene.add(w);
+        partsOf(r.level).solid.push(w);
+      }
+    }
     for (const t of venue.toilets) {
       const lv = t.level ?? 1;
       // 多機能トイレがあるときは「WC♿」

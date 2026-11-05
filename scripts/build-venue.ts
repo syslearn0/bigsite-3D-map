@@ -376,6 +376,13 @@ const toilets: Toilet[] = [
   }),
   ...osmToilets.filter((o) => !plan.toilets.some((t) => Math.hypot(t.at[0] - o.at[0], t.at[1] - o.at[1]) < 15)),
 ];
+// トイレの部屋の囲み（図面の壁から読んだ四角。scripts/extract-plan-toilets.py）。工事中のホールのものは出さない
+// ホールの壁から 15m より離れたもの（トイレの札を壁の外へ寄せたもの）は、位置が合わないので出さない
+const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; poly: XZ[] }[] }).toiletRooms ?? []).filter((r) => {
+  if (!usable(r.hall)) return false;
+  const c = centroid(r.poly), w = toWall(r.hall, c, 0);
+  return Math.hypot(w[0] - c[0], w[1] - c[1]) <= 15;
+});
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 // 出入口・搬入口（シャッター）。図面から読んだもの
 const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)).map((d) => {
@@ -421,6 +428,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, stairs }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);

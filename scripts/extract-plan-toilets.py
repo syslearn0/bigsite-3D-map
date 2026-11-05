@@ -74,6 +74,7 @@ out = []
 aids = []
 doors = []  # {"hall", "level", "at", "kind": "出入口" | "搬入口"}
 report = []
+toiletRooms = []  # トイレの部屋の囲み（図面の壁から）
 for hid, name in PLANS.items():
     f = ROOT / "data/private" / f"{name}.pdf"
     if not f.exists() or hid not in halls:
@@ -98,6 +99,32 @@ for hid, name in PLANS.items():
         cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
         pw, ph = (max(xs) - min(xs)) * PT, (max(ys) - min(ys)) * PT
     words = page.get_text("words")
+    # トイレの部屋の囲み：図面の壁（太さ 0.4pt 以上の縦横の線）を、文字の真ん中から上下左右へ探して、いちばん近い壁で囲まれた四角
+    walls_h, walls_v = [], []
+    for d in page.get_drawings():
+        if (d.get("width") or 0) < 0.4 or d.get("fill"):
+            continue
+        for it in d["items"]:
+            if it[0] != "l":
+                continue
+            a_, b_ = it[1], it[2]
+            if abs(a_.y - b_.y) < 0.5 and abs(a_.x - b_.x) > 4:
+                walls_h.append((min(a_.x, b_.x), max(a_.x, b_.x), a_.y))
+            elif abs(a_.x - b_.x) < 0.5 and abs(a_.y - b_.y) > 4:
+                walls_v.append((min(a_.y, b_.y), max(a_.y, b_.y), a_.x))
+    def room_at(px, py):
+        lim = 15 / PT  # 15m まで
+        left = max((x for y0, y1, x in walls_v if y0 - 1 <= py <= y1 + 1 and px - lim < x < px - 2), default=None)
+        right = min((x for y0, y1, x in walls_v if y0 - 1 <= py <= y1 + 1 and px + 2 < x < px + lim), default=None)
+        up = max((y for x0, x1, y in walls_h if x0 - 1 <= px <= x1 + 1 and py - lim < y < py - 2), default=None)
+        down = min((y for x0, x1, y in walls_h if x0 - 1 <= px <= x1 + 1 and py + 2 < y < py + lim), default=None)
+        if None in (left, right, up, down):
+            return None
+        wm, hm = (right - left) * PT, (down - up) * PT
+        if not (1.5 <= wm <= 15 and 1.5 <= hm <= 15):
+            return None
+        return [((x - cx) * PT, (y - cy) * PT) for x, y in ((left, up), (right, up), (right, down), (left, down))]
+    rooms = []
     pts = []
     aid = []
     door = []
@@ -120,6 +147,9 @@ for hid, name in PLANS.items():
         if MALE.search(t): g = "男子"
         elif FEMALE.search(t): g = "女子"
         pts.append(((px - cx) * PT, (py - cy) * PT, "多機能" if kind == "hc" else g or "トイレ"))
+        rm = room_at(px, py)
+        if rm and not any(all(abs(a[0] - b[0]) < 0.3 and abs(a[1] - b[1]) < 0.3 for a, b in zip(rm, r2)) for r2 in rooms):
+            rooms.append(rm)
     h = halls[hid]
     center, ang, L, W = min_rect(h["poly"])
     best = None
@@ -133,6 +163,7 @@ for hid, name in PLANS.items():
         world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz, kd) for x, y, kd in pts]
         aid_world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz) for _, x, y in aid]
         door_world = [(center[0] + x * rx + y * dx, center[1] + x * rz + y * dz, dk) for dk, x, y in door]
+        room_world = [[(round(center[0] + x * rx + y * dx, 2), round(center[1] + x * rz + y * dz, 2)) for x, y in rm] for rm in rooms]
         ins = sum(1 for x, z, _ in world if any(inside((x, z), b) for b in buildings))
         score = ins / max(1, len(world)) - size_err
         if hid in ORIENT:
@@ -143,8 +174,10 @@ for hid, name in PLANS.items():
             ux, uz = (dx, dz) if axis == "down" else (rx, rz)
             score = sign * (ux * vx + uz * vz) / math.hypot(vx, vz)  # 決めた向きにいちばん近いものを選ぶ
         if best is None or score > best[0]:
-            best = (score, k, world, ins, size_err, aid_world, (dx, dz), door_world)
-    score, k, world, ins, size_err, aid_world, down, door_world = best
+            best = (score, k, world, ins, size_err, aid_world, (dx, dz), door_world, room_world)
+    score, k, world, ins, size_err, aid_world, down, door_world, room_world = best
+    for rw in room_world:
+        toiletRooms.append({"hall": hid, "level": h["level"], "poly": [list(q) for q in rw]})
     for x, z, dk in door_world:
         doors.append({"hall": hid, "level": h["level"], "at": [round(x, 1), round(z, 1)], "kind": dk})
     for x, z in aid_world:
@@ -356,6 +389,6 @@ def read_voids():
 voidStairs = []  # 吹き抜けの中の階段・エスカレーター（2F の端 from → 1F to）
 voidWalls = []  # 吹き抜けの内側の辺にそった壁（1F から 2F まで）
 voids = read_voids()
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs, "voidWalls": voidWalls, "westEsc": westEsc}, ensure_ascii=False, indent=1), encoding="utf-8")
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs, "voidWalls": voidWalls, "westEsc": westEsc, "toiletRooms": toiletRooms}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
 print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")
