@@ -131,7 +131,36 @@ function corridor(a: XZ, b: XZ, w: number): XZ[] {
 }
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][] }; // see：下が透けて見える床（半透明）、holes：吹き抜け
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+// 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
+function between(rowA: string[], rowB: string[]): XZ[] {
+  const cen = (ids: string[]) => centroid(ids.flatMap((id) => halls.find((h) => h.id === id)!.poly));
+  const facing = (id: string, toward: XZ): XZ[] => {
+    const p = halls.find((h) => h.id === id)!.poly;
+    let best: [number, XZ[]] = [Infinity, []];
+    p.forEach((a, i) => {
+      const b = p[(i + 1) % p.length];
+      const d = Math.hypot((a[0] + b[0]) / 2 - toward[0], (a[1] + b[1]) / 2 - toward[1]);
+      if (d < best[0]) best = [d, [a, b]];
+    });
+    return best[1];
+  };
+  const ca = cen(rowA), cb = cen(rowB);
+  const pts = [...rowA.flatMap((id) => facing(id, cb)), ...rowB.flatMap((id) => facing(id, ca))];
+  // 凸包（ギフト包装）
+  const hull: XZ[] = [];
+  let p0 = pts.reduce((m, q) => (q[0] < m[0] ? q : m));
+  do {
+    hull.push(p0);
+    let next = pts[0];
+    for (const q of pts) {
+      const cr = (next[0] - p0[0]) * (q[1] - p0[1]) - (next[1] - p0[1]) * (q[0] - p0[0]);
+      if (next === p0 || cr < 0) next = q;
+    }
+    p0 = next;
+  } while (p0 !== hull[0] && hull.length < pts.length + 1);
+  return hull;
+} // see：下が透けて見える床（半透明）、holes：吹き抜け
 const areas: Area[] = [
   ...[
     ["エントランスプラザ", 2],
@@ -146,6 +175,9 @@ const areas: Area[] = [
   ].map(([name, level]) => ({ name: String(name).replace("Ｆ ", "F "), level: Number(level), poly: poly(byName(String(name))) })),
   // 東1〜3 と東4〜6 のあいだの通路（ガレリア）。OSM では名前が「西２F」と書かれている（way 543048845、東展示棟の通路）
   { name: "東ガレリア", level: 1, poly: poly(byId(543048844)) },
+  // ホールとガレリアのあいだ（ホール前の部屋や通路の帯）。OSM のガレリアの形はホールの壁まで届いていないので、
+  // 東1〜3 と東4〜6 の向かい合う壁のあいだを、床でうめる（ガレリアの下に敷く）
+  { name: "ホール前", level: 1, poly: between(["E1", "E2", "E3"], ["E4", "E5", "E6"]), under: true },
   // ガレリアの上の 2F の通路（東展示棟 2F）。北コンコース・連絡ブリッジから段差なしで入る。下のガレリアが見えるよう、地図では半透明
   {
     name: "東展示棟 2F",

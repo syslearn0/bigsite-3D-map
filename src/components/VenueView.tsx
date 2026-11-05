@@ -20,7 +20,7 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][] }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
@@ -451,7 +451,7 @@ export function VenueView() {
     for (const a of venue.areas) {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
-      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.8 : 1, a.holes ?? []);
+      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -470,6 +470,7 @@ export function VenueView() {
           partsOf(a.level).solid.push(rail);
         }
       }
+      if (a.under) continue;
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
       const [cx, cz] = centroid(a.poly);
       label.position.set(cx, y + 3, cz);
