@@ -124,6 +124,26 @@ const southRest: XZ[] = southHall;
 
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+function southConcourse(): Area[] {
+  if (!existsSync("data/osm/surroundings.json")) return [];
+  const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
+  const e = so.elements.find((x) => x.id === 1127507757 && x.geometry);
+  if (!e) return [];
+  const line = e.geometry!.map((g) => project(ORIGIN, g.lat, g.lon));
+  const pts: XZ[] = line;
+  const w = 4; // 半分の幅
+  const left: XZ[] = [], right: XZ[] = [];
+  pts.forEach((p, i) => {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / L, nz = (b[0] - a[0]) / L;
+    const r = (v: number) => Math.round(v * 10) / 10;
+    left.push([r(p[0] + nx * w), r(p[1] + nz * w)]);
+    right.push([r(p[0] - nx * w), r(p[1] - nz * w)]);
+  });
+  southConcourseLine = pts;
+  return [{ name: "南コンコース", level: 2, poly: [...left, ...right.reverse()] }];
+}
+let southConcourseLine: XZ[] = [];
 // ホール a の、ホール b に向かい合う辺を、b の向かい合う辺の線まで直角にのばした四角
 function rectBetween(a: string, b: string, extra: XZ[] = []): XZ[] {
   const pa = halls.find((h) => h.id === a)!.poly, pb = halls.find((h) => h.id === b)!.poly;
@@ -216,6 +236,9 @@ const areas: Area[] = [
   // 西4 の向かい合う壁と、同じ線の上に続く屋上展示場の端（航空写真：ホールの外の屋上がそのまま南へ続く）を合わせた辺を、
   // 南3 の壁の線まで直角にのばした四角にする
   { name: "南展示棟への通路（4F）", level: 4, poly: rectBetween("W4", "S3", southLinkRoof) },
+  // 南コンコース（2F）：エントランスプラザ・イベントプラザから南展示棟の入口まで 2F のまま続く通路（公式フロアマップの「南コンコース」「コンコース」）。
+  // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
+  ...southConcourse(),
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
@@ -285,6 +308,23 @@ const stairs: Stair[] = [];
     const vs = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidStairs?: { kind: string; from: XZ; to: XZ; width: number }[] }).voidStairs ?? []) : [];
     for (const v of vs)
       stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
+    // 南展示棟の入口：南コンコース（2F）から 1F へ下りるエスカレーター。位置は南1 の図面（白図）の「ＥＳ」のうち、
+    // 南コンコースの線から 20m 以内のもの。向きはいちばん近い南コンコースの区間の向き、上（2F）が北（エントランスプラザ）の側
+    if (southConcourseLine.length >= 2) {
+      for (const d of planDoors.filter((x) => x.kind === "ES" && x.hall === "S1" && !halls.some((h) => h.level === 1 && pointInPolygon(x.at, h.poly)))) {
+        let best: [number, number, number] = [Infinity, 1, 0];
+        for (let k = 0; k + 1 < southConcourseLine.length; k++) {
+          const a = southConcourseLine[k], b = southConcourseLine[k + 1];
+          const ddx = b[0] - a[0], ddz = b[1] - a[1], L2 = ddx * ddx + ddz * ddz || 1, L = Math.sqrt(L2);
+          const t = Math.max(0, Math.min(1, ((d.at[0] - a[0]) * ddx + (d.at[1] - a[1]) * ddz) / L2));
+          const dist = Math.hypot(d.at[0] - a[0] - t * ddx, d.at[1] - a[1] - t * ddz);
+          if (dist < best[0]) best = [dist, ddx / L, ddz / L];
+        }
+        if (best[0] > 20) continue;
+        const [, dx, dz] = best;
+        stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(d.at[0] - dx * 6), r(d.at[1] - dz * 6)], fromLevel: 2, to: [r(d.at[0] + dx * 6), r(d.at[1] + dz * 6)], toLevel: 1, width: 2 });
+      }
+    }
     void es;
     void ux;
     void uz;
