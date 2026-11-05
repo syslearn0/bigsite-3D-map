@@ -264,12 +264,14 @@ const stairs: Stair[] = [];
     }
     const planDoors = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { doors?: { at: XZ; kind: string; hall: string }[] }).doors ?? []) : [];
     const es = planDoors.filter((d) => d.kind === "ES" && /^E[123]$/.test(d.hall)).map((d) => ({ hall: d.hall, at: d.at }));
-    // 図面の ES の位置に、ガレリアの長い向きに 12m（ストリートビューで、真ん中の 2F の床の下から上がっているのを確かめた）
-    for (const e of es) {
-      if (!pointInPolygon(e.at, g)) continue;
-      const at = e.at, half = 6;
-      stairs.push({ name: "エスカレーター（1F⇔2F）", kind: "escalator", from: [r(at[0] + ux * half), r(at[1] + uz * half)], fromLevel: 2, to: [r(at[0] - ux * half), r(at[1] - uz * half)], toLevel: 1, width: 3 });
-    }
+    // 吹き抜けの中の階段とエスカレーター（施設案内の 2F全体図で、吹き抜けの端に描かれた段から読んだもの。scripts/extract-plan-toilets.py）。
+    // ストリートビューでも、吹き抜けの下で、エスカレーターと幅の広い階段が並んで 2F へ上がっている
+    const vs = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voidStairs?: { kind: string; from: XZ; to: XZ; width: number }[] }).voidStairs ?? []) : [];
+    for (const v of vs)
+      stairs.push({ name: v.kind === "escalator" ? "エスカレーター（1F⇔2F）" : "階段・エスカレーター（1F⇔2F）", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
+    void es;
+    void ux;
+    void uz;
   }
 }
 

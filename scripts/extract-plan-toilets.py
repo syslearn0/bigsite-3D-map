@@ -302,14 +302,41 @@ def read_voids():
     gx0, gx1 = left[0][2], right[0][0]  # ガレリア（左右のホールの × のあいだ）
     gy0, gy1 = min(q[1] for q in big), max(q[3] for q in big)
     voids = []
+    voidStairs.clear()
     for q in xs:
         if q[0] >= gx0 - 1 and q[2] <= gx1 + 1 and q[1] >= gy0 - 5 and q[3] <= gy1 + 5 and q[2] - q[0] >= 3 and q[3] - q[1] >= 8:
             corners = [(q[0], q[1]), (q[2], q[1]), (q[2], q[3]), (q[0], q[3])]
             voids.append([[round(float(v), 1) for v in np.array([x, y, 1]) @ M] for x, y in corners])
+    # 吹き抜けの中の階段・エスカレーター：2F全体図では、吹き抜けの片方の端に、段（短い横線がならぶ）が描かれている。
+    # 段の多い方の端が 2F に着く所。そこから吹き抜けの中へ、階段（幅の半分）とエスカレーター（となり）を 1F へ下ろす
+    segs = []
+    for dr in p.get_drawings():
+        for it in dr["items"]:
+            if it[0] == "l":
+                segs.append((it[1].x, it[1].y, it[2].x, it[2].y))
+    to_v = lambda x, y: [round(float(v), 1) for v in np.array([x, y, 1]) @ M]
+    for q in xs:
+        if not (q[0] >= gx0 - 1 and q[2] <= gx1 + 1 and q[1] >= gy0 - 5 and q[3] <= gy1 + 5 and q[2] - q[0] >= 3 and q[3] - q[1] >= 8):
+            continue
+        w = q[2] - q[0]
+        treads = [((a + c) / 2, (b + d) / 2) for a, b, c, d in segs
+                  if abs(d - b) < 0.3 and 0.15 * w < abs(c - a) < 0.7 * w and q[0] - 0.5 <= min(a, c) and max(a, c) <= q[2] + 0.5 and q[1] - 0.5 <= b <= q[3] + 0.5]
+        if len(treads) < 4:
+            continue
+        ym = (q[1] + q[3]) / 2
+        top_at_y0 = sum(1 for _, y in treads if y < ym) >= sum(1 for _, y in treads if y >= ym)
+        ye, sgn = (q[1], 1) if top_at_y0 else (q[3], -1)
+        run = 7.0  # 図面の pt（約 11m）
+        tx = sum(x for x, _ in treads) / len(treads)  # 段のある側（左右）
+        stair_x = tx
+        esc_x = q[0] + w * 0.8 if tx < (q[0] + q[2]) / 2 else q[0] + w * 0.2
+        voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye + sgn * 0.3), "to": to_v(stair_x, ye + sgn * (0.3 + run)), "width": round(w * 0.4 * 1.64, 1)})
+        voidStairs.append({"kind": "escalator", "from": to_v(esc_x, ye + sgn * 0.3), "to": to_v(esc_x, ye + sgn * (0.3 + run)), "width": 1.6})
     report.append(f"東展示棟 2F の吹き抜け {len(voids)}（ホールの真ん中のずれ 最大 {err:.1f}m）")
     return voids
 
+voidStairs = []  # 吹き抜けの中の階段・エスカレーター（2F の端 from → 1F to）
 voids = read_voids()
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids}, ensure_ascii=False, indent=1), encoding="utf-8")
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
 print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")
