@@ -454,7 +454,7 @@ export function VenueView() {
     for (const a of venue.areas) {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
-      const south = a.name === "南コンコース";
+      const south = a.name === "南コンコース" || a.name === "コンコース";
       const f = flatPoly(a.poly, south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);

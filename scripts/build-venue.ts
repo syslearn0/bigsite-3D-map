@@ -150,7 +150,7 @@ function southConcourse(): Area[] {
     left.push([r(p[0] + nx * w), r(p[1] + nz * w)]);
     right.push([r(p[0] - nx * w), r(p[1] - nz * w)]);
   });
-  return [{ name: "南コンコース", level: 2, poly: [...left, ...right.reverse()] }];
+  return [{ name: "コンコース", level: 2, poly: [...left, ...right.reverse()] }];
 }
 // ホール a の、ホール b に向かい合う辺を、b の向かい合う辺の線まで直角にのばした四角
 function rectBetween(a: string, b: string, extra: XZ[] = []): XZ[] {
@@ -258,7 +258,7 @@ const areas: Area[] = [
   // 西4 の向かい合う壁と、同じ線の上に続く屋上展示場の端（航空写真：ホールの外の屋上がそのまま南へ続く）を合わせた辺を、
   // 南3 の壁の線まで直角にのばした四角にする
   { name: "南展示棟への通路（4F）", level: 4, poly: rectBetween("W4", "S3", southLinkRoof) },
-  // 南コンコース（2F）：エントランスプラザ・イベントプラザから南展示棟の入口まで 2F のまま続く通路（公式フロアマップの「南コンコース」「コンコース」）。
+  // コンコース（2F）：イベントプラザから南展示棟まで 2F のまま続く長い通路（公式フロアマップの「コンコース」）。
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
   ...southConcourse(),
   // 南コンコース（西）：エントランスプラザと西の 4F アトリウムのあいだの 2F の通路（OSM way 154080986）。公式の図ではここに 4F・1F へのエスカレーターが着く
@@ -349,7 +349,7 @@ const stairs: Stair[] = [];
       const L = run(2, 4), d = Math.hypot(aim[0] - top[0], aim[1] - top[1]);
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ((aim[0] - top[0]) / d) * L), r(top[1] + ((aim[1] - top[1]) / d) * L)], toLevel: 2, width: 2 });
     }
-    // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。印を南コンコースの線の上に寄せ、南コンコースの向きにそろえる
+    // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。印をコンコースの線の上に寄せ、コンコースの向きにそろえる
     if (southLine.length >= 2) {
       const onLine = (p: XZ): [XZ, XZ] => {
         let best: [number, XZ, XZ] = [Infinity, p, [1, 0]];
