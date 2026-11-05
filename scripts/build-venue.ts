@@ -628,7 +628,7 @@ for (const h of halls) {
     return out;
   };
   const size = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
-  const outside = (name: string, level: number, rects: XZ[][], carve: string[] = []) => {
+  const outside = (name: string, level: number, rects: XZ[][], carve: string[] = [], add = true) => {
     let res = polygonClipping.union([ring(fromUV(rects[0]))], ...rects.slice(1).map((r) => [ring(fromUV(r))]));
     const others = [...halls.filter((h) => h.level === level).map((h) => h.poly), ...areas.filter((a) => a.level === level && !carve.includes(a.name)).map((a) => a.poly)];
     for (const o of others) res = polygonClipping.difference(res, [ring(o)]);
@@ -640,24 +640,31 @@ for (const h of halls) {
         a.holes = big[0].holes.length ? big[0].holes : undefined;
       }
     }
+    if (!add) return;
     for (const pg of res) {
       const poly = unring(pg[0]);
       if (poly.length >= 3 && size(poly) > 30) areas.push({ name, level, poly, holes: pg.length > 1 ? pg.slice(1).map(unring) : undefined, outdoor: true });
     }
   };
-  // 東：東1〜3 の外（搬入口の側）と、東1 の端・東3 の端の広場。東7・東8 の北東の大きな駐車場と、東7 の西わきの道
-  outside("外の通路（1F）", 1, [
+  // 東：東1〜3 の外（搬入口の側）と、東1 の端・東3 の端の広場。名前はコミケの会場案内図の「トラックヤード」
+  outside("トラックヤード", 1, [
     [[105, -500], [140, -500], [140, -175], [105, -175]],
     [[0, -218], [140, -218], [140, -172], [0, -172]],
     [[10, -528], [140, -528], [140, -494], [10, -494]],
-    [[-90, -722], [120, -722], [120, -545], [-90, -545]],
-    [[-168, -705], [-140, -705], [-140, -545], [-168, -545]],
   ]);
+  // 東7・東8 の北東の大きな駐車場（公式フロアマップの「東棟屋外臨時駐車場」。コミケでは一般参加者の待機列に使う所）
+  outside("東棟屋外臨時駐車場", 1, [[[-90, -722], [120, -722], [120, -567], [-90, -567]]]);
+  // 東7 の西わきの道
+  outside("外の通路（1F）", 1, [[[-168, -705], [-140, -705], [-140, -545], [-168, -545]]]);
   // 西：西1 の外（北東の 4F の通路の下と、南東の側）
   outside("外の通路（1F）", 1, [
     [[56, -98], [222, -98], [222, -83], [56, -83]],
     [[202, -98], [222, -98], [222, 16], [202, 16]],
   ]);
+  // 南棟立体駐車場：南2・南4 の東の端（航空写真で屋上に車が止まっている所。公式フロアマップ・コミケの会場案内図にも「立体駐車場」）。
+  // 南展示棟の床（建物の形をそのまま敷いたもの）から切りとって、1F に駐車場として置く（会場の床ではない）
+  outside("南棟立体駐車場", 1, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟"]);
+  outside("南棟立体駐車場", 4, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟（4F）"], false);
   // 南：南3・南4 の北の 4F の通路（西4 の外の通路から、南展示棟への通路（4F）を通って続く。航空写真で v 12〜34）
   outside("外の通路（4F）", 4, [[[255, 12.4], [444.6, 12.4], [444.6, 34.4], [255, 34.4]]], ["南展示棟（4F）"]);
 }
