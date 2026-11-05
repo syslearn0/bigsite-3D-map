@@ -514,6 +514,30 @@ export function VenueView() {
       scene.add(m);
       partsOf(d.level).solid.push(m);
       addLabel(m, d.kind === "出入口" ? "door" : "shutter");
+      if (d.kind !== "出入口") continue;
+      // 3D・歩くでは、戸口の上（梁）の両側（ホールの内と外）に看板を貼る。浮いた札は上から見るときだけ
+      m.userData.topOnly = true;
+      const h = hallById.get(d.hall);
+      if (!h) continue;
+      let best = { d: Infinity, ux: 1, uz: 0 };
+      h.poly.forEach((a, i) => {
+        const b = h.poly[(i + 1) % h.poly.length];
+        const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1, L = Math.sqrt(L2);
+        const t = Math.max(0, Math.min(1, ((d.at[0] - a[0]) * dx + (d.at[1] - a[1]) * dz) / L2));
+        const dist = Math.hypot(d.at[0] - a[0] - t * dx, d.at[1] - a[1] - t * dz);
+        if (dist < best.d) best = { d: dist, ux: dx / L, uz: dz / L };
+      });
+      if (best.d > 3) continue; // 壁から離れた出入口（ホールの外の建物など）は看板を貼らない
+      const nx = -best.uz, nz = best.ux;
+      const sh = 0.9, sw = (sh * m.scale.x) / m.scale.y;
+      const signMat = new THREE.MeshBasicMaterial({ map: (m.material as THREE.SpriteMaterial).map, transparent: true });
+      for (const k of [1, -1]) {
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(sw, sh), signMat);
+        sign.position.set(d.at[0] + nx * k * 0.22, floorY(d.level) + DOOR_H + 0.7, d.at[1] + nz * k * 0.22);
+        sign.rotation.y = Math.atan2(nx * k, nz * k);
+        scene.add(sign);
+        partsOf(d.level).solid.push(sign);
+      }
     }
     for (const a of venue.firstAid) {
       const m = textSprite("＋ 救護室", { bg: "rgba(200,30,30,.92)", height: 3, px: 34 });
@@ -1045,7 +1069,7 @@ export function VenueView() {
     const placeLabels = () => {
       const walk = current === "walk";
       for (const { s, kind, base } of labels) {
-        let show = s.userData.levelOn !== false;
+        let show = s.userData.levelOn !== false && !(s.userData.topOnly && current !== "top");
         if (walk) {
           s.scale.copy(base);
           if (kind === "hall") show = false;
