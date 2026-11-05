@@ -121,27 +121,6 @@ halls.push({ id: "S4", name: "南4ホール", building: "南", level: 4, poly: s
 // 南展示棟の建物の、ホール以外（エントランスホールなど）も床として見せる
 const southRest: XZ[] = southHall;
 
-function linkW4S3(): XZ[] {
-  const w4 = halls.find((h) => h.id === "W4")!.poly, s3 = halls.find((h) => h.id === "S3")!.poly;
-  let best: [number, XZ, XZ] = [Infinity, w4[0], s3[0]];
-  for (const p of w4)
-    s3.forEach((a, i) => {
-      const b = s3[(i + 1) % s3.length];
-      const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
-      const q: XZ = [a[0] + t * dx, a[1] + t * dz];
-      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
-      if (d < best[0]) best = [d, p, q];
-    });
-  return corridor(best[1], best[2], 10);
-}
-// 2点をむすぶ幅 w の通路
-function corridor(a: XZ, b: XZ, w: number): XZ[] {
-  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  const nx = (-(b[1] - a[1]) / L) * (w / 2), nz = ((b[0] - a[0]) / L) * (w / 2);
-  const r = (v: number) => Math.round(v * 10) / 10;
-  return [[r(a[0] + nx), r(a[1] + nz)], [r(b[0] + nx), r(b[1] + nz)], [r(b[0] - nx), r(b[1] - nz)], [r(a[0] - nx), r(a[1] - nz)]];
-}
 
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
@@ -205,9 +184,9 @@ const areas: Area[] = [
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
   // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする
-  // 公式フロアマップの 4F 図：西4 の、屋上展示場と接する端の角から、南3 の西側の通路へ白い通路でつながる。
-  // 西4 のその角（南3 にいちばん近い角）から、南3 の壁のいちばん近い点まで。幅は図からは読めないので 10m
-  { name: "南展示棟への通路（4F）", level: 4, poly: linkW4S3() },
+  // 西4 と南3 のあいだの 4F の通路・広場。航空写真では、西4 と南3 の向かい合う壁のあいだが広く舗装された面でつながっている。
+  // 向かい合う壁の端どうしを囲む面にする
+  { name: "南展示棟への通路（4F）", level: 4, poly: between(["W4"], ["S3"]) },
   { name: "南展示棟", level: 1, poly: southRest },
 ];
 
@@ -243,19 +222,16 @@ const stairs: Stair[] = [];
   const r = (v: number) => Math.round(v * 10) / 10;
   const areaOf = (n: string) => areas.find((a) => a.name === n)!.poly;
   // 西のアトリウムの、1F と 4F をむすぶ長いエスカレーター。
-  // 上の端：西3 の図面（白図）の「ＥＳＣ」の段の位置（scripts/extract-plan-toilets.py が data/plan-toilets.json の westEsc に書く）。
-  // 向き：同じ図面の段の手すりの線にそって、アトリウムの吹抜けの側へ下りる（公式フロアマップの 1F 図で、エスカレーターの印は
-  // アトリウムの真ん中、4F 図では西3 の入口の角。写真でも吹抜けの中を 1F から 4F へ渡っている）。長さは高さから（30° ほど）
+  // ストリートビュー（西展示棟アトリウムの 1F の 360° 写真、撮影位置 35.6290091, 139.7947245）で見た向きと位置：
+  // 下の端は撮影位置の西（方位 270°）10〜15m、そこから南南西（方位 195° ほど）へ上がる。長さは高さから（30° ほど）。
+  // 写真の撮影位置は数十 m ずれることがあるので、位置は目安
   {
-    const we = existsSync("data/plan-toilets.json") ? (JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { westEsc?: { top: XZ; dir: XZ } }).westEsc : undefined;
-    if (we) {
-      // 図面の段の向きの2つのうち、1F アトリウムの真ん中に向かう方へ下りる
-      const c1 = centroid(areaOf("1F アトリウム"));
-      let [ux, uz] = we.dir;
-      if ((c1[0] - we.top[0]) * ux + (c1[1] - we.top[1]) * uz < 0) [ux, uz] = [-ux, -uz];
-      const run = FLOOR_Y[4] * 1.8;
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(we.top[0]), r(we.top[1])], fromLevel: 4, to: [r(we.top[0] + ux * run), r(we.top[1] + uz * run)], toLevel: 1, width: 5 });
-    }
+    const cam = project(ORIGIN, 35.6290091, 139.7947245);
+    const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
+    const [bx, bz] = bearing(270), [ux, uz] = bearing(195);
+    const bottom: XZ = [cam[0] + bx * 12, cam[1] + bz * 12];
+    const run = FLOOR_Y[4] * 1.8;
+    stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(bottom[0] + ux * run), r(bottom[1] + uz * run)], fromLevel: 4, to: [r(bottom[0]), r(bottom[1])], toLevel: 1, width: 5 });
   }
   // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所（図面から読めたものだけ）に、ガレリアの長い向きに 12m
   {
