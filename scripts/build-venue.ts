@@ -158,6 +158,7 @@ const areas: Area[] = [
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：
 // 会議棟の横のエントランスプラザの辺（プラザの1本目の辺の 55% の所）から、1F アトリウム（低くなった中庭）の上を
 // まっすぐ渡って、屋上展示場の北東の辺につながる（航空写真の橋と階段の位置。OSM に階段の形がないので、その目安）
+const linkRoutes: { level: number; pts: XZ[] }[] = []; // 連絡通路への道（地図で太い矢印の線）
 type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" };
 const stairs: Stair[] = [];
 {
@@ -207,8 +208,7 @@ const stairs: Stair[] = [];
     const run = FLOOR_Y[4] * 1.8; // 30° ほどの傾き
     stairs.push({ name: "エスカレーター（1F⇔4F）", kind: "escalator", from: [r(top[0] - ux * 1.5), r(top[1] - uz * 1.5)], fromLevel: 4, to: [r(top[0] + ux * run), r(top[1] + uz * run)], toLevel: 1, width: 5 });
   }
-  // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所に、ガレリアの長い向きに 12m。東3 の図面は文字を読めないので、
-  // 東1〜3 は同じつくり（同じ大きさの四角が並ぶ）として、東1 の ES をホールの中心の差だけずらして東2・東3 にも置く（近くにあれば足さない）
+  // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所（図面から読めたものだけ）に、ガレリアの長い向きに 12m
   {
     const g = areaOf("東ガレリア");
     const gi = g.map((p, i) => [p, g[(i + 1) % g.length]] as [XZ, XZ]).sort((x, y) => Math.hypot(y[1][0] - y[0][0], y[1][1] - y[0][1]) - Math.hypot(x[1][0] - x[0][0], x[1][1] - x[0][1]))[0];
@@ -224,16 +224,29 @@ const stairs: Stair[] = [];
     }
     const planDoors = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { doors?: { at: XZ; kind: string; hall: string }[] }).doors ?? []) : [];
     const es = planDoors.filter((d) => d.kind === "ES" && /^E[123]$/.test(d.hall)).map((d) => ({ hall: d.hall, at: d.at }));
-    const cOf = (id: string) => centroid(halls.find((h) => h.id === id)!.poly);
-    for (const id of ["E2", "E3"])
-      for (const e of es.filter((x) => x.hall === "E1")) {
-        const [ax, az] = cOf("E1"), [bx, bz] = cOf(id);
-        const at: XZ = [e.at[0] + bx - ax, e.at[1] + bz - az];
-        if (!es.some((x) => Math.hypot(x.at[0] - at[0], x.at[1] - at[1]) < 10)) es.push({ hall: id, at });
-      }
     for (const e of es) {
       if (!pointInPolygon(e.at, g)) continue;
       stairs.push({ name: "エスカレーター（1F⇔2F）", kind: "escalator", from: [r(e.at[0] + ux * 6), r(e.at[1] + uz * 6)], fromLevel: 2, to: [r(e.at[0] - ux * 6), r(e.at[1] - uz * 6)], toLevel: 1, width: 3 });
+    }
+    // 連絡通路への道（2F）：エスカレーターを上がった所から、ガレリアの上の真ん中の線を西へ進み、北コンコース・連絡ブリッジを通って
+    // エントランスプラザまで。地図では太い矢印の線にして、東ホールから西・会議棟への行き方がすぐ分かるようにする
+    {
+      const gc = centroid(g);
+      const along = (p: XZ) => (p[0] - gc[0]) * ux + (p[1] - gc[1]) * uz;
+      const onLine = (t: number): XZ => [r(gc[0] + ux * t), r(gc[1] + uz * t)];
+      const nc = areaOf("北コンコース"), br = areaOf("連絡ブリッジ"), ep = areaOf("エントランスプラザ");
+      // ガレリアの真ん中の線の、連絡ブリッジに近い方の端（西の端）。そこから連絡ブリッジ → 北コンコース → エントランスプラザ
+      const brc = centroid(br), ncc = centroid(nc);
+      const ts = g.map(along), tMin = Math.min(...ts), tMax = Math.max(...ts);
+      const westIsMin = Math.abs(along(brc) - tMin) < Math.abs(along(brc) - tMax);
+      const tWest = westIsMin ? tMin + 6 : tMax - 6;
+      const [, plazaIn] = near(ncc, ep);
+      const tops = stairs.filter((st) => st.name === "エスカレーター（1F⇔2F）").map((st) => st.from);
+      const tFar = westIsMin ? Math.max(...tops.map(along)) : Math.min(...tops.map(along));
+      const main: XZ[] = [onLine(tFar), onLine(tWest), brc.map(r) as XZ, ncc.map(r) as XZ, [r(plazaIn[0]), r(plazaIn[1])]];
+      linkRoutes.push({ level: 2, pts: main });
+      // それぞれのエスカレーターの上から、真ん中の線へ
+      for (const t of tops) linkRoutes.push({ level: 2, pts: [t, onLine(along(t))] });
     }
   }
 }
@@ -368,6 +381,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, firstAid, doors, stairs, linkRoutes }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
