@@ -449,27 +449,6 @@ export function VenueView() {
       partsOf(h.level).solid.push(label);
       addLabel(label, "hall");
     }
-    // 会場案内図から写したもの：通行不可（灰）の場所と、サークル入口（待機列・入場経路・待ち合わせの大玉は、分かりにくいので出さない）
-    for (const a of (features?.areas ?? []).filter((x) => x.kind === "closed")) {
-      const y = floorY(a.level);
-      const m = flatPoly(a.poly, 0x9a9d9a, y + 0.06, 0.6);
-      scene.add(m);
-      partsOf(a.level).floors.push(m);
-      const label = textSprite("通行不可", { bg: "rgba(90,92,90,.85)", height: 2.6, px: 30 });
-      const [cx, cz] = centroid(a.poly);
-      label.position.set(cx, y + 2.6, cz);
-      scene.add(label);
-      partsOf(a.level).solid.push(label);
-      addLabel(label, "shutter");
-    }
-    for (const mk of (features?.marks ?? []).filter((x) => x.kind === "circle-entrance")) {
-      const entrance = mk.kind === "circle-entrance";
-      const s = textSprite(entrance ? `▶ ${mk.name}` : `● ${mk.name}`, { bg: entrance ? "rgba(20,90,170,.92)" : "rgba(180,40,110,.92)", height: 2.6, px: 30 });
-      s.position.set(mk.at[0], floorY(mk.level) + 3, mk.at[1]);
-      scene.add(s);
-      partsOf(mk.level).solid.push(s);
-      addLabel(s, "door");
-    }
     // 階段（屋上展示場からエントランスプラザへ）。段は 0.2m ほどの高さで、どの階を見ていても出す
     for (const st of venue.stairs ?? []) {
       const y0 = floorY(st.toLevel), y1 = floorY(st.fromLevel);
