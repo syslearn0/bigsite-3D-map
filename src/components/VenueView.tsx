@@ -1000,6 +1000,13 @@ export function VenueView() {
         c.target.copy(focus);
         c.update();
         controls = c;
+        // 開発中だけ：見た目の確認（スクショ）用に、カメラを座標で動かせるようにする
+        if (process.env.NODE_ENV !== "production")
+          (window as unknown as { __look?: (tx: number, ty: number, tz: number, px: number, py: number, pz: number) => void }).__look = (tx, ty, tz, px, py, pz) => {
+            c.target.set(tx, ty, tz);
+            persp.position.set(px, py, pz);
+            c.update();
+          };
       } else {
         camera = persp;
         persp.position.set(focus.x, eyeY(), focus.z);

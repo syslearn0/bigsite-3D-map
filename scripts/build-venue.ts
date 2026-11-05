@@ -428,7 +428,7 @@ const stairs: Stair[] = [];
   }
 }
 
-// 階段・エスカレーターの上にかかる床に穴をあける：段の上（頭の高さ 2.5m）がその床の高さを越える所から、上の端（その階なら 1m 手前）まで。
+// 階段・エスカレーターの上にかかる床に穴をあける：上の端の階の床は段の下の端から上の端の 1m 手前まで、途中の階の床は段がその 6m 下に来る所から上まで。
 // 穴は段のまわりに 2.5m ずつ広い四角（実物の吹き抜けは段よりずっと大きい）。床の形から四角を引き算するので、
 // 床のふちにかかる穴は「切り欠き」に、もとの吹き抜けと重なる穴は吹き抜けとひとつになる。
 // 引き算で床が切れて分かれてしまうときは、穴のまわりの余白を 1m・0.3m とせまくしてみて、それでも分かれるなら、かけらも床として残す
@@ -452,7 +452,9 @@ const stairs: Stair[] = [];
     for (const a of [...areas]) {
       if (!(a.level > st.toLevel && a.level <= st.fromLevel)) continue;
       const fy = FLOOR_Y[a.level];
-      const t0 = Math.max(-2 / len, Math.min(1, (fy - 2.5 - y0) / (y1 - y0)) - 2 / len);
+      // 上の端の階の床は、段の下の端から（段がその床の下にもぐって、途中で切れて見えないように）。
+      // 途中の階の床は、段がその床の 6m 下に来る所から
+      const t0 = a.level === st.fromLevel ? -2 / len : Math.max(-2 / len, Math.min(1, (fy - 6 - y0) / (y1 - y0)) - 2 / len);
       const t1 = a.level === st.fromLevel ? Math.max(t0, 1 - 1 / len) : Math.min(1, (fy - y0) / (y1 - y0) + 0.5 / len);
       if (t1 - t0 < 0.02) continue;
       const rect = (hw: number): XZ[] => {
