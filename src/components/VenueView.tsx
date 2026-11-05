@@ -60,7 +60,7 @@ const DESK_COLOR = 0xf2f1ea;
 // ホールの外の歩く所（通路・広場）の色。東展示棟からの連絡路（連絡ブリッジ・北コンコース）は、ほかの通路と分ける
 const AREA_COLOR = 0xece3b6;
 const LINK_COLOR = 0xf0b48a;
-const OUTDOOR_COLOR = 0xc3c7c4;
+const OUTDOOR_COLOR = 0xaab1ac;
 const ROOF_COLOR = 0x5ec8f0; // 屋上展示場（水色で目立たせる） // 屋外（屋上展示場・エントランスプラザなど。公式フロアマップの灰色）。屋内の通路は AREA_COLOR
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
@@ -97,6 +97,33 @@ function loadPins(): Record<Mark, boolean> {
 }
 
 const floorY = (level: number) => venue.floorY[String(level)] ?? 0;
+// 名前の札を置く所：形の重心が形の中なら重心。L 字などで外に出るときは、形の中で、ふちからいちばん遠い所（2m ごとに探す）
+function insidePoint(poly: XZ[], holes: XZ[][]): XZ {
+  const inPoly = (p: XZ) => pointInPolygon(p, poly) && !holes.some((h) => pointInPolygon(p, h));
+  const c = centroid(poly);
+  if (inPoly(c)) return c;
+  const edgeDist = (p: XZ) => {
+    let best = Infinity;
+    for (const r of [poly, ...holes])
+      r.forEach((a, i) => {
+        const b = r[(i + 1) % r.length];
+        const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+        best = Math.min(best, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dz));
+      });
+    return best;
+  };
+  const xs = poly.map((p) => p[0]), zs = poly.map((p) => p[1]);
+  let best: [number, XZ] = [-1, c];
+  for (let x = Math.min(...xs); x <= Math.max(...xs); x += 2)
+    for (let z = Math.min(...zs); z <= Math.max(...zs); z += 2) {
+      const p: XZ = [x, z];
+      if (!inPoly(p)) continue;
+      const d = edgeDist(p);
+      if (d > best[0]) best = [d, p];
+    }
+  return best[1];
+}
 const floorOf = (level: number): Floor => (level >= 4 ? 4 : 1);
 const hexCss = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
 
@@ -456,10 +483,20 @@ export function VenueView() {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース" || a.name === "コンコース";
-      const f = flatPoly(a.poly, a.name === "屋上展示場" ? ROOF_COLOR : south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      // 2F はぜんぶ同じオレンジ（通路・広場・屋外も）。4F の屋上展示場は水色、ほかの屋外は灰色
+      const f = flatPoly(a.poly, a.name === "屋上展示場" ? ROOF_COLOR : a.level === 2 || south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
+      if (a.outdoor && a.level !== 2 && a.name !== "屋上展示場") {
+        // 屋外の床（外の通路・駐車場など）は、まわりの地面と見分けられるよう、ふちを濃い灰色の線でなぞる
+        const edge = new THREE.LineLoop(
+          new THREE.BufferGeometry().setFromPoints(a.poly.map(([x, z]) => new THREE.Vector3(x, y + 0.06, z))),
+          new THREE.LineBasicMaterial({ color: 0x737b75 }),
+        );
+        scene.add(edge);
+        partsOf(a.level).solid.push(edge);
+      }
       if (link) {
         // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）は、ふちを濃い線でなぞって、ひと続きの平面に見せる
         const edge = new THREE.LineLoop(
@@ -477,7 +514,7 @@ export function VenueView() {
       }
       if (a.under || a.part) continue;
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
-      const [cx, cz] = centroid(a.poly);
+      const [cx, cz] = insidePoint(a.poly, a.holes ?? []);
       label.position.set(cx, y + 3, cz);
       scene.add(label);
       partsOf(a.level).solid.push(label);
