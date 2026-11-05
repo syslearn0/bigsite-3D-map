@@ -196,9 +196,18 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
 // ホールの壁。doors（出入口の位置）に近い辺は、そこに幅 DOOR_W・高さ DOOR_H の戸口を開け、上は梁（はり）で残す
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
-function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = []) {
+// others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
+function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = []) {
   const g = new THREE.Group();
+  let open: [number, number][] = [];
   const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
+    // となりのホールとつながる所にかかる分は、切り分けて描かない
+    for (const [o0, o1] of open) {
+      if (o1 <= u0 || o0 >= u1) continue;
+      piece(ax, az, c, s, u0, o0, y0, y1);
+      piece(ax, az, c, s, o1, u1, y0, y1);
+      return;
+    }
     if (u1 - u0 < 0.05 || y1 - y0 < 0.05) return;
     const w = new THREE.Mesh(new THREE.BoxGeometry(u1 - u0, y1 - y0, 0.4), mat);
     const um = (u0 + u1) / 2;
@@ -234,6 +243,17 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors
       if (last && gp[0] <= last[1]) last[1] = Math.max(last[1], gp[1]);
       else merged.push([...gp]);
     }
+    // となりのホールと重なる所（辺がほぼ同じ線の上にあり、3m 以内）は、上まで開ける
+    open = [];
+    for (const o of others)
+      o.forEach((p, j) => {
+        const q = o[(j + 1) % o.length];
+        const vp = -(p[0] - ax) * s + (p[1] - az) * c, vq = -(q[0] - ax) * s + (q[1] - az) * c;
+        if (Math.abs(vp) > 3 || Math.abs(vq) > 3) return;
+        const up = (p[0] - ax) * c + (p[1] - az) * s, uq = (q[0] - ax) * c + (q[1] - az) * s;
+        const o0 = Math.max(0, Math.min(up, uq)), o1 = Math.min(len, Math.max(up, uq));
+        if (o1 - o0 > 1) open.push([o0, o1]);
+      });
     let u = 0;
     for (const [g0, g1] of merged) {
       piece(ax, az, c, s, u, g0, 0, height);
@@ -441,6 +461,7 @@ export function VenueView() {
         wallMat,
         venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
+        venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
       );
       scene.add(w);
       occluders.push(w);
