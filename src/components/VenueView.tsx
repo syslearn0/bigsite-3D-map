@@ -32,7 +32,6 @@ type Venue = {
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" }[];
-  linkRoutes?: { level: number; pts: XZ[] }[];
 };
 const venue = venueJson as unknown as Venue;
 // 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
@@ -449,10 +448,20 @@ export function VenueView() {
 
     for (const a of venue.areas) {
       const y = floorY(a.level);
-      const f = flatPoly(a.poly, LINK_AREAS.has(a.name) || a.see ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.45 : 1);
-      if (a.see) f.userData.see = 0.45; // 下（ガレリア）が透けて見える床
+      const link = LINK_AREAS.has(a.name) || a.see;
+      const f = flatPoly(a.poly, link ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.8 : 1);
+      if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
+      if (link) {
+        // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）は、ふちを濃い線でなぞって、ひと続きの平面に見せる
+        const edge = new THREE.LineLoop(
+          new THREE.BufferGeometry().setFromPoints(a.poly.map(([x, z]) => new THREE.Vector3(x, y + 0.08, z))),
+          new THREE.LineBasicMaterial({ color: 0xb4501c }),
+        );
+        scene.add(edge);
+        partsOf(a.level).solid.push(edge);
+      }
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
       const [cx, cz] = centroid(a.poly);
       label.position.set(cx, y + 3, cz);
@@ -536,26 +545,6 @@ export function VenueView() {
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
       scene.add(label);
       addLabel(label, esc ? "block" : "door"); // エスカレーターの札は、寄ったときだけ
-    }
-    // 連絡通路への道：濃い橙の帯と、進む向きの矢印（▶）を 8m ごとに
-    for (const rt of venue.linkRoutes ?? []) {
-      const y = floorY(rt.level) + 0.12;
-      const band = new THREE.Mesh(ribbons([{ pts: rt.pts, y, w: 2.4 }]), new THREE.MeshBasicMaterial({ color: 0xd9581e, side: THREE.DoubleSide }));
-      scene.add(band);
-      partsOf(rt.level).floors.push(band);
-      const arrowGeo = new THREE.ShapeGeometry(new THREE.Shape([new THREE.Vector2(-0.9, -0.8), new THREE.Vector2(1.1, 0), new THREE.Vector2(-0.9, 0.8)]));
-      const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-      for (let i = 0; i + 1 < rt.pts.length; i++) {
-        const [ax, az] = rt.pts[i], [bx, bz] = rt.pts[i + 1];
-        const len = Math.hypot(bx - ax, bz - az);
-        for (let d = 4; d < len - 2; d += 8) {
-          const a = new THREE.Mesh(arrowGeo, arrowMat);
-          a.rotation.set(-Math.PI / 2, 0, -Math.atan2(bz - az, bx - ax));
-          a.position.set(ax + ((bx - ax) * d) / len, y + 0.02, az + ((bz - az) * d) / len);
-          scene.add(a);
-          partsOf(rt.level).floors.push(a);
-        }
-      }
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
     if (features?.structures?.length) {
