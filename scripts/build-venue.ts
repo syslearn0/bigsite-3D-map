@@ -124,6 +124,26 @@ const southRest: XZ[] = southHall;
 
 // ホール以外の歩く場所（通路・広場）
 type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）
+// ホール a の、ホール b に向かい合う辺を、b の向かい合う辺の線まで直角にのばした四角
+function rectBetween(a: string, b: string): XZ[] {
+  const pa = halls.find((h) => h.id === a)!.poly, pb = halls.find((h) => h.id === b)!.poly;
+  const facing = (p: XZ[], toward: XZ): [XZ, XZ] => {
+    let best: [number, [XZ, XZ]] = [Infinity, [p[0], p[1]]];
+    p.forEach((q, i) => {
+      const r2 = p[(i + 1) % p.length];
+      const d = Math.hypot((q[0] + r2[0]) / 2 - toward[0], (q[1] + r2[1]) / 2 - toward[1]);
+      if (d < best[0]) best = [d, [q, r2]];
+    });
+    return best[1];
+  };
+  const [p1, p2] = facing(pa, centroid(pb)), [q1, q2] = facing(pb, centroid(pa));
+  const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]), ux = (p2[0] - p1[0]) / L, uz = (p2[1] - p1[1]) / L;
+  const nx = -uz, nz = ux;
+  const off = (q1[0] - p1[0]) * nx + (q1[1] - p1[1]) * nz; // b の辺の線までの距離（a の辺に直角に）
+  const r = (v: number) => Math.round(v * 10) / 10;
+  return [p1, p2, [r(p2[0] + nx * off), r(p2[1] + nz * off)], [r(p1[0] + nx * off), r(p1[1] + nz * off)]];
+  void q2;
+}
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
   const cen = (ids: string[]) => centroid(ids.flatMap((id) => halls.find((h) => h.id === id)!.poly));
@@ -184,9 +204,9 @@ const areas: Area[] = [
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
   // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする
-  // 西4 と南3 のあいだの 4F の通路・広場。航空写真では、西4 と南3 の向かい合う壁のあいだが広く舗装された面でつながっている。
-  // 向かい合う壁の端どうしを囲む面にする
-  { name: "南展示棟への通路（4F）", level: 4, poly: between(["W4"], ["S3"]) },
+  // 西4 と南3 のあいだの 4F の通路・広場。航空写真では、西4 と南3 の向かい合う壁のあいだが、壁に直角な四角い舗装面でつながっている。
+  // 西4 の向かい合う壁を、そのまま南3 の壁の線まで直角にのばした四角にする
+  { name: "南展示棟への通路（4F）", level: 4, poly: rectBetween("W4", "S3") },
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
