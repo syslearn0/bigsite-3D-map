@@ -10,7 +10,8 @@ const osm = JSON.parse(readFileSync("data/osm/bigsight.json", "utf8")) as { fetc
 const ORIGIN = { lat: 35.6298, lon: 139.7942 };
 // 床の高さ（m）。2F は連絡ブリッジ 6〜8m から。4F は OSM の西展示棟 4F 部分の min_height=15 より高く見せる（下の 1F のホールの
 // 天井・壁との間が詰まって見えるので、見やすさのために 20m）
-const FLOOR_Y: Record<number, number> = { 1: 0, 2: 6, 4: 20 };
+// 2F は 1F のホールの壁の高さ（12m）にそろえる（見やすさのため。実物より高い）
+const FLOOR_Y: Record<number, number> = { 1: 0, 2: 12, 4: 20 };
 
 const byName = (name: string) => {
   const e = osm.elements.find((x) => x.tags?.name === name && x.geometry);
@@ -396,7 +397,12 @@ const stairs: Stair[] = [];
       return m(e) < m(best) ? e : best;
     }, escs[0])));
     for (const v of vs.filter((x) => x.kind !== "escalator" || keep.has(x)))
-      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to: v.to, toLevel: 1, width: v.width });
+    {
+      // 上の端（2F）はそのまま、長さを 2F の高さに合わせる（30° ほど）
+      const L0 = Math.hypot(v.to[0] - v.from[0], v.to[1] - v.from[1]) || 1, L = (FLOOR_Y[2] - FLOOR_Y[1]) * 1.8;
+      const to: XZ = [r(v.from[0] + ((v.to[0] - v.from[0]) / L0) * L), r(v.from[1] + ((v.to[1] - v.from[1]) / L0) * L)];
+      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from: v.from, fromLevel: 2, to, toLevel: 1, width: v.width });
+    }
     void es;
     void ux;
     void uz;
@@ -624,7 +630,7 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 });
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
-// 高さは OSM の layer（何層目か）から：歩道・道路は 1層 6m（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
+// 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
 type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" };
@@ -650,7 +656,7 @@ if (existsSync("data/osm/surroundings.json")) {
       sur.lines.push({ pts, y: layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
     } else if (t.highway) {
       const walk = /^(pedestrian|footway|path|cycleway)$/.test(t.highway);
-      const y = layer * 6 + (walk ? 0.06 : 0.03);
+      const y = layer * FLOOR_Y[2] + (walk ? 0.06 : 0.03);
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
       else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
     }
