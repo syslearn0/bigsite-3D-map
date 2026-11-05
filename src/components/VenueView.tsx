@@ -20,7 +20,7 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[] }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean }[];
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
@@ -448,7 +448,8 @@ export function VenueView() {
 
     for (const a of venue.areas) {
       const y = floorY(a.level);
-      const f = flatPoly(a.poly, LINK_AREAS.has(a.name) ? LINK_COLOR : AREA_COLOR, y + 0.02);
+      const f = flatPoly(a.poly, LINK_AREAS.has(a.name) || a.see ? LINK_COLOR : AREA_COLOR, y + 0.02, a.see ? 0.45 : 1);
+      if (a.see) f.userData.see = 0.45; // 下（ガレリア）が透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
       const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
@@ -533,7 +534,7 @@ export function VenueView() {
       const label = textSprite(`⇅ ${st.name}`, { bg: esc ? "rgba(60,95,140,.92)" : "rgba(205,110,50,.92)", height: 2.6, px: 30 });
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
       scene.add(label);
-      addLabel(label, "door");
+      addLabel(label, esc ? "block" : "door"); // エスカレーターの札は、寄ったときだけ
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
     if (features?.structures?.length) {
@@ -929,9 +930,10 @@ export function VenueView() {
         const on = floorOf(lv) === currentFloor || (currentFloor === 1 && lv === 2 && !walk);
         for (const m of p.floors) {
           const mat = m.material as THREE.MeshLambertMaterial;
-          mat.transparent = !on;
-          mat.opacity = on ? 1 : 0.18;
-          mat.depthWrite = on;
+          const see = m.userData.see as number | undefined;
+          mat.transparent = !on || see !== undefined;
+          mat.opacity = on ? (see ?? 1) : 0.18;
+          mat.depthWrite = on && see === undefined;
           m.visible = on || !walk;
         }
         // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める

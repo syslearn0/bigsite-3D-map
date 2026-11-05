@@ -67,7 +67,8 @@ MALE = re.compile(r"男子")
 FEMALE = re.compile(r"女子")
 AID = re.compile(r"救護室")
 DOOR = re.compile(r"出入口|エントランス")  # 人が出入りする口
-SHUTTER = re.compile(r"搬入口")  # 搬入口（シャッター）。イベントによっては出入口に使われる
+SHUTTER = re.compile(r"搬入口")
+ESC = re.compile(r"^(ＥＳ|ES)$")  # エスカレーター  # 搬入口（シャッター）。イベントによっては出入口に使われる
 
 out = []
 aids = []
@@ -104,7 +105,7 @@ for hid, name in PLANS.items():
         t = w[4]
         if AID.search(t):
             aid.append((hid, ((w[0] + w[2]) / 2 - cx) * PT, ((w[1] + w[3]) / 2 - cy) * PT))
-        dk = "出入口" if DOOR.search(t) else "搬入口" if SHUTTER.search(t) else None
+        dk = "出入口" if DOOR.search(t) else "搬入口" if SHUTTER.search(t) else "ES" if ESC.match(t) else None
         if dk:
             door.append((dk, ((w[0] + w[2]) / 2 - cx) * PT, ((w[1] + w[3]) / 2 - cy) * PT))
         kind = "wc" if WC.search(t) else "hc" if HC.search(t) else None

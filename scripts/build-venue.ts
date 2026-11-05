@@ -129,7 +129,7 @@ function corridor(a: XZ, b: XZ, w: number): XZ[] {
 }
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[] };
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean }; // see：下が透けて見える床（半透明）
 const areas: Area[] = [
   ...[
     ["エントランスプラザ", 2],
@@ -143,7 +143,9 @@ const areas: Area[] = [
     ["リンクスペース", 1],
   ].map(([name, level]) => ({ name: String(name).replace("Ｆ ", "F "), level: Number(level), poly: poly(byName(String(name))) })),
   // 東1〜3 と東4〜6 のあいだの通路（ガレリア）。OSM では名前が「西２F」と書かれている（way 543048845、東展示棟の通路）
-  { name: "東ガレリア", level: 1, poly: poly(byId(543048845)) },
+  { name: "東ガレリア", level: 1, poly: poly(byId(543048844)) },
+  // ガレリアの上の 2F の通路（東展示棟 2F）。北コンコース・連絡ブリッジから段差なしで入る。下のガレリアが見えるよう、地図では半透明
+  { name: "東展示棟 2F", level: 2, poly: poly(byId(543048845)), see: true },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。形は細かい図がないので、
   // 西4 の南東の壁の真ん中から、南3 の北西の壁の真ん中までの、幅 14m のまっすぐな通路にする
@@ -203,24 +205,26 @@ const stairs: Stair[] = [];
     const run = 30; // 高さ 15m を 30° ほどで
     stairs.push({ name: "エスカレーター（1F⇔4F）", kind: "escalator", from: [r(top[0] - ux * 1.5), r(top[1] - uz * 1.5)], fromLevel: 4, to: [r(top[0] + ux * run), r(top[1] + uz * run)], toLevel: 1, width: 5 });
   }
-  // 東ガレリアの西の端：1F のガレリアから 2F の北コンコースへ
+  // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所に、ガレリアの長い向きに 12m。東3 の図面は文字を読めないので、
+  // 東1〜3 は同じつくり（同じ大きさの四角が並ぶ）として、東1 の ES をホールの中心の差だけずらして東2・東3 にも置く（近くにあれば足さない）
   {
-    const g = areaOf("東ガレリア"), nc = areaOf("北コンコース");
-    let best: [number, XZ, XZ] = [Infinity, [0, 0], [0, 0]];
-    for (const p of nc) {
-      const [d, q] = near(p, g);
-      if (d < best[0]) best = [d, p, q];
-    }
-    const [, top, foot] = best;
-    // ガレリアの中へ、ガレリアの長い向きに 12m
+    const g = areaOf("東ガレリア");
     const gi = g.map((p, i) => [p, g[(i + 1) % g.length]] as [XZ, XZ]).sort((x, y) => Math.hypot(y[1][0] - y[0][0], y[1][1] - y[0][1]) - Math.hypot(x[1][0] - x[0][0], x[1][1] - x[0][1]))[0];
     const GL = Math.hypot(gi[1][0] - gi[0][0], gi[1][1] - gi[0][1]);
-    let ux = (gi[1][0] - gi[0][0]) / GL, uz = (gi[1][1] - gi[0][1]) / GL;
-    const gc = centroid(g);
-    if ((gc[0] - foot[0]) * ux + (gc[1] - foot[1]) * uz < 0) [ux, uz] = [-ux, -uz];
-    const start: XZ = [foot[0] + ux * 2, foot[1] + uz * 2];
-    stairs.push({ name: "エスカレーター（ガレリア⇔北コンコース 2F）", kind: "escalator", from: [r(start[0]), r(start[1])], fromLevel: 2, to: [r(start[0] + ux * 12), r(start[1] + uz * 12)], toLevel: 1, width: 5 });
-    void top;
+    const ux = (gi[1][0] - gi[0][0]) / GL, uz = (gi[1][1] - gi[0][1]) / GL;
+    const planDoors = existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { doors?: { at: XZ; kind: string; hall: string }[] }).doors ?? []) : [];
+    const es = planDoors.filter((d) => d.kind === "ES" && /^E[123]$/.test(d.hall)).map((d) => ({ hall: d.hall, at: d.at }));
+    const cOf = (id: string) => centroid(halls.find((h) => h.id === id)!.poly);
+    for (const id of ["E2", "E3"])
+      for (const e of es.filter((x) => x.hall === "E1")) {
+        const [ax, az] = cOf("E1"), [bx, bz] = cOf(id);
+        const at: XZ = [e.at[0] + bx - ax, e.at[1] + bz - az];
+        if (!es.some((x) => Math.hypot(x.at[0] - at[0], x.at[1] - at[1]) < 10)) es.push({ hall: id, at });
+      }
+    for (const e of es) {
+      if (!pointInPolygon(e.at, g)) continue;
+      stairs.push({ name: "エスカレーター（1F⇔2F）", kind: "escalator", from: [r(e.at[0] + ux * 6), r(e.at[1] + uz * 6)], fromLevel: 2, to: [r(e.at[0] - ux * 6), r(e.at[1] - uz * 6)], toLevel: 1, width: 3 });
+    }
   }
 }
 
@@ -259,7 +263,7 @@ const plan = existsSync("data/plan-toilets.json")
   ? (JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as {
       toilets: { at: XZ; level: number; kinds: string[] }[];
       firstAid: { at: XZ; level: number }[];
-      doors?: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
+      doors?: { at: XZ; level: number; kind: "出入口" | "搬入口" | "ES"; hall: string }[];
     })
   : { toilets: [], firstAid: [], doors: [] };
 const osmToilets: Toilet[] = osm.elements
@@ -311,7 +315,11 @@ const toilets: Toilet[] = [
 ];
 const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 // 出入口・搬入口（シャッター）。図面から読んだもの
-const doors = (plan.doors ?? []).filter((d) => usable(d.hall)).map((d) => ({ at: toWall(d.hall, d.at, 0), level: d.level, kind: d.kind, hall: d.hall }));
+const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)).map((d) => {
+  // ホールの壁から 15m より離れた出入口（東1 の西の端の、地上からのエントランスなど）は、ホールの扉ではないので寄せない
+  const w = toWall(d.hall, d.at, 0);
+  return { at: Math.hypot(w[0] - d.at[0], w[1] - d.at[1]) > 15 ? d.at : w, level: d.level, kind: d.kind, hall: d.hall };
+});
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層 6m（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
