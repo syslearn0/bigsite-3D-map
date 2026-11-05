@@ -179,6 +179,20 @@ function rectBetween(a: string, b: string, extra: XZ[] = []): XZ[] {
   return [[r(s1[0]), r(s1[1])], [r(s2[0]), r(s2[1])], [r(s2[0] + nx * off), r(s2[1] + nz * off)], [r(s1[0] + nx * off), r(s1[1] + nz * off)]];
   void q2;
 }
+// 西展示棟の向き：西3 の展示場の長い辺の向き（u）とそれに直角（v）。uv の座標 ↔ 会場の座標
+const WEST_U: XZ = (() => {
+  const p = halls.find((h) => h.id === "W3")!.poly;
+  let best: [number, XZ] = [0, [1, 0]];
+  p.forEach((a, i) => {
+    const b = p[(i + 1) % p.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L > best[0]) best = [L, [(b[0] - a[0]) / L, (b[1] - a[1]) / L]];
+  });
+  const [ux, uz] = best[1];
+  return ux * 0.552 + uz * 0.834 >= 0 ? [ux, uz] : [-ux, -uz];
+})();
+const WEST_V: XZ = [-WEST_U[1], WEST_U[0]];
+const fromUV = (q: XZ[]): XZ[] => q.map(([u, v]) => [Math.round((u * WEST_U[0] + v * WEST_V[0]) * 10) / 10, Math.round((u * WEST_U[1] + v * WEST_V[1]) * 10) / 10] as XZ);
+
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
   const cen = (ids: string[]) => centroid(ids.flatMap((id) => halls.find((h) => h.id === id)!.poly));
@@ -248,11 +262,23 @@ const areas: Area[] = [
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
   ...southConcourse(),
   // 南コンコース（西）：エントランスプラザと西の 4F アトリウムのあいだの 2F の通路（OSM way 154080986）。公式の図ではここに 4F・1F へのエスカレーターが着く
-  { name: "南コンコース", level: 2, poly: poly(byId(154080986)) },
+  // 南コンコース（西）：エントランスプラザの東、西のアトリウムまで。OSM の形は斜めの辺が多いので、西展示棟の壁の向き（下の WEST_U・WEST_V）
+  // にそろえた四角 2 つにする：アトリウムの西の縁 (u=75.6) とエントランスプラザの東の縁 (u=43.7) のあいだと、エントランスホールへ北へのびる所
+  { name: "南コンコース", level: 2, poly: fromUV([[43.7, -38.3], [75.6, -38.3], [75.6, 22.7], [43.7, 22.7]]) },
+  { name: "南コンコース", level: 2, poly: fromUV([[21.2, -71.4], [50.5, -71.4], [50.5, -38.3], [21.2, -38.3]]), under: true },
   { name: "南展示棟", level: 1, poly: southRest },
   // 4F も、南3・4 のまわりのロビー・通路・トイレは南展示棟の建物の中（1F と同じ建物の形の床）
   { name: "南展示棟（4F）", level: 4, poly: southRest, under: true },
 ];
+
+// 4F アトリウム（屋内の L 字の通路）と屋上展示場：OSM の形の斜めの端を、西3・西4 の壁に直角にそろえる（公式の 4F 図では、白い L 字の通路と
+// 灰色の屋上の縁は、どれもホールの壁と平行か直角）。L 字は西3 にそう腕（幅 20m）と西4 にそう腕（幅 20m）
+{
+  const a4 = areas.find((a) => a.name === "４F アトリウム");
+  if (a4) a4.poly = fromUV([[56.6, -30.4], [149.8, -30.4], [149.8, 57.2], [129.5, 57.2], [129.5, -10.6], [56.6, -10.6]]);
+  const roof = areas.find((a) => a.name === "屋上展示場");
+  if (roof) roof.poly = fromUV([[129.5, 57.2], [129.5, 36.8], [84.6, 36.7], [84.7, 30.4], [75.7, 30.7], [75.8, 57.1], [61.5, 57.1], [61.5, 103.2], [201.9, 103.3], [202.1, 57.2]]);
+}
 
 // 屋外（屋根のない所）：公式フロアマップで灰色に塗られた所。ほかは屋内（白）
 for (const a of areas) if (["屋上展示場", "エントランスプラザ", "イベントプラザ", "中央ターミナル", "南展示棟への通路", "南展示棟への通路（4F）"].includes(a.name)) a.outdoor = true;
@@ -316,23 +342,12 @@ const stairs: Stair[] = [];
       const c2 = centroid(poly(byId(154080986)));
       put([44 + (c2[0] - 44) * 0.15, 68 + (c2[1] - 68) * 0.15], [c2[0] - 44, c2[1] - 68], 1, 2);
     }
-    // 西 17：4F（西3 の入口の角）⇔ 2F 南コンコース（西）。2F の南コンコース（西）は、4F アトリウムの西3 ぞいの帯の真下にある
-    // （OSM の形で、角 (56.6, 30.4)・(55.8, 64.8) を分け合う）。なので、4F アトリウムの西3 の入口の角の 4m 内側から、
-    // その帯にそって（西3 の壁と平行に）下りて、真下の 2F の南コンコース（西）に着く
+    // 西 17：4F（西3 の入口の角）⇔ 2F 南コンコース。上の端は 4F アトリウムの西3 にそう腕の西の端（西3 の入口の角、AED の横）、
+    // 公式の図の点線のとおり、エントランスホールの方（2F 南コンコースの北へのびる所）へ斜めに下りる
     {
-      const a4 = areaOf("４F アトリウム"), c4 = centroid(a4);
-      const corner: XZ = [56.6, 30.4], along: XZ = [55.8, 64.8];
-      const ic = Math.hypot(c4[0] - corner[0], c4[1] - corner[1]);
-      const ax = along[0] - corner[0], az = along[1] - corner[1], al = Math.hypot(ax, az);
-      const off: XZ = [(-az / al) * 4, (ax / al) * 4]; // 線から 2F の南コンコース（西）の側へ
-      // 上の端は 4F アトリウムの中（角から 4m 内側）。公式の図では、下の端は 2F の南コンコースの「エントランスホール」寄り
-      // （点線の 17 は、西3 の角から左下＝エントランスホールの方へ斜めに下りる）。なので、2F の南コンコース（西）の、
-      // エントランスホール側の端 (11, 45) へ向かって下りる
-      const top: XZ = [r(corner[0] + ((c4[0] - corner[0]) / ic) * 4), r(corner[1] + ((c4[1] - corner[1]) / ic) * 4)];
-      const to: XZ = [11, 45];
-      void off;
-      const L = run(2, 4), d = Math.hypot(to[0] - top[0], to[1] - top[1]), ux = (to[0] - top[0]) / d, uz = (to[1] - top[1]) / d;
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ux * L), r(top[1] + uz * L)], toLevel: 2, width: 2 });
+      const [top, aim] = fromUV([[60, -20], [35, -55]]);
+      const L = run(2, 4), d = Math.hypot(aim[0] - top[0], aim[1] - top[1]);
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ((aim[0] - top[0]) / d) * L), r(top[1] + ((aim[1] - top[1]) / d) * L)], toLevel: 2, width: 2 });
     }
     // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。印を南コンコースの線の上に寄せ、南コンコースの向きにそろえる
     if (southLine.length >= 2) {
@@ -525,12 +540,13 @@ const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; pol
 // ホールの外壁：会場データのホールの形（OSM）は展示場の床だけで、トイレ・事務室などの部屋の帯はその外に出ている。
 // コミケの配置図でもビッグサイトの図面でも、トイレは外壁の内側にあるので、トイレ（図面の位置・部屋の囲み）がはみ出している辺を、
 // トイレを囲むところまで外へずらす（20m まで。ほかのホールと分け合う辺は動かさない）。展示場の床の形は inner に残す
-// コミケの配置図で確かめられた東1〜3 だけ（西・南は、トイレがアトリウムや通路の側にあり、ホールの中ではないものがある）
+// アトリウムや通路など、ほかの床の上にあるトイレは、そこにあるものなので数えない（床のない所にはみ出しているものだけ）
 for (const h of halls) {
-  if (h.closed || !["E1", "E2", "E3"].includes(h.id)) continue;
+  if (h.closed) continue;
+  const onArea = (p: XZ) => areas.some((a) => a.level === h.level && a.name !== "ホール前" && pointInPolygon(p, a.poly));
   const pts: XZ[] = [
-    ...planToilets.filter((t) => t.hall === h.id).map((t) => t.at),
-    ...toiletRooms.filter((r) => r.hall === h.id).flatMap((r) => r.poly),
+    ...planToilets.filter((t) => t.hall === h.id && !onArea(t.at)).map((t) => t.at),
+    ...toiletRooms.filter((r) => r.hall === h.id && !onArea(centroid(r.poly))).flatMap((r) => r.poly),
   ].filter((p) => !pointInPolygon(p, h.poly));
   if (!pts.length) continue;
   const poly0 = h.poly.map((q) => [...q] as XZ);

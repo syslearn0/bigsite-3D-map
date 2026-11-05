@@ -15,7 +15,7 @@ import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
 // 机は数が多いので InstancedMesh で描き、タップした机は instanceId から配置番号に戻す。
 
-type Hall = { id: string; name: string; building: "東" | "西" | "南"; level: number; poly: XZ[]; closed?: string; rough?: boolean };
+type Hall = { id: string; name: string; building: "東" | "西" | "南"; level: number; poly: XZ[]; closed?: string; rough?: boolean; inner?: XZ[] };
 type Venue = {
   floorY: Record<string, number>;
   attribution: string;
@@ -201,7 +201,7 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
 // others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
-function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = []) {
+function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number) {
   const g = new THREE.Group();
   let open: [number, number][] = [];
   const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
@@ -225,6 +225,7 @@ function walls(poly: XZ[], y: number, height: number, mat: THREE.Material, doors
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 0.5) continue;
     const c = (bx - ax) / len, s = (bz - az) / len;
+    const height = edgeHeight ? edgeHeight(i) : height0;
     // この辺の近く（5m 以内）にある出入口を、辺の上の位置 u にして、戸口の範囲にする（重なれば1つに）
     const gaps: [number, number][] = [];
     for (const [dx, dz] of doors) {
@@ -527,6 +528,14 @@ export function VenueView() {
       const f = freePart(o.hall, o.a, o.b);
       return f ? [{ ...o, a: f[0], b: f[1] }] : [];
     });
+    // ホールの辺 i が「外へずらした辺で、その上に 2F の床がかかっている」か
+    const lowEdge = (h: Hall, i: number) => {
+      if (!h.inner || h.level !== 1) return false;
+      const a = h.poly[i], b = h.poly[(i + 1) % h.poly.length], a0 = h.inner[i], b0 = h.inner[(i + 1) % h.inner.length];
+      if (Math.hypot(a[0] - a0[0], a[1] - a0[1]) < 0.5 && Math.hypot(b[0] - b0[0], b[1] - b0[1]) < 0.5) return false;
+      const m: XZ = [(a[0] + b[0] + a0[0] + b0[0]) / 4, (a[1] + b[1] + a0[1] + b0[1]) / 4];
+      return venue.areas.some((ar) => ar.level === 2 && pointInPolygon(m, ar.poly));
+    };
     for (const h of venue.halls) {
       const y = floorY(h.level);
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
@@ -542,9 +551,27 @@ export function VenueView() {
         venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
+        (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
       );
       scene.add(w);
       occluders.push(w);
+      // 外へずらした辺の上に 2F の床がかかっている所（東1〜3 のガレリア側）は、部屋の帯の上が 2F の通路になっている。
+      // 外の壁は 2F の床の高さまで、そこから上の高い壁は展示場の床のふち（元の辺）に立てる
+      if (h.inner) {
+        const upper = new THREE.Group();
+        h.inner.forEach((a, i) => {
+          if (!lowEdge(h, i)) return;
+          const b = h.inner![(i + 1) % h.inner!.length];
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]), hgt = WALL_H - (floorY(2) - floorY(1));
+          const m = new THREE.Mesh(new THREE.BoxGeometry(len, hgt, 0.4), wallMat);
+          m.position.set((a[0] + b[0]) / 2, y + floorY(2) - floorY(1) + hgt / 2, (a[1] + b[1]) / 2);
+          m.rotation.y = -Math.atan2(b[1] - a[1], b[0] - a[0]);
+          upper.add(m);
+        });
+        scene.add(upper);
+        occluders.push(upper);
+        partsOf(h.level).solid.push(upper);
+      }
       partsOf(h.level).solid.push(w);
       const [cx, cz] = centroid(h.poly);
       const name = h.name + (h.level >= 4 ? "（4F）" : "") + (h.closed ? "：工事中" : "") + (h.rough ? "（形は概略）" : "");
