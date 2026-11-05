@@ -458,6 +458,32 @@ export function VenueView() {
       partsOf(a.level).solid.push(label);
       addLabel(label, "area");
     }
+    // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない。
+    // 出入口の区間（a〜b）の前 3m 以内に、壁ぞいの列の机が区間にかかって並んでいれば「ふさがっている」
+    const wallBooths = booths.filter((b) => lines[b.line].wall);
+    const blocked = (hall: string, a: XZ, b: XZ) => {
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L;
+      return wallBooths.some((bt) => {
+        if (bt.hall !== hall) return false;
+        const u = (bt.at[0] - a[0]) * ux + (bt.at[1] - a[1]) * uz, v = -(bt.at[0] - a[0]) * uz + (bt.at[1] - a[1]) * ux;
+        return Math.abs(v) < 3 && u > 0.3 && u < L - 0.3;
+      });
+    };
+    const doorSpan = (hall: string, at: XZ, w: number): [XZ, XZ] => {
+      // 出入口の点に、いちばん近い壁の向きで幅 w の区間
+      const h = hallById.get(hall)!;
+      let best = { d: Infinity, ux: 1, uz: 0 };
+      h.poly.forEach((p, i) => {
+        const q = h.poly[(i + 1) % h.poly.length];
+        const dx = q[0] - p[0], dz = q[1] - p[1], L2 = dx * dx + dz * dz || 1, L = Math.sqrt(L2);
+        const t = Math.max(0, Math.min(1, ((at[0] - p[0]) * dx + (at[1] - p[1]) * dz) / L2));
+        const d = Math.hypot(at[0] - p[0] - t * dx, at[1] - p[1] - t * dz);
+        if (d < best.d) best = { d, ux: dx / L, uz: dz / L };
+      });
+      return [[at[0] - best.ux * w / 2, at[1] - best.uz * w / 2], [at[0] + best.ux * w / 2, at[1] + best.uz * w / 2]];
+    };
+    const openDoors = venue.doors.filter((d) => d.kind === "出入口" && !blocked(d.hall, ...doorSpan(d.hall, d.at, DOOR_W)));
+    const openGaps = (features?.openings ?? []).filter((o) => !blocked(o.hall, o.a, o.b));
     for (const h of venue.halls) {
       const y = floorY(h.level);
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
@@ -469,8 +495,8 @@ export function VenueView() {
         WALL_H,
         wallMat,
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
-        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
-        (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
+        openDoors.filter((d) => d.hall === h.id).map((d) => d.at),
+        openGaps.filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
       );
       scene.add(w);
@@ -569,22 +595,20 @@ export function VenueView() {
     }
     // 出入口（緑）・搬入口（シャッター、灰）。図面から読んだもの
     for (const d of venue.doors) {
+      if (d.kind === "出入口" && !openDoors.includes(d)) continue; // 壁サークルがふさいでいる出入口は出さない
       const m = textSprite(d.kind === "出入口" ? "⇄ 出入口" : "搬入口", { bg: d.kind === "出入口" ? "rgba(20,120,60,.92)" : "rgba(95,100,95,.85)", height: 2.6, px: 32 });
       m.position.set(d.at[0], floorY(d.level) + 2.6, d.at[1]);
       scene.add(m);
       partsOf(d.level).solid.push(m);
       addLabel(m, d.kind === "出入口" ? "door" : "shutter");
-      // 出入口の浮いた札は上から見るときだけ（3D・歩くでは、戸口の上の看板）。配置図の切れ目を使うときは、図面の札は出さない
-      if (d.kind === "出入口") {
-        m.userData.topOnly = true;
-
-      }
+      // 出入口の浮いた札は上から見るときだけ（3D・歩くでは、戸口の上の看板）
+      if (d.kind === "出入口") m.userData.topOnly = true;
     }
     // 出入口の看板：戸口の真上、壁の高い所の両側（ホールの内と外）に、戸口の幅くらいの大きさで
     type Entrance = { hall: string; level: number; at: XZ; width: number };
-    const fromPlan: Entrance[] = venue.doors.filter((d) => d.kind === "出入口").map((d) => ({ hall: d.hall, level: d.level, at: d.at, width: DOOR_W }));
+    const fromPlan: Entrance[] = openDoors.map((d) => ({ hall: d.hall, level: d.level, at: d.at, width: DOOR_W }));
     // 配置図の切れ目のうち、図面の出入口と重ならないもの（8m より離れている）を足す
-    const fromLayout: Entrance[] = (features?.openings ?? [])
+    const fromLayout: Entrance[] = openGaps
       .map((o) => ({ hall: o.hall, level: hallById.get(o.hall)?.level ?? 1, at: [(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2] as XZ, width: Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) }))
       .filter((e) => !fromPlan.some((d) => Math.hypot(d.at[0] - e.at[0], d.at[1] - e.at[1]) < 8));
     const entrances: Entrance[] = [...fromPlan, ...fromLayout];
