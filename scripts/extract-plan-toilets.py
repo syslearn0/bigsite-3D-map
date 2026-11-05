@@ -338,7 +338,7 @@ def read_voids():
         ym = (q[1] + q[3]) / 2
         top_at_y0 = sum(1 for _, y in treads if y < ym) >= sum(1 for _, y in treads if y >= ym)
         ye, sgn = (q[1], 1) if top_at_y0 else (q[3], -1)
-        run = 7.0  # 図面の pt（約 11m）
+        run = 7.0  # 図面の pt（約 11m）。上の端は吹き抜けの縁から 0.3pt（約 0.5m）2F の床の下へ入れて、すき間を作らない
         # ストリートビュー：ガレリアの真ん中に、2F の真ん中の通路を支える壁があり、その壁にそって、階段とエスカレーターが
         # 吹き抜けの真ん中から両端へ（逆の向きに）上がっている。なので、どちらも吹き抜けの内側（ガレリアの真ん中の側）の辺にそわせる
         gmid = (gx0 + gx1) / 2
@@ -346,10 +346,10 @@ def read_voids():
         voidWalls.append([to_v(inner, q[1]), to_v(inner, q[3])])  # 真ん中の壁（2F の真ん中の通路の下）
         stair_x = inner - (w * 0.22 if inner == q[2] else -w * 0.22)
         esc_x = inner - (w * 0.1 if inner == q[2] else -w * 0.1)
-        voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye + sgn * 0.3), "to": to_v(stair_x, ye + sgn * (0.3 + run)), "width": round(w * 0.4 * 1.64, 1)})
+        voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye - sgn * 0.3), "to": to_v(stair_x, ye + sgn * run), "width": round(w * 0.4 * 1.64, 1)})
         # エスカレーターは、階段と反対の端で 2F に着く（ストリートビュー・写真：吹き抜けの下で、階段とエスカレーターが逆の向きに上がっている）
         yo = q[3] if top_at_y0 else q[1]
-        voidStairs.append({"kind": "escalator", "from": to_v(esc_x, yo - sgn * 0.3), "to": to_v(esc_x, yo - sgn * (0.3 + run)), "width": 1.6})
+        voidStairs.append({"kind": "escalator", "from": to_v(esc_x, yo + sgn * 0.3), "to": to_v(esc_x, yo - sgn * run), "width": 1.6})
     report.append(f"東展示棟 2F の吹き抜け {len(voids)}（ホールの真ん中のずれ 最大 {err:.1f}m）")
     return voids
 
