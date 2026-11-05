@@ -1589,7 +1589,7 @@ export function VenueView() {
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
       <header style={{ padding: "8px 12px 6px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          <strong style={{ fontSize: "1.05rem" }}>コミケ 3D マップ</strong>
+          <strong style={{ fontSize: "1.05rem" }}>即売会 3D マップ</strong>
           <span className="tag">{savedLines ? "編集した配置" : "見本"}</span>
           {savedLines && (
             <button

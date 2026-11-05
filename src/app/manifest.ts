@@ -3,7 +3,7 @@ import type { MetadataRoute } from "next";
 // ホーム画面に追加したアプリとしての設定
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "コミケ 3D マップ（見本）",
+    name: "即売会 3D マップ（見本）",
     short_name: "3D マップ",
     description: "東京ビッグサイトの会場を 3D で見て、行きたいサークルの計画を立てる（コミックマーケット準備会とは関係のない非公式の試作）",
     start_url: "/",

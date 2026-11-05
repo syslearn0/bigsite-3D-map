@@ -3,7 +3,7 @@ import "./globals.css";
 import { SwRegister } from "./SwRegister";
 
 export const metadata: Metadata = {
-  title: "コミケ 3D マップ（見本）",
+  title: "即売会 3D マップ（見本）",
   description: "東京ビッグサイトの会場を 3D で見て、行きたいサークルの計画を立てる（コミックマーケット準備会とは関係のない非公式の試作）",
   // iPhone でホーム画面に追加したときのアイコン
   icons: { apple: "/apple-touch-icon.png" },
