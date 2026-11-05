@@ -239,6 +239,17 @@ for name, conv in [("E_W3_c", lambda x, y: (x, y)), ("E_W4_c", w4)]:
             wd.append((((x - 849) * PT, (y - 1503) * PT), dk))
 place_doors("W3", a_w3, c_w3, wd)
 report.append(f"W3・W4: 図面の文字の位置から手で読んだ 5 か所（出入口・搬入口 {len(wd)}）")
+# 西のアトリウムのエスカレーター（西3 の図面の「ＥＳＣ」）：4F に着く所は「ＥＳＣ」の段の上端、下る向きは段にそって
+# 斜めの吹抜けの壁と平行（図面の左下）。図面で段の線を読んだ位置（pt）
+rx_, rz_ = math.cos(a_w3), math.sin(a_w3); dx_, dz_ = -rz_, rx_
+def w3v(x, y):
+    x, y = (x - 849) * PT, (y - 1503) * PT
+    return [round(c_w3[0] + x * rx_ + y * dx_, 1), round(c_w3[1] + x * rz_ + y * dz_, 1)]
+esc_top = (1462, 1922)  # 段の上端の真ん中（4F）
+esc_dir = (-350, 315)  # 段にそって下る向き（図面）
+L_ = math.hypot(*esc_dir)
+westEsc = {"top": w3v(*esc_top), "dir": [round(esc_dir[0] / L_ * rx_ + esc_dir[1] / L_ * dx_, 3), round(esc_dir[0] / L_ * rz_ + esc_dir[1] / L_ * dz_, 3)]}
+report.append(f"西アトリウムのエスカレーター：4F の上端 {westEsc['top']}")
 
 # 同じトイレ（隣の図面にも描かれているもの・男女が並ぶもの）を、6m 以内でまとめる
 merged = []
@@ -345,6 +356,6 @@ def read_voids():
 voidStairs = []  # 吹き抜けの中の階段・エスカレーター（2F の端 from → 1F to）
 voidWalls = []  # 吹き抜けの内側の辺にそった壁（1F から 2F まで）
 voids = read_voids()
-(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs, "voidWalls": voidWalls}, ensure_ascii=False, indent=1), encoding="utf-8")
+(ROOT / "data/plan-toilets.json").write_text(json.dumps({"source": "株式会社東京ビッグサイト 主催者向け図面（白図）を参考に位置を読み取ったもの", "toilets": merged, "firstAid": aid_merged, "doors": door_merged, "voids": voids, "voidStairs": voidStairs, "voidWalls": voidWalls, "westEsc": westEsc}, ensure_ascii=False, indent=1), encoding="utf-8")
 print("\n".join(report))
 print(f"トイレ {len(merged)} か所（文字 {len(out)}）・救護室 {len(aid_merged)} か所・出入口 {sum(d['kind'] == '出入口' for d in door_merged)}・搬入口 {sum(d['kind'] == '搬入口' for d in door_merged)} を data/plan-toilets.json に")
