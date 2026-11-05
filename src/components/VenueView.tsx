@@ -62,7 +62,7 @@ const AREA_COLOR = 0xece3b6;
 const LINK_COLOR = 0xf0b48a;
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
-const WALL_H = 7.5; // ホールの壁の高さ（見やすさの目安）
+const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
 
 // 机につける印。「行きたい」は必ず行く所、「候補」は迷っている所。1つの机にはどちらか1つ
 type Mark = "want" | "maybe";
