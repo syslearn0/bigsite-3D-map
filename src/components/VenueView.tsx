@@ -486,6 +486,8 @@ export function VenueView() {
       // 2F はぜんぶ同じオレンジ（通路・広場・屋外も）。4F の屋上展示場は水色、ほかの屋外は灰色
       const f = flatPoly(a.poly, a.name === "屋上展示場" ? ROOF_COLOR : a.level === 2 || south || link ? LINK_COLOR : a.outdoor ? OUTDOOR_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
+      // 屋上展示場は西1・西2 の真上をおおうので、1F を見ているときは薄くしても出さない
+      if (a.name === "屋上展示場") f.userData.hideOnFloor1 = true;
       scene.add(f);
       partsOf(a.level).floors.push(f);
       if (a.outdoor && a.level !== 2 && a.name !== "屋上展示場") {
@@ -1082,7 +1084,7 @@ export function VenueView() {
           mat.transparent = !on || see !== undefined;
           mat.opacity = on ? (see ?? 1) : 0.3;
           mat.depthWrite = on && see === undefined;
-          m.visible = on || !walk;
+          m.visible = (on || !walk) && !(m.userData.hideOnFloor1 && currentFloor === 1);
         }
         // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める
         for (const o of p.solid) {
