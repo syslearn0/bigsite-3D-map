@@ -33,7 +33,7 @@ type Venue = {
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
-  doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
+  doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string; width?: number }[]; // width：開口の幅（シャッターなど。ないときは DOOR_W）
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number }[];
@@ -301,11 +301,13 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
   return g;
 }
 
-// ホールの壁。doors（出入口の位置）に近い辺は、そこに幅 DOOR_W・高さ DOOR_H の戸口を開け、上は梁（はり）で残す
+// ホールの壁。doors（出入口の位置と幅）に近い辺は、そこに幅 DOOR_W（幅があればその幅）・高さ DOOR_H の戸口を開け、上は梁（はり）で残す。
+// 扉より広い開口（ホールとリンクスペースのあいだのシャッターなど）は、シャッターと同じ高さ
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
 // others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
-function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number, shutters: XZ[] = []) {
+type Opening = { at: XZ; width?: number };
+function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: Opening[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number, shutters: Opening[] = []) {
   const g = new THREE.Group();
   let open: [number, number][] = [];
   const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
@@ -336,11 +338,13 @@ function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, door
     for (const [list, h] of [
       [doors, DOOR_H],
       [shutters, DOOR_H * 2], // 搬入口のシャッターは出入口の 2 倍の高さ
-    ] as [XZ[], number][])
-      for (const [dx, dz] of list) {
+    ] as [Opening[], number][])
+      for (const { at: [dx, dz], width } of list) {
         const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
-        if (Math.abs(v) > 15 || u < 0 || u > len) continue; // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い
-        gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2), h]);
+        // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い。幅のある開口は壁の上に置いてあるので、その辺だけ
+        if (Math.abs(v) > (width ? 1 : 15) || u < 0 || u > len) continue;
+        const w = width ?? DOOR_W;
+        gaps.push([Math.max(0.3, u - w / 2), Math.min(len - 0.3, u + w / 2), w > DOOR_W ? Math.max(h, DOOR_H * 2) : h]);
       }
     // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
     for (const [p, q] of spans) {
@@ -807,7 +811,7 @@ export function VenueView() {
       });
       return [[at[0] - best.ux * w / 2, at[1] - best.uz * w / 2], [at[0] + best.ux * w / 2, at[1] + best.uz * w / 2]];
     };
-    const openDoors = venue.doors.filter((d) => d.kind === "出入口" && freePart(d.hall, ...doorSpan(d.hall, d.at, DOOR_W)));
+    const openDoors = venue.doors.filter((d) => d.kind === "出入口" && freePart(d.hall, ...doorSpan(d.hall, d.at, d.width ?? DOOR_W)));
     // 配置図の切れ目は、通れる所だけに縮める（看板はその真ん中に）
     const openGaps = (features?.openings ?? []).flatMap((o) => {
       const f = freePart(o.hall, o.a, o.b);
@@ -848,12 +852,12 @@ export function VenueView() {
         wallMat,
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
         // 穴は、壁サークルがふさいでいる出入口も開ける（看板だけ出さない）
-        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
+        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口"),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
         // 西・南のホールは、搬入口（大きなシャッター）も穴にする（ユーザーの確認）
-        h.building === "南" || h.building === "西" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口").map((d) => d.at) : [],
+        h.building === "南" || h.building === "西" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口") : [],
       );
       scene.add(w);
       occluders.push(w);
@@ -1059,7 +1063,7 @@ export function VenueView() {
     }
     // 出入口の看板：戸口の真上、壁の高い所の両側（ホールの内と外）に、戸口の幅くらいの大きさで
     type Entrance = { hall: string; level: number; at: XZ; width: number };
-    const fromPlan: Entrance[] = openDoors.map((d) => ({ hall: d.hall, level: d.level, at: d.at, width: DOOR_W }));
+    const fromPlan: Entrance[] = openDoors.map((d) => ({ hall: d.hall, level: d.level, at: d.at, width: d.width ?? DOOR_W }));
     // 配置図の切れ目のうち、図面の出入口と重ならないもの（8m より離れている）を足す
     const fromLayout: Entrance[] = openGaps
       .map((o) => ({ hall: o.hall, level: hallById.get(o.hall)?.level ?? 1, at: [(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2] as XZ, width: Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) }))

@@ -912,8 +912,26 @@ const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)).map((d) => {
   // ホールの壁から 15m より離れた出入口（東1 の西の端の、地上からのエントランスなど）は、ホールの扉ではないので寄せない
   const w = toWall(d.hall, d.at, 0);
-  return { at: Math.hypot(w[0] - d.at[0], w[1] - d.at[1]) > 15 ? d.at : w, level: d.level, kind: d.kind, hall: d.hall };
+  return { at: Math.hypot(w[0] - d.at[0], w[1] - d.at[1]) > 15 ? d.at : w, level: d.level, kind: d.kind, hall: d.hall } as { at: XZ; level: number; kind: string; hall: string; width?: number };
 });
+// 東7・東8 とリンクスペースのあいだのシャッター開口（図面：東7 は W 6.0m・12.0m・12.0m、東8 は W 12.0m × 2。高さ 7.9m）。
+// 当日はリンクスペースとひと続きに使うので、開けて出入口にする。位置は図面の、リンクスペースの道（ガレリア）の側の端から
+// 開口のまん中までの長さ。会場データの東7 は図面より長い（OSM の形）ので、ホールの角からではなく、この端から測る
+{
+  const link = areas.find((a) => a.name === "リンクスペース")!.poly;
+  const gal = areas.filter((a) => a.name === "東ガレリア").map((a) => a.poly);
+  const nearGal = (p: XZ) => Math.min(...gal.flatMap((g) => g.map((q) => Math.hypot(q[0] - p[0], q[1] - p[1]))));
+  for (const [hid, list] of [["E7", [[8.8, 12], [22.3, 12], [34.7, 6]]], ["E8", [[10.8, 12], [23.2, 12]]]] as [string, [number, number][]][]) {
+    const poly = halls.find((h) => h.id === hid)!.poly;
+    // ホールの辺のうち、両端がリンクスペースの角にある辺
+    const onLink = (p: XZ) => link.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < 0.5);
+    const i = poly.findIndex((p, k) => onLink(p) && onLink(poly[(k + 1) % poly.length]));
+    let [a, b] = [poly[i], poly[(i + 1) % poly.length]];
+    if (nearGal(b) < nearGal(a)) [a, b] = [b, a]; // a：ガレリアの側の端
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    for (const [t, w] of list) doors.push({ at: [Math.round((a[0] + ((b[0] - a[0]) * t) / L) * 10) / 10, Math.round((a[1] + ((b[1] - a[1]) * t) / L) * 10) / 10], level: 1, kind: "出入口", hall: hid, width: w });
+  }
+}
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
