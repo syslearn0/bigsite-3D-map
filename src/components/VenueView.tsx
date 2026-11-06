@@ -231,7 +231,7 @@ function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
 // others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
-function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number) {
+function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: XZ[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number, shutters: XZ[] = []) {
   const g = new THREE.Group();
   let open: [number, number][] = [];
   const piece = (ax: number, az: number, c: number, s: number, u0: number, u1: number, y0: number, y1: number) => {
@@ -257,26 +257,33 @@ function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, door
     const c = (bx - ax) / len, s = (bz - az) / len;
     const height = edgeHeight ? edgeHeight(i) : height0;
     // この辺の近く（5m 以内）にある出入口を、辺の上の位置 u にして、戸口の範囲にする（重なれば1つに）
-    const gaps: [number, number][] = [];
-    for (const [dx, dz] of doors) {
-      const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
-      if (Math.abs(v) > 15 || u < 0 || u > len) continue; // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い
-      gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2)]);
-    }
+    // [始め, 終わり, 戸口の高さ]
+    const gaps: [number, number, number][] = [];
+    for (const [list, h] of [
+      [doors, DOOR_H],
+      [shutters, DOOR_H * 2], // 搬入口のシャッターは出入口の 2 倍の高さ
+    ] as [XZ[], number][])
+      for (const [dx, dz] of list) {
+        const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
+        if (Math.abs(v) > 15 || u < 0 || u > len) continue; // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い
+        gaps.push([Math.max(0.3, u - DOOR_W / 2), Math.min(len - 0.3, u + DOOR_W / 2), h]);
+      }
     // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
     for (const [p, q] of spans) {
       const up = (p[0] - ax) * c + (p[1] - az) * s, vp = -(p[0] - ax) * s + (p[1] - az) * c;
       const uq = (q[0] - ax) * c + (q[1] - az) * s, vq = -(q[0] - ax) * s + (q[1] - az) * c;
       if (Math.abs(vp) > 5 || Math.abs(vq) > 5) continue;
       const g0 = Math.max(0.3, Math.min(up, uq)), g1 = Math.min(len - 0.3, Math.max(up, uq));
-      if (g1 - g0 > 0.5) gaps.push([g0, g1]);
+      if (g1 - g0 > 0.5) gaps.push([g0, g1, DOOR_H]);
     }
     gaps.sort((p, q) => p[0] - q[0]);
-    const merged: [number, number][] = [];
+    const merged: [number, number, number][] = [];
     for (const gp of gaps) {
       const last = merged[merged.length - 1];
-      if (last && gp[0] <= last[1]) last[1] = Math.max(last[1], gp[1]);
-      else merged.push([...gp]);
+      if (last && gp[0] <= last[1]) {
+        last[1] = Math.max(last[1], gp[1]);
+        last[2] = Math.max(last[2], gp[2]);
+      } else merged.push([...gp]);
     }
     // となりのホールと重なる所（辺がほぼ同じ線の上にあり、3m 以内）は、上まで開ける
     open = [];
@@ -299,9 +306,9 @@ function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, door
         if (uq < 0 && uq > -3) uStart = Math.min(uStart, uq);
       }
     let u = uStart;
-    for (const [g0, g1] of merged) {
+    for (const [g0, g1, gh] of merged) {
       piece(ax, az, c, s, u, g0, 0, height);
-      piece(ax, az, c, s, g0, g1, DOOR_H, height); // 戸口の上
+      piece(ax, az, c, s, g0, g1, Math.min(gh, height - 0.5), height); // 戸口の上
       u = g1;
     }
     piece(ax, az, c, s, u, uEnd, 0, height);
@@ -486,8 +493,8 @@ export function VenueView() {
         mat.polygonOffsetUnits = -4;
         // 「海」「川」の文字
         if (a.name && a.label) {
-          const t = textSprite(a.name, { fg: "#ffffff", bg: "rgba(40,100,160,.85)", height: 10, px: 48 });
-          t.position.set(a.label[0], 6, a.label[1]);
+          const t = textSprite(a.name, { fg: "#ffffff", bg: "rgba(40,100,160,.85)", height: 60, px: 96 });
+          t.position.set(a.label[0], 30, a.label[1]);
           surroundings.add(t);
         }
       }
@@ -565,11 +572,13 @@ export function VenueView() {
       partsOf(a.level).solid.push(label);
       addLabel(label, "area");
     }
-    // 2F と 4F の、屋内と屋外の境目の低い仕切り（高さ 1.2m）。屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、
-    // ほかの屋内の床でもホールでもない所に立てる
+    // 2F と 4F の、屋内と屋外の境目の仕切り。2F は低い仕切り（高さ 1.2m）、4F は建物の外壁なのでホールの壁と同じ高さ。
+    // 屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、ほかの屋内の床でもホールでもない所に立てる。
+    // ふちのすぐ内側がホールの中なら、そこはホールの壁（搬入口の穴もある）なので立てない
     {
       const partMat = new THREE.MeshLambertMaterial({ color: 0x7d8a92, transparent: true, opacity: 0.85 });
       for (const lv of [2, 4]) {
+        const ph = lv === 4 ? WALL_H : 1.2;
         const indoor = venue.areas.filter((a) => a.level === lv && !a.outdoor);
         const outdoor = venue.areas.filter((a) => a.level === lv && a.outdoor);
         const halls4 = venue.halls.filter((h) => h.level === lv).map((h) => h.poly);
@@ -590,8 +599,8 @@ export function VenueView() {
               if (start < 0) return;
               const t0 = (start / n) * L, t1 = (k / n) * L, len = t1 - t0;
               if (len > 0.4) {
-                const m = new THREE.Mesh(new THREE.BoxGeometry(len, 1.2, 0.15), partMat);
-                m.position.set(p0[0] + ux * (t0 + len / 2), floorY(lv) + 0.6, p0[1] + uz * (t0 + len / 2));
+                const m = new THREE.Mesh(new THREE.BoxGeometry(len, ph, 0.15), partMat);
+                m.position.set(p0[0] + ux * (t0 + len / 2), floorY(lv) + ph / 2, p0[1] + uz * (t0 + len / 2));
                 m.rotation.y = -Math.atan2(uz, ux);
                 g.add(m);
               }
@@ -600,7 +609,8 @@ export function VenueView() {
             for (let k = 0; k < n; k++) {
               const t = ((k + 0.5) / n) * L;
               const q: XZ = [p0[0] + ux * t + nx * 0.6, p0[1] + uz * t + nz * 0.6];
-              const border = inAny(q, outdoor.map((o) => o.poly)) && !inAny(q, indoor.filter((o) => o !== a).map((o) => o.poly)) && !inAny(q, halls4);
+              const qIn: XZ = [p0[0] + ux * t - nx * 0.6, p0[1] + uz * t - nz * 0.6];
+              const border = inAny(q, outdoor.map((o) => o.poly)) && !inAny(q, indoor.filter((o) => o !== a).map((o) => o.poly)) && !inAny(q, halls4) && !inAny(qIn, halls4);
               if (border && start < 0) start = k;
               if (!border) flush(k);
             }
@@ -692,11 +702,12 @@ export function VenueView() {
         wallMat,
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
         // 穴は、壁サークルがふさいでいる出入口も開ける（看板だけ出さない）
-        // 西・南のホールは、搬入口（大きなシャッター。写真で壁に開いている）も穴にする
-        venue.doors.filter((d) => d.hall === h.id && (d.kind === "出入口" || (d.kind === "搬入口" && (h.building === "西" || h.building === "南")))).map((d) => d.at),
+        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
+        // 南のホールは、搬入口（大きなシャッター。写真で開いている）も穴にする。西の搬入口は閉まっている
+        h.building === "南" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口").map((d) => d.at) : [],
       );
       scene.add(w);
       occluders.push(w);
