@@ -908,8 +908,8 @@ export function VenueView() {
       const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : st.outdoor ? OUTDOOR_STAIR_COLOR : LINK_COLOR }), n);
       const t = new THREE.Object3D();
       for (let i = 0; i < n; i++) {
-        // 段は 1 段ずつ、厚さ 0.6m の板（下まで埋めた塊にすると、下の階から壁のように見える）
-        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(0.6, top - y0);
+        // 段は 1 段ずつ、厚さ 2m の板（下まで埋めた塊にすると、下の階から壁のように見える。薄いと横から線にしか見えない：ユーザーの確認）
+        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(2, top - y0);
         t.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
         t.rotation.set(0, Math.atan2(dx, dz), 0);
         t.scale.set(1, th, 1);
