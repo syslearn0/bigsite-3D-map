@@ -323,9 +323,10 @@ const stairs: Stair[] = [];
     const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
     // 西 13：1F アトリウム ⇔ 4F アトリウム（屋内）。吹き抜け（天窓の下、u 78〜124・v -7〜39）の中を上がって、4F アトリウムの
     // 西4 にそう腕の縁（u 124）に、縁に直角につく（床に穴をあけて途中から出るのではない）。コミケの会場案内図の 4F 図でも、
-    // 吹き抜けの西4 の側の角の近くに、u の向きに描かれている（v 33：吹き抜けの縁から 6m 内側）
+    // 吹き抜けの西4 の側の角の近くに、u の向きに描かれている（v 33：吹き抜けの縁から 6m 内側）。
+    // 長いエスカレーターなので、ほかより急に（高さの 0.8 倍の長さ、50° ほど）。1F の端は吹き抜けの奥（西4 の側）に来る
     {
-      const [top, bottom] = fromUV([[124.5, 33], [124.5 - run(1, 4), 33]]);
+      const [top, bottom] = fromUV([[124.5, 33], [124.5 - (FLOOR_Y[4] - FLOOR_Y[1]) * 0.8, 33]]);
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 4 });
     }
     void bearing;
