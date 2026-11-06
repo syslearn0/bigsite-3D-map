@@ -537,7 +537,8 @@ export function VenueView() {
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース" || a.name === "コンコース";
       // 屋外（公式フロアマップで灰色の所）は、どの階も屋上展示場と同じ水色。屋内の 2F はオレンジ、ほかの屋内は黄色
-      const f = flatPoly(a.poly, a.name === "東棟屋外臨時駐車場" ? PARKING_COLOR : a.outdoor ? (a.level === 2 ? OUTDOOR_2F_COLOR : OUTDOOR_COLOR) : a.level === 2 || south || link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const color = a.name === "東棟屋外臨時駐車場" ? PARKING_COLOR : a.outdoor ? (a.level === 2 ? OUTDOOR_2F_COLOR : OUTDOOR_COLOR) : a.level === 2 || south || link ? LINK_COLOR : AREA_COLOR;
+      const f = flatPoly(a.poly, color, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
@@ -547,6 +548,26 @@ export function VenueView() {
           const edge = new THREE.LineLoop(
             new THREE.BufferGeometry().setFromPoints(r.map(([x, z]) => new THREE.Vector3(x, y + 0.06, z))),
             new THREE.LineBasicMaterial({ color: 0x2a86b0 }),
+          );
+          scene.add(edge);
+          partsOf(a.level).solid.push(edge);
+        }
+      }
+      if (color === AREA_COLOR) {
+        // クリーム色の床（1F・4F のアトリウム、ガレリア、ホール前、南展示棟など）も、ふちと穴のまわりをくっきりさせる（ユーザーの確認）：
+        // 幅 0.5m の濃い帯（寄ったとき太く見える）と、1 ピクセルの線（引いたときも消えない）
+        const ey = y + (a.under ? 0.03 : 0.06);
+        const loops = [a.poly, ...(a.holes ?? [])];
+        const band = new THREE.Mesh(
+          ribbons(loops.map((r) => ({ pts: [...r, r[0]], y: ey, w: 0.5 }))),
+          new THREE.MeshBasicMaterial({ color: 0x7a6420, side: THREE.DoubleSide }),
+        );
+        scene.add(band);
+        partsOf(a.level).solid.push(band);
+        for (const r of loops) {
+          const edge = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(r.map(([x, z]) => new THREE.Vector3(x, ey + 0.01, z))),
+            new THREE.LineBasicMaterial({ color: 0x7a6420 }),
           );
           scene.add(edge);
           partsOf(a.level).solid.push(edge);
