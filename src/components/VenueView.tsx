@@ -428,7 +428,9 @@ export function VenueView() {
   // ---- 3D の準備（1回だけ） ----
   useEffect(() => {
     const el = box.current!;
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // 奥行きは対数の目盛りにする。地面・海・1F の屋外・床は高さの差が数 cm〜数十 cm しかなく、ふつうの目盛りだと
+    // 遠くから見たときに見分けられず、面どうしが入れかわってチカチカする（z-fighting）
+    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     el.appendChild(renderer.domElement);
     // 机の配置番号を書く透明な板（上からの見方で、拡大したときだけ）。3D の上に重ね、押すのは下の 3D に通す
@@ -1763,7 +1765,7 @@ export function VenueView() {
       cam.up.set(st, 0, -ct); // 画面の上 = 会場のこの向き
       cam.position.set(cx, y + 600, cz);
       cam.lookAt(cx, y, cz);
-      printRenderer ??= new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      printRenderer ??= new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true });
       printRenderer.setSize(pxW, pxH, false);
       printRenderer.render(scene, cam);
       const c = document.createElement("canvas");
