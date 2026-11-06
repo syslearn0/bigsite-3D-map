@@ -566,14 +566,29 @@ export function VenueView() {
       const f = freePart(o.hall, o.a, o.b);
       return f ? [{ ...o, a: f[0], b: f[1] }] : [];
     });
-    // ホールの辺 i が「外へずらした辺で、その上に 2F の床がかかっている」か
-    const lowEdge = (h: Hall, i: number) => {
-      if (!h.inner || h.level !== 1) return false;
-      const a = h.poly[i], b = h.poly[(i + 1) % h.poly.length], a0 = h.inner[i], b0 = h.inner[(i + 1) % h.inner.length];
-      if (Math.hypot(a[0] - a0[0], a[1] - a0[1]) < 0.5 && Math.hypot(b[0] - b0[0], b[1] - b0[1]) < 0.5) return false;
-      const m: XZ = [(a[0] + b[0] + a0[0] + b0[0]) / 4, (a[1] + b[1] + a0[1] + b0[1]) / 4];
+    // 形のふちの上で、点 p にいちばん近い点と、その距離
+    const nearestOnRing = (p: XZ, r: XZ[]): [XZ, number] => {
+      let best: [XZ, number] = [r[0], Infinity];
+      r.forEach((a, i) => {
+        const b = r[(i + 1) % r.length];
+        const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
+        const q: XZ = [a[0] + t * dx, a[1] + t * dz], d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+        if (d < best[1]) best = [q, d];
+      });
+      return best;
+    };
+    // 辺 a〜b（one の形の辺）が、もう一方の形（other）のふちから離れていて（＝外へずらした所）、
+    // そのあいだの帯の上に 2F の床がかかっているか
+    const overBand = (a: XZ, b: XZ, other: XZ[]) => {
+      const mid: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const [q, d] = nearestOnRing(mid, other);
+      if (d < 0.5) return false;
+      const m: XZ = [(mid[0] + q[0]) / 2, (mid[1] + q[1]) / 2];
       return venue.areas.some((ar) => ar.level === 2 && pointInPolygon(m, ar.poly));
     };
+    // ホールの外壁の辺 i が「外へずらした辺で、その上に 2F の床がかかっている」か
+    const lowEdge = (h: Hall, i: number) => !!h.inner && h.level === 1 && overBand(h.poly[i], h.poly[(i + 1) % h.poly.length], h.inner);
     for (const h of venue.halls) {
       const y = floorY(h.level);
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
@@ -598,8 +613,8 @@ export function VenueView() {
       if (h.inner) {
         const upper = new THREE.Group();
         h.inner.forEach((a, i) => {
-          if (!lowEdge(h, i)) return;
           const b = h.inner![(i + 1) % h.inner!.length];
+          if (h.level !== 1 || !overBand(a, b, h.poly)) return;
           const len = Math.hypot(b[0] - a[0], b[1] - a[1]), hgt = WALL_H - (floorY(2) - floorY(1));
           const m = new THREE.Mesh(new THREE.BoxGeometry(len, hgt, 0.4), wallMat);
           m.position.set((a[0] + b[0]) / 2, y + floorY(2) - floorY(1) + hgt / 2, (a[1] + b[1]) / 2);
