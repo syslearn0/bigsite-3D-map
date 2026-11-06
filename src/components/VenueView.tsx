@@ -2404,7 +2404,8 @@ export function VenueView() {
           )}
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
             <button className="icon-btn" aria-label={view === "top" ? "3D にする" : "2D にする"} onClick={toggle3d}>
-              <Icon name={view === "top" ? "3d" : "2d"} />
+              {/* 絵より文字のほうが分かりやすい（ユーザーの確認）。押すとなる見え方を出す */}
+              <span style={{ fontWeight: 800, fontSize: "1rem", letterSpacing: ".02em" }}>{view === "top" ? "3D" : "2D"}</span>
             </button>
             <button className="icon-btn" aria-label="場所を指して歩く" aria-pressed={view === "walk" || walkPending} onClick={() => chooseView(view === "walk" ? "orbit" : "walk")}>
               <Icon name="walk" />
@@ -2832,29 +2833,13 @@ const SHEET: CSSProperties = {
 };
 
 // このアプリの小さなアイコン（自作の簡単な絵）
-function Icon({ name }: { name: "menu" | "2d" | "3d" | "walk" | "city" }) {
+function Icon({ name }: { name: "menu" | "walk" | "city" }) {
   const common = { width: 24, height: 24, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   switch (name) {
     case "menu":
       return (
         <svg {...common}>
           <path d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-      );
-    case "2d":
-      // 真上から見た地図（格子の平面）
-      return (
-        <svg {...common}>
-          <rect x="4" y="4" width="16" height="16" rx="1.5" />
-          <path d="M4 12h16M12 4v16" />
-        </svg>
-      );
-    case "3d":
-      // 斜めから見た箱
-      return (
-        <svg {...common}>
-          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />
-          <path d="M12 12l8-4.5M12 12L4 7.5M12 12v9" />
         </svg>
       );
     case "walk":
