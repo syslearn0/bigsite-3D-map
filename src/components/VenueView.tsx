@@ -83,9 +83,10 @@ const NOTES_KEY = "comiket3d:notes"; // 印をつけた机のメモ（任意）�
 const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
 
 // 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）。
-// 配置番号の欄は、当日・計画のモードではサイドバーの中（その段はサイドバーを開く）、作品を登録するモードでは地図の上
-const tourSteps = (mode: Mode): TourStep[] =>
-  TOUR_STEPS.map((st) => (st.target === '[data-tour="picker"]' ? { ...st, menu: mode === "plan" } : st));
+// menu：その段でサイドバーを開く。mode：その段のモード（途中で「作品を登録」に切りかえて説明し、「当日・計画」に戻す。
+// 書いていない段は案内を始めたときのモード。案内を閉じたら、始めたときのモードに戻す）
+const PICK = '[data-tour="picker"]';
+const MODE_SEG = '[aria-label="モード"]';
 const TOUR_STEPS: TourStep[] = [
   { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。ドラッグで動かし、2 本指（パソコンはホイール）で拡大・回転できます。" },
   { target: '[aria-label="メニュー"]', title: "メニュー", text: "左上のこのボタンで、サイドバーを開きます。" },
@@ -95,16 +96,47 @@ const TOUR_STEPS: TourStep[] = [
     title: "サイドバー",
     text: "日の切りかえ、ジャンル・作品の絞り込み、ホールへの移動、行きたい机の一覧と印刷、モードの切りかえはここにあります。",
   },
-  { target: '[data-tour="picker"]', title: "配置番号で探す", text: "列（東ア など）を選ぶと、その列が見える所へ移動します。続けて番号を選ぶと、その机へ移動します。" },
-  { title: "机に印とメモ", text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけた机には、メモも残せます（この端末の中だけに保存）。" },
+  {
+    target: MODE_SEG,
+    menu: true,
+    mode: "plan",
+    title: "2 つのモード",
+    text: "「作品を登録」と「当日・計画」の 2 つのモードがあります。開いたときは「当日・計画」です。次へで「作品を登録」に切りかえて説明します。",
+  },
+  {
+    target: MODE_SEG,
+    menu: true,
+    mode: "register",
+    title: "作品を登録のモード",
+    text: "行きたい作品のスペースに印をつけるモードです。地図は机が見やすい上からの 2D になり、配置番号の欄が地図の上にいつも出ます。",
+  },
+  {
+    target: PICK,
+    mode: "register",
+    title: "配置番号で探す",
+    text: "列（東ア など）を選ぶと、その列が見える所へ移動します。続けて番号を選ぶと、その机へ移動します。",
+  },
+  {
+    mode: "register",
+    title: "机に印とメモ",
+    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけると、その下にメモの欄が出ます（任意・この端末の中だけに保存）。メモは一覧と印刷にも出ます。",
+  },
   {
     target: '[aria-label="3D にする"], [aria-label="2D にする"]',
+    mode: "register",
     title: "2D と 3D",
     text: "上から見た 2D と、立体の 3D を切りかえます。作品を登録するときは、机が見やすい 2D がおすすめです。",
   },
-  { target: '[aria-label="場所を指して歩く"]', title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
-  { target: '[aria-label="周辺も表示"]', title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
-  { target: ".floor-switch", title: "階を切りかえる", text: "1F と 4F を切りかえます。「両方」で重ねて見られます。" },
+  {
+    target: MODE_SEG,
+    menu: true,
+    mode: "plan",
+    title: "当日・計画のモード",
+    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D で、配置番号の欄はサイドバーの中にあります。",
+  },
+  { target: '[aria-label="場所を指して歩く"]', mode: "plan", title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
+  { target: '[aria-label="周辺も表示"]', mode: "plan", title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
+  { target: ".floor-switch", mode: "plan", title: "階を切りかえる", text: "1F と 4F を切りかえます。「両方」で重ねて見られます。" },
 ];
 
 // 端末の保存を読む。読めないとき（プライベートモードなど）は空から
@@ -448,6 +480,7 @@ export function VenueView() {
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
   const [notes, setNotes] = useState<Record<string, string>>(loadNotes);
   const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
+  const tourFrom = useRef<Mode>("plan"); // 案内を始めたときのモード（閉じたら戻す）
   const endTour = () => {
     setTour(false);
     try {
@@ -2711,6 +2744,7 @@ export function VenueView() {
           style={{ marginTop: 12 }}
           onClick={() => {
             setMenu(false);
+            tourFrom.current = mode;
             setTour(true);
           }}
         >
@@ -2722,10 +2756,15 @@ export function VenueView() {
       {/* 初めての人向けの使い方の案内（開いたときの「非公式」の案内を閉じてから） */}
       {!splash && tour && (
         <Tour
-          steps={tourSteps(mode)}
-          onStep={(st) => setMenu(!!st.menu)}
+          steps={TOUR_STEPS}
+          onStep={(st) => {
+            setMenu(!!st.menu);
+            const m = st.mode ?? tourFrom.current;
+            if (m !== mode) chooseMode(m);
+          }}
           onDone={() => {
             setMenu(false);
+            if (mode !== tourFrom.current) chooseMode(tourFrom.current);
             endTour();
           }}
         />

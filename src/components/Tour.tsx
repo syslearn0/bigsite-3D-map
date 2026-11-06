@@ -3,7 +3,8 @@
 // 部品が画面にないとき（モードによって出ない欄など）は、画面の真ん中に吹き出しだけ出す
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-export type TourStep = { target?: string; title: string; text: string; menu?: boolean }; // menu：この段だけサイドバーを開く
+// menu：この段だけサイドバーを開く。mode：この段で地図のモードを切りかえる（切りかえは呼ぶ側の onStep がする）
+export type TourStep = { target?: string; title: string; text: string; menu?: boolean; mode?: "register" | "plan" };
 
 export default function Tour({ steps, onDone, onStep }: { steps: TourStep[]; onDone: () => void; onStep?: (step: TourStep) => void }) {
   const [i, setI] = useState(0);
