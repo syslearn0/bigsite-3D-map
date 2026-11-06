@@ -12,6 +12,8 @@ const ORIGIN = { lat: 35.6298, lon: 139.7942 };
 // 床の高さ（m）。見やすさのための高さで、実物とは違う。
 // 2F は 1F のホールの壁の高さ（12m）にそろえる。4F は 2F から 2 階ぶん上なので、1F→2F と同じだけ上（24m）
 const FLOOR_Y: Record<number, number> = { 1: 0, 2: 12, 4: 24 };
+// エスカレーターの平面の長さ ÷ 高さ（どのエスカレーターも同じ傾き）
+const ESC_RUN = 0.8;
 
 const byName = (name: string) => {
   const e = osm.elements.find((x) => x.tags?.name === name && x.geometry);
@@ -287,7 +289,7 @@ for (const a of areas) if (["屋上展示場", "エントランスプラザ", "�
 
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：OpenStreetMap の階段（way 381682023、
 // layer=2）。屋上展示場の西の角から北西へ、エントランスプラザへ下りる。航空写真でも、ここに屋根のある幅 7m ほどの階段が見える
-type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" };
+type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean };
 const stairs: Stair[] = [];
 {
   const so = existsSync("data/osm/surroundings.json") ? (JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] }) : { elements: [] };
@@ -298,7 +300,7 @@ const stairs: Stair[] = [];
   const L = Math.hypot(top[0] - bottom[0], top[1] - bottom[1]), ux = (top[0] - bottom[0]) / L, uz = (top[1] - bottom[1]) / L;
   const r = (v: number) => Math.round(v * 10) / 10;
   // 上の端は屋上展示場の中へ 1.5m のばす
-  stairs.push({ name: "階段", from: [r(top[0] + ux * 1.5), r(top[1] + uz * 1.5)], fromLevel: 4, to: [r(bottom[0]), r(bottom[1])], toLevel: 2, width: 7 });
+  stairs.push({ name: "階段", from: [r(top[0] + ux * 1.5), r(top[1] + uz * 1.5)], fromLevel: 4, to: [r(bottom[0]), r(bottom[1])], toLevel: 2, width: 7, outdoor: true });
 }
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
@@ -309,14 +311,15 @@ const stairs: Stair[] = [];
   // 印の位置は、その階のホールの四すみで公式の図を会場の座標に合わせて写したもの（誤差は 1〜9m）。
   // 向き：公式の図には向きがないので、西の 1F⇔4F はストリートビューで見た向き（南南西へ上がる）、ほかは近くの通路の向き
   {
-    const run = (lo: number, hi: number) => (FLOOR_Y[hi] - FLOOR_Y[lo]) * 1.8; // 30° ほどの傾き
+    // エスカレーターの長さ（平面）：高さの 0.8 倍（50° ほど。実物より急だが、地図で上下の階のつながりが分かりやすいように）
+    const run = (lo: number, hi: number) => (FLOOR_Y[hi] - FLOOR_Y[lo]) * ESC_RUN;
     const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
     // 西 13：1F アトリウム ⇔ 4F アトリウム（屋内）。吹き抜け（天窓の下、u 78〜124・v -7〜39）の中を上がって、4F アトリウムの
     // 西4 にそう腕の縁（u 124）に、縁に直角につく（床に穴をあけて途中から出るのではない）。コミケの会場案内図の 4F 図でも、
     // 吹き抜けの西4 の側の角の近くに、u の向きに描かれている（v 33：吹き抜けの縁から 6m 内側）。
-    // 長いエスカレーターなので、ほかより急に（高さの 0.8 倍の長さ、50° ほど）。1F の端は吹き抜けの奥（西4 の側）に来る
+    // 傾きはほかのエスカレーターと同じ（ESC_RUN）。1F の端は吹き抜けの奥（西4 の側）に来る
     {
-      const [top, bottom] = fromUV([[124.5, 33], [124.5 - (FLOOR_Y[4] - FLOOR_Y[1]) * 0.8, 33]]);
+      const [top, bottom] = fromUV([[124.5, 33], [124.5 - run(1, 4), 33]]);
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 4 });
     }
     void bearing;
@@ -385,7 +388,8 @@ const stairs: Stair[] = [];
     for (const v of vs.filter((x) => x.kind !== "escalator" || keep.has(x)))
     {
       // 上の端（2F）はそのまま、長さを 2F の高さに合わせる（30° ほど）
-      const L0 = Math.hypot(v.to[0] - v.from[0], v.to[1] - v.from[1]) || 1, L = (FLOOR_Y[2] - FLOOR_Y[1]) * 1.8;
+      // 長さ：エスカレーターはほかと同じ傾き（高さの ESC_RUN 倍）、階段は 30° ほど（高さの 1.8 倍）
+      const L0 = Math.hypot(v.to[0] - v.from[0], v.to[1] - v.from[1]) || 1, L = (FLOOR_Y[2] - FLOOR_Y[1]) * (v.kind === "escalator" ? ESC_RUN : 1.8);
       const ux = (v.to[0] - v.from[0]) / L0, uz = (v.to[1] - v.from[1]) / L0;
       // 上の端が 2F の床に、下の端が 1F の床に乗るよう、向きに沿っていちばん少なく（15m まで）ずらす
       // 床の端ぎりぎりに沿うもの（東1 の端の吹き抜け）は、横にも 4m まで内へ寄せる
@@ -753,6 +757,30 @@ if (existsSync("data/osm/surroundings.json")) {
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
       else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
     }
+  }
+}
+
+// 屋内と屋外：公式フロアマップの色分け（白が屋内、灰が屋外）に合わせる。
+// 2F の連絡ブリッジは灰（屋外）。コンコースは、イベントプラザから南展示棟の西の壁（u 230.4）までが灰（屋外）、
+// そこから先の南1・南2 にそう所は白（屋内）なので、そこで 2 つに分ける
+{
+  const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+  const half = (west: boolean) => ring(fromUV(west ? [[-1000, -1000], [230.4, -1000], [230.4, 1000], [-1000, 1000]] : [[230.4, -1000], [2000, -1000], [2000, 1000], [230.4, 1000]]));
+  for (const a of areas) if (a.name === "連絡ブリッジ") a.outdoor = true;
+  for (const a of areas.filter((x) => x.name === "コンコース" && x.level === 2)) {
+    const pieces = [true, false].flatMap((west) =>
+      polygonClipping.intersection([ring(a.poly), ...(a.holes ?? []).map(ring)], [half(west)]).map((pg) => ({
+        ...a,
+        poly: pg[0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ),
+        holes: pg.length > 1 ? pg.slice(1).map((h) => h.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ)) : undefined,
+        outdoor: west,
+      })),
+    );
+    // 名前の札は 1 つだけ（最初のかけら＝屋外の長い本体）。ほかのかけらにも出すと、同じ名前が並ぶ
+    pieces.forEach((pc, k) => {
+      if (k > 0 && !a.part) pc.part = true;
+    });
+    areas.splice(areas.indexOf(a), 1, ...pieces);
   }
 }
 
