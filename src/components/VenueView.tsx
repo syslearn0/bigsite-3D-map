@@ -51,7 +51,6 @@ const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
 type Mode = "register" | "plan";
-const MODE_KEY = "comiket3d:mode";
 type Floor = 1 | 4;
 const EYE = 1.6;
 const WALK_SPEED = 6; // m/秒（見て回りやすいよう、歩く速さより速め）
@@ -83,7 +82,10 @@ const PINS_KEY = "comiket3d:pins";
 const NOTES_KEY = "comiket3d:notes"; // 印をつけた机のメモ（任意）。配置番号 → メモ
 const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
 
-// 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）
+// 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）。
+// 配置番号の欄は、当日・計画のモードではサイドバーの中（その段はサイドバーを開く）、作品を登録するモードでは地図の上
+const tourSteps = (mode: Mode): TourStep[] =>
+  TOUR_STEPS.map((st) => (st.target === '[data-tour="picker"]' ? { ...st, menu: mode === "plan" } : st));
 const TOUR_STEPS: TourStep[] = [
   { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。ドラッグで動かし、2 本指（パソコンはホイール）で拡大・回転できます。" },
   { target: '[aria-label="メニュー"]', title: "メニュー", text: "左上のこのボタンで、サイドバーを開きます。" },
@@ -93,9 +95,13 @@ const TOUR_STEPS: TourStep[] = [
     title: "サイドバー",
     text: "日の切りかえ、ジャンル・作品の絞り込み、ホールへの移動、行きたい机の一覧と印刷、モードの切りかえはここにあります。",
   },
-  { target: '[data-tour="picker"]', title: "配置番号で探す", text: "列・番号・a/b を選ぶと、その机へ移動します。" },
+  { target: '[data-tour="picker"]', title: "配置番号で探す", text: "列（東ア など）を選ぶと、その列が見える所へ移動します。続けて番号を選ぶと、その机へ移動します。" },
   { title: "机に印とメモ", text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけた机には、メモも残せます（この端末の中だけに保存）。" },
-  { target: '[aria-label="3D にする"], [aria-label="2D にする"]', title: "2D と 3D", text: "上から見た 2D と、立体の 3D を切りかえます。" },
+  {
+    target: '[aria-label="3D にする"], [aria-label="2D にする"]',
+    title: "2D と 3D",
+    text: "上から見た 2D と、立体の 3D を切りかえます。作品を登録するときは、机が見やすい 2D がおすすめです。",
+  },
   { target: '[aria-label="場所を指して歩く"]', title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
   { target: '[aria-label="周辺も表示"]', title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
   { target: ".floor-switch", title: "階を切りかえる", text: "1F と 4F を切りかえます。「両方」で重ねて見られます。" },
@@ -369,6 +375,7 @@ type Api = {
   recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
+  focusLine: (line: number) => void;
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
@@ -390,14 +397,9 @@ export function VenueView() {
   const [genre, setGenre] = useState<string | null>(null);
   const [work, setWork] = useState<string | null>(null);
   const [char, setChar] = useState<string | null>(null);
-  // 2 つのモード：作品を登録する（最初は 2D・配置番号の欄をいつも出す）と、当日に使う・計画する（最初は 3D）
-  const [mode, setMode] = useState<Mode>(() => {
-    try {
-      return localStorage.getItem(MODE_KEY) === "plan" ? "plan" : "register";
-    } catch {
-      return "register";
-    }
-  });
+  // 2 つのモード：作品を登録する（最初は 2D・配置番号の欄をいつも出す）と、当日に使う・計画する（最初は 3D）。
+  // 開いたときはいつも「当日・計画」（ユーザーの確認）
+  const [mode, setMode] = useState<Mode>("plan");
   const [menu, setMenu] = useState(false); // サイドバー
   const [splash, setSplash] = useState(true); // 開いたときの「非公式」の案内
   const [day, setDay] = useState<Day>(1); // 何日目（作品・キャラは日ごと）
@@ -439,7 +441,7 @@ export function VenueView() {
   };
   // 机を選ぶ欄：列（lines の何番目か）→ 番号 → a・b。地図で机を押したときも、その机に合わせる
   const [pickLine, setPickLine] = useState<number | null>(null);
-  const [pickNum, setPickNum] = useState(1);
+  const [pickNum, setPickNum] = useState<number | null>(null);
   const [pickHalf, setPickHalf] = useState<"a" | "b">("a");
   // この画面はブラウザでだけ描く（page.tsx で ssr: false）ので、最初から端末の保存を読める
   const [marks, setMarks] = useState<Record<string, Mark>>(loadMarks);
@@ -1384,6 +1386,32 @@ export function VenueView() {
         focus.copy(p);
       } else focusPoint(p, true);
     };
+    // 列の机が全部見える所へ（2D は倍率、3D はカメラの距離を、列の広がりから）。選んだ机の印は外す
+    const focusLine = (line: number) => {
+      const bs = booths.filter((b) => b.line === line);
+      if (!bs.length) return;
+      const lv = hallById.get(bs[0].hall)!.level;
+      if (!shown(floorOf(lv))) setFloor(floorOf(lv));
+      const xs = bs.map((b) => b.at[0]), zs = bs.map((b) => b.at[1]);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+      const span = Math.max(12, Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)) + 8;
+      const p = new THREE.Vector3(cx, floorY(lv), cz);
+      pinOn = false;
+      applyVisibility();
+      focus.copy(p);
+      if (current === "top") {
+        startFly(p.clone(), new THREE.Vector3(p.x, 600, p.z + 0.01));
+        // 列の広がりが、画面の短い辺の 8 割に入る倍率
+        const ppm = (0.8 * Math.min(el.clientWidth, el.clientHeight)) / span;
+        ortho.zoom = (ppm * 2 * 160) / el.clientHeight;
+        ortho.updateProjectionMatrix();
+      } else if (current === "orbit") {
+        const d = span / (2 * Math.tan((persp.fov * Math.PI) / 360)) / 0.8;
+        startFly(p.clone(), p.clone().add(new THREE.Vector3(-12, 22, 28).normalize().multiplyScalar(d)));
+      } else {
+        persp.position.set(cx, floorY(lv) + EYE, cz);
+      }
+    };
     // 歩く：(x, z) に立つ。向きは、それまで見ていた向き（真上から見ていたときは北）
     const standAt = (x: number, z: number) => {
       persp.position.set(x, eyeY(), z);
@@ -2124,7 +2152,7 @@ export function VenueView() {
     api.current = { setView, setFloor, setBoth: (on) => {
       bothFloors = on;
       applyVisibility();
-    }, recolor, setPins, focusBooth, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
+    }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
         surroundings.visible = on;
       },
     };
@@ -2184,6 +2212,15 @@ export function VenueView() {
     if (i !== undefined) select(i);
   };
   const pickNums = pickLine === null ? [] : lineNums(lines[pickLine]);
+  // 列を選んだとき：番号はまだ選ばず、その列の机が全部見える所へ
+  const chooseLine = (line: number) => {
+    setPickLine(line);
+    setPickNum(null);
+    setPickHalf("a");
+    setSelected(null);
+    setFloor(floorOf(hallById.get(lines[line].hall)!.level));
+    api.current?.focusLine(line);
+  };
 
   const sel = selected !== null ? booths[selected] : null;
   const selHall = sel ? hallById.get(sel.hall)! : null;
@@ -2230,9 +2267,6 @@ export function VenueView() {
   })();
   const chooseMode = (m: Mode) => {
     setMode(m);
-    try {
-      localStorage.setItem(MODE_KEY, m);
-    } catch {}
     cancelWalk();
     setView(m === "plan" ? "orbit" : "top");
   };
@@ -2246,7 +2280,7 @@ export function VenueView() {
       <select
         aria-label="列"
         value={pickLine ?? ""}
-        onChange={(e) => jump(Number(e.target.value), lineNums(lines[Number(e.target.value)])[0] ?? 1, "a")}
+        onChange={(e) => chooseLine(Number(e.target.value))}
         style={{ flex: 2, minWidth: 0 }}
       >
         <option value="" disabled>
@@ -2265,7 +2299,10 @@ export function VenueView() {
           </optgroup>
         ))}
       </select>
-      <select aria-label="番号" value={pickNum} disabled={pickLine === null} onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)} style={{ flex: 1, minWidth: 0 }}>
+      <select aria-label="番号" value={pickNum ?? ""} disabled={pickLine === null} onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)} style={{ flex: 1, minWidth: 0 }}>
+        <option value="" disabled>
+          番号
+        </option>
         {pickNums.map((n) => (
           <option key={n} value={n}>
             {String(n).padStart(2, "0")}
@@ -2274,7 +2311,7 @@ export function VenueView() {
       </select>
       <div className="seg" role="group" aria-label="a・b">
         {(["a", "b"] as const).map((x) => (
-          <button key={x} aria-pressed={pickLine !== null && pickHalf === x} disabled={pickLine === null} onClick={() => jump(pickLine!, pickNum, x)}>
+          <button key={x} aria-pressed={pickNum !== null && pickHalf === x} disabled={pickNum === null} onClick={() => jump(pickLine!, pickNum!, x)}>
             {x}
           </button>
         ))}
@@ -2533,7 +2570,7 @@ export function VenueView() {
         {mode === "plan" && (
           <>
             <h3>配置番号</h3>
-            {codePicker}
+            <div data-tour="picker">{codePicker}</div>
           </>
         )}
         <>
@@ -2685,7 +2722,7 @@ export function VenueView() {
       {/* 初めての人向けの使い方の案内（開いたときの「非公式」の案内を閉じてから） */}
       {!splash && tour && (
         <Tour
-          steps={TOUR_STEPS}
+          steps={tourSteps(mode)}
           onStep={(st) => setMenu(!!st.menu)}
           onDone={() => {
             setMenu(false);
