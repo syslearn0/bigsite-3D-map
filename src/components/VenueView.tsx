@@ -888,12 +888,31 @@ export function VenueView() {
       const y0 = floorY(st.toLevel), y1 = floorY(st.fromLevel);
       const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
       if (st.kind === "ramp") {
-        // 車のスロープ：段のない 1 枚の傾いた板（厚さ 0.6m）
-        const geo = new THREE.BoxGeometry(st.width, 0.6, Math.hypot(run, y1 - y0));
+        // 車のスロープ：段のない 1 枚の傾いた板（厚さ 2m。エスカレーター・階段と同じ：ユーザーの確認）
+        const RT = 2, len = Math.hypot(run, y1 - y0);
+        const geo = new THREE.BoxGeometry(st.width, RT, len);
         const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: RAMP_COLOR }));
         m.rotation.order = "YXZ";
         m.rotation.set(-Math.atan2(y1 - y0, run), Math.atan2(dx, dz), 0);
-        m.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 - 0.3, (st.from[1] + st.to[1]) / 2);
+        // 上の面が、上と下の床の高さをむすぶ線にのるように（板の厚さの半分だけ、面に直角に下げる）
+        const tilt = Math.atan2(y1 - y0, run);
+        m.position.set((st.from[0] + st.to[0]) / 2 + (dx / run) * Math.sin(tilt) * (RT / 2), (y0 + y1) / 2 - Math.cos(tilt) * (RT / 2), (st.from[1] + st.to[1]) / 2 + (dz / run) * Math.sin(tilt) * (RT / 2));
+        // ふち：床と同じく、色を濃くした帯（幅 0.35m）と線（1px）を、上の面の長い 2 辺に。上と下の端は床・地面とひと続きなので描かない
+        {
+          const dark = new THREE.Color(RAMP_COLOR).multiplyScalar(0.5);
+          const bandMat = new THREE.MeshBasicMaterial({ color: dark, side: THREE.DoubleSide });
+          const pts: number[] = [];
+          for (const sx of [-1, 1]) {
+            const band = new THREE.Mesh(new THREE.PlaneGeometry(0.35, len), bandMat);
+            band.rotation.x = -Math.PI / 2;
+            band.position.set(sx * (st.width / 2 - 0.175), RT / 2 + 0.03, 0);
+            m.add(band);
+            pts.push(sx * st.width / 2, RT / 2 + 0.04, -len / 2, sx * st.width / 2, RT / 2 + 0.04, len / 2);
+          }
+          const lg = new THREE.BufferGeometry();
+          lg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+          m.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: dark })));
+        }
         scene.add(m);
         const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(190,120,20,.95)", height: 2.6, px: 30 });
         label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
