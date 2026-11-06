@@ -474,7 +474,17 @@ export function VenueView() {
     }) })));
     surroundings.add(new THREE.Mesh(ribbons(rails), new THREE.MeshLambertMaterial({ color: 0x5b5148, side: THREE.DoubleSide })));
     surroundings.add(new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === "rail" && l.y <= 1)), new THREE.MeshLambertMaterial({ color: 0x9c9488, side: THREE.DoubleSide })));
-    for (const a of sur.areas) surroundings.add(flatPoly(a.poly, a.kind === "water" ? 0x6fa8d6 : a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0)));
+    for (const a of sur.areas) {
+      const m = flatPoly(a.poly, a.kind === "water" ? 0x6fa8d6 : a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0));
+      // 海は地面のすぐ上の広い面。遠くで地面と奥行きの差がなくなってチカチカしないよう、少し手前に描く
+      if (a.kind === "water") {
+        const mat = m.material as THREE.MeshLambertMaterial;
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = -4;
+        mat.polygonOffsetUnits = -4;
+      }
+      surroundings.add(m);
+    }
     // 駅の名前（画面の上で同じ大きさ。毎フレーム placeLabels で大きさを決める）
     const stationLabels: { s: THREE.Sprite; base: THREE.Vector3 }[] = [];
     // 重なったときに残す順（来場者がよく使う駅から）
@@ -2075,6 +2085,13 @@ export function VenueView() {
             <button className="icon-btn" aria-label="周辺も表示" aria-pressed={surround} onClick={() => setSurround((x) => !x)}>
               <Icon name="city" />
             </button>
+            <div className="floor-switch" role="group" aria-label="階">
+              {([4, 1] as Floor[]).map((f) => (
+                <button key={f} aria-pressed={floor === f} onClick={() => setFloor(f)}>
+                  {f}F
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         {!online && (

@@ -277,3 +277,24 @@ select:disabled {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
   border: 3px solid #d64545;
 }
+
+/* いつも出す 1F・4F の切りかえ（上が 4F、下が 1F） */
+.floor-switch {
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  width: 44px;
+}
+
+.floor-switch button {
+  border-radius: 0;
+  height: 40px;
+  padding: 0;
+  font-weight: 700;
+}
+
+.floor-switch button + button {
+  border-top: none;
+}
