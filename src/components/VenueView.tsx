@@ -86,7 +86,13 @@ const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
 // 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）
 const TOUR_STEPS: TourStep[] = [
   { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。ドラッグで動かし、2 本指（パソコンはホイール）で拡大・回転できます。" },
-  { target: '[aria-label="メニュー"]', title: "メニュー", text: "日・ジャンル・作品の絞り込み、行きたい机の一覧と印刷、モードの切りかえはここから開きます。" },
+  { target: '[aria-label="メニュー"]', title: "メニュー", text: "左上のこのボタンで、サイドバーを開きます。" },
+  {
+    target: "aside.side",
+    menu: true,
+    title: "サイドバー",
+    text: "日の切りかえ、ジャンル・作品の絞り込み、ホールへの移動、行きたい机の一覧と印刷、モードの切りかえはここにあります。",
+  },
   { target: '[data-tour="picker"]', title: "配置番号で探す", text: "列・番号・a/b を選ぶと、その机へ移動します。" },
   { title: "机に印とメモ", text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけた机には、メモも残せます（この端末の中だけに保存）。" },
   { target: '[aria-label="3D にする"], [aria-label="2D にする"]', title: "2D と 3D", text: "上から見た 2D と、立体の 3D を切りかえます。" },
@@ -574,6 +580,7 @@ export function VenueView() {
     const wallMat = new THREE.MeshLambertMaterial({ color: 0x8d9894, transparent: true, opacity: 0.55 });
     const occluders: THREE.Object3D[] = []; // 札を隠す壁（3D・歩くで、壁の向こうの札は出さない）
 
+    const areaColor = new Map<(typeof venue.areas)[number], number>();
     for (const a of venue.areas) {
       const y = floorY(a.level);
       const link = LINK_AREAS.has(a.name) || a.see;
@@ -584,46 +591,9 @@ export function VenueView() {
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       scene.add(f);
       partsOf(a.level).floors.push(f);
-      if (a.outdoor && !a.part) {
-        // 屋外の床は、ふちを濃い水色の線でなぞる（となり合う屋外の床の境目と、吹き抜けの穴が分かるように）
-        for (const r of [a.poly, ...(a.holes ?? [])]) {
-          const edge = new THREE.LineLoop(
-            new THREE.BufferGeometry().setFromPoints(r.map(([x, z]) => new THREE.Vector3(x, y + 0.06, z))),
-            new THREE.LineBasicMaterial({ color: 0x2a86b0 }),
-          );
-          scene.add(edge);
-          partsOf(a.level).solid.push(edge);
-        }
-      }
-      if (color === AREA_COLOR) {
-        // クリーム色の床（1F・4F のアトリウム、ガレリア、ホール前、南展示棟など）も、ふちと穴のまわりをくっきりさせる（ユーザーの確認）：
-        // 幅 0.5m の濃い帯（寄ったとき太く見える）と、1 ピクセルの線（引いたときも消えない）
-        const ey = y + (a.under ? 0.03 : 0.06);
-        const loops = [a.poly, ...(a.holes ?? [])];
-        const band = new THREE.Mesh(
-          ribbons(loops.map((r) => ({ pts: [...r, r[0]], y: ey, w: 0.5 }))),
-          new THREE.MeshBasicMaterial({ color: 0x7a6420, side: THREE.DoubleSide }),
-        );
-        scene.add(band);
-        partsOf(a.level).solid.push(band);
-        for (const r of loops) {
-          const edge = new THREE.LineLoop(
-            new THREE.BufferGeometry().setFromPoints(r.map(([x, z]) => new THREE.Vector3(x, ey + 0.01, z))),
-            new THREE.LineBasicMaterial({ color: 0x7a6420 }),
-          );
-          scene.add(edge);
-          partsOf(a.level).solid.push(edge);
-        }
-      }
+      areaColor.set(a, color);
       if (link) {
-        // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）は、ふちを濃い線でなぞって、ひと続きの平面に見せる
-        const edge = new THREE.LineLoop(
-          new THREE.BufferGeometry().setFromPoints(a.poly.map(([x, z]) => new THREE.Vector3(x, y + 0.08, z))),
-          new THREE.LineBasicMaterial({ color: 0xb4501c }),
-        );
-        scene.add(edge);
-        partsOf(a.level).solid.push(edge);
-        // 吹き抜けのふちに手すり（高さ 1.1m の薄い板）
+        // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）：吹き抜けのふちに手すり（高さ 1.1m の薄い板）
         for (const h of a.holes ?? []) {
           const rail = walls(h, y, 1.1, new THREE.MeshLambertMaterial({ color: 0xb4501c, transparent: true, opacity: 0.6 }));
           scene.add(rail);
@@ -641,6 +611,67 @@ export function VenueView() {
       scene.add(label);
       partsOf(a.level).solid.push(label);
       addLabel(label, big ? "hall" : "area");
+    }
+    // 床のふち：どの床も、外まわりと穴のまわりを、その床の色を濃くした帯（幅 0.35m。寄ったとき太く見える）と線（1px。引いたときも消えない）で
+    // なぞる。エスカレーター・階段がどの床のふちにつながっているか分かるように（ユーザーの確認）。ふちを 0.5m ごとに見て、すぐ外が同じ階の
+    // ほかの床かホールなら、2 枚の床でひと続きになっている所なので描かない
+    {
+      const onFloor = (a: (typeof venue.areas)[number], q: XZ) => pointInPolygon(q, a.poly) && !(a.holes ?? []).some((h) => pointInPolygon(q, h));
+      const bbox = (poly: XZ[]) => {
+        const xs = poly.map((p) => p[0]), zs = poly.map((p) => p[1]);
+        return [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)];
+      };
+      const boxes = new Map(venue.areas.map((a) => [a, bbox(a.poly)] as const));
+      const inBox = (b: number[], q: XZ) => q[0] >= b[0] - 0.5 && q[0] <= b[2] + 0.5 && q[1] >= b[1] - 0.5 && q[1] <= b[3] + 0.5;
+      const edgeGroups = new Map<string, { color: number; level: number; runs: { pts: XZ[]; y: number; w: number }[]; lines: number[] }>();
+      for (const a of venue.areas) {
+        const color = areaColor.get(a)!;
+        const others = venue.areas.filter((o) => o !== a && o.level === a.level);
+        const hallPolys = venue.halls.filter((h) => h.level === a.level).map((h) => h.poly);
+        const ey = floorY(a.level) + (a.under ? 0.03 : 0.07);
+        const key = `${a.level}-${color}`;
+        const out = edgeGroups.get(key) ?? { color, level: a.level, runs: [], lines: [] };
+        edgeGroups.set(key, out);
+        for (const r of [a.poly, ...(a.holes ?? [])]) {
+          r.forEach((p0, i) => {
+            const p1 = r[(i + 1) % r.length];
+            const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+            if (L < 0.05) return;
+            const ux = (p1[0] - p0[0]) / L, uz = (p1[1] - p0[1]) / L;
+            let nx = -uz, nz = ux;
+            const mid: XZ = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+            if (onFloor(a, [mid[0] + nx * 0.05, mid[1] + nz * 0.05])) [nx, nz] = [-nx, -nz]; // 床でない側（外）へ
+            const n = Math.max(1, Math.ceil(L / 0.5));
+            let s0 = -1;
+            const flush = (k: number) => {
+              if (s0 < 0) return;
+              const t0 = (s0 / n) * L, t1 = (k / n) * L;
+              const a0: XZ = [p0[0] + ux * t0, p0[1] + uz * t0], a1: XZ = [p0[0] + ux * t1, p0[1] + uz * t1];
+              out.runs.push({ pts: [a0, a1], y: ey, w: 0.35 });
+              out.lines.push(a0[0], ey + 0.01, a0[1], a1[0], ey + 0.01, a1[1]);
+              s0 = -1;
+            };
+            for (let k = 0; k < n; k++) {
+              const t = ((k + 0.5) / n) * L;
+              const q: XZ = [p0[0] + ux * t + nx * 0.4, p0[1] + uz * t + nz * 0.4];
+              const joined = others.some((o) => inBox(boxes.get(o)!, q) && onFloor(o, q)) || hallPolys.some((h) => pointInPolygon(q, h));
+              if (!joined && s0 < 0) s0 = k;
+              if (joined) flush(k);
+            }
+            flush(n);
+          });
+        }
+      }
+      // 階ごと・色ごとに 1 つの形にまとめて描く
+      for (const g of edgeGroups.values()) {
+        const dark = new THREE.Color(g.color).multiplyScalar(0.5);
+        const band = new THREE.Mesh(ribbons(g.runs), new THREE.MeshBasicMaterial({ color: dark, side: THREE.DoubleSide }));
+        const lg = new THREE.BufferGeometry();
+        lg.setAttribute("position", new THREE.Float32BufferAttribute(g.lines, 3));
+        const line = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: dark }));
+        scene.add(band, line);
+        partsOf(g.level).solid.push(band, line);
+      }
     }
     // 2F と 4F の、屋内と屋外の境目の仕切り。2F は高さ 3.6m の仕切り、4F は建物の外壁なのでホールの壁と同じ高さ。
     // 屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、ほかの屋内の床でもホールでもない所に立てる。
@@ -1306,7 +1337,7 @@ export function VenueView() {
           else o.visible = on;
         }
       }
-      for (const { mesh, level } of numMeshes) mesh.visible = current !== "top" && shown(floorOf(level));
+      for (const { mesh, level } of numMeshes) mesh.visible = current === "walk" && shown(floorOf(level));
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
@@ -1654,8 +1685,111 @@ export function VenueView() {
     // 上からの見方は真上から北を上に見ているので、画面の位置は (x, z) をそのまま拡大して足せばよい
     let codesShown = false;
     const ends = islandEnds(lines);
+    // 3D（見下ろす見方）：机ごとに画面の上での大きさ（遠近で変わる）を見て、2D と同じ決まりで書く。
+    // 1 スペースが 16px 以上ならスペースごと（05a。34px 以上で C-05a）、机 1 つが 14px 以上なら机ごと（05）、
+    // 1m が 3px 以上なら島の端の番号だけ。カメラが動いていなければ書き直さない
+    const pv = new THREE.Vector3();
+    let lastKey3d = "";
+    const drawCodes3d = (w: number, h: number) => {
+      const key = [camera.position.x, camera.position.y, camera.position.z, camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, w, h, currentFloor, bothFloors]
+        .map((v) => (typeof v === "number" ? v.toFixed(3) : String(v)))
+        .join(",");
+      if (key === lastKey3d && codesShown) return;
+      lastKey3d = key;
+      codeCtx.clearRect(0, 0, w, h);
+      codesShown = true;
+      const tanH = Math.tan((persp.fov * Math.PI) / 360);
+      const cp = camera.position;
+      const ppmAt = (x: number, y: number, z: number) => h / (2 * Math.max(0.1, Math.hypot(x - cp.x, y - cp.y, z - cp.z)) * tanH);
+      const scr = (x: number, y: number, z: number): [number, number] | null => {
+        pv.set(x, y, z).project(camera);
+        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1.05 || Math.abs(pv.y) > 1.05) return null;
+        return [((pv.x + 1) / 2) * w, ((1 - pv.y) / 2) * h];
+      };
+      codeCtx.textAlign = "center";
+      codeCtx.textBaseline = "middle";
+      codeCtx.fillStyle = "#1d1d1b";
+      codeCtx.strokeStyle = "rgba(255,255,255,.85)";
+      codeCtx.lineWidth = 3;
+      let font = "";
+      // 画面の上で、先に書いた番号と重なる番号は書かない（遠くの島は遠近で縦につぶれ、番号が重なって読めなくなる）。
+      // 近い机から書くので、近い番号が残る。重なりは 24px の升目で調べる
+      const cell = 24;
+      const taken = new Map<number, [number, number, number, number][]>();
+      const free = (x0: number, y0: number, x1: number, y1: number) => {
+        for (let gx = Math.floor(x0 / cell); gx <= Math.floor(x1 / cell); gx++)
+          for (let gy = Math.floor(y0 / cell); gy <= Math.floor(y1 / cell); gy++)
+            for (const r of taken.get(gx * 4096 + gy) ?? []) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false;
+        return true;
+      };
+      const items: { label: string; px: number; at: [number, number]; d: number }[] = [];
+      const write = (label: string, px: number, at: [number, number], d = 0) => items.push({ label, px, at, d });
+      const flushItems = () => {
+        items.sort((p, q) => p.d - q.d);
+        for (const it of items) {
+          const hw = (it.label.length * it.px * 0.62) / 2 + 1, hh = it.px / 2 + 1;
+          const r: [number, number, number, number] = [it.at[0] - hw, it.at[1] - hh, it.at[0] + hw, it.at[1] + hh];
+          if (!free(...r)) continue;
+          for (let gx = Math.floor(r[0] / cell); gx <= Math.floor(r[2] / cell); gx++)
+            for (let gy = Math.floor(r[1] / cell); gy <= Math.floor(r[3] / cell); gy++) {
+              const k = gx * 4096 + gy;
+              if (!taken.has(k)) taken.set(k, []);
+              taken.get(k)!.push(r);
+            }
+          const f = `600 ${Math.round(it.px)}px system-ui, sans-serif`;
+          if (f !== font) codeCtx.font = font = f;
+          codeCtx.strokeText(it.label, it.at[0], it.at[1]);
+          codeCtx.fillText(it.label, it.at[0], it.at[1]);
+        }
+      };
+      const out = (VIEW_DESK_D - DESK_D) / 2;
+      for (const [lv, d] of deskMeshes) {
+        if (!shown(floorOf(lv))) continue;
+        const y = floorY(lv) + 0.75;
+        for (const bi of d.index) {
+          const a = booths[bi];
+          const b = booths[bi + 1];
+          const pair = a.half === "a" && b && b.line === a.line && b.num === a.num;
+          if (a.half === "b" && bi > 0 && booths[bi - 1].line === a.line && booths[bi - 1].num === a.num) continue; // 組の b は a の所で書く
+          const spot = (s: Booth): [number, number] => [s.at[0] - Math.sin(s.angle) * s.side * out, s.at[1] + Math.cos(s.angle) * s.side * out];
+          const c0 = spot(a);
+          const c1 = pair ? spot(b) : c0;
+          const mx = (c0[0] + c1[0]) / 2, mz = (c0[1] + c1[1]) / 2;
+          const ppm = ppmAt(mx, y, mz);
+          if (ppm * 0.9 >= 16) {
+            const full = ppm * 0.9 >= 34;
+            const px = Math.max(9, Math.min(14, ppm * 0.9 * (full ? 0.3 : 0.42)));
+            for (const sp of pair ? [a, b] : [a]) {
+              const [x, z] = spot(sp);
+              const at = scr(x, y, z);
+              if (at) write(full ? `${sp.block}-${String(sp.num).padStart(2, "0")}${sp.half}` : `${String(sp.num).padStart(2, "0")}${sp.half}`, px, at, 1 / ppm);
+            }
+          } else if (ppm * DESK_L >= 14) {
+            const at = scr(mx, y, mz);
+            if (at) write(String(a.num).padStart(2, "0"), Math.max(9, Math.min(13, ppm * DESK_L * 0.45)), at, 1 / ppm);
+          }
+        }
+      }
+      // 島の端の番号：机ごとの番号を書くほど近くないとき
+      for (const e of ends) {
+        const l = lines[e.line];
+        const lv = hallById.get(l.hall)!.level;
+        if (!shown(floorOf(lv))) continue;
+        const c = Math.cos(l.angle), sn = Math.sin(l.angle);
+        const x0 = l.start[0] + e.u * c, z0 = l.start[1] + e.u * sn, y = floorY(lv) + 0.75;
+        const ppm = ppmAt(x0, y, z0);
+        if (ppm < 3 || ppm * DESK_L >= 14) continue;
+        const side = e.side * Math.max(7 / ppm, VIEW_DESK_D / 2);
+        const inward = -e.out * Math.max(7 / ppm, DESK_L / 2);
+        const at = scr(x0 + c * inward - sn * side, y, z0 + sn * inward + c * side);
+        if (at) write(String(e.num).padStart(2, "0"), 10, at, 1 / ppm);
+      }
+      flushItems();
+    };
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
+      if (current === "orbit") return drawCodes3d(w, h);
+      lastKey3d = "";
       const ppm = (h * ortho.zoom) / (2 * 160);
       // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
       const every = ppm * 0.9 >= 16;
@@ -2116,7 +2250,7 @@ export function VenueView() {
         style={{ flex: 2, minWidth: 0 }}
       >
         <option value="" disabled>
-          配置番号（列）
+          配置番号
         </option>
         {openHalls.map((h) => (
           <optgroup key={h.id} label={h.name + (h.level >= 4 ? "（4F）" : "")}>
@@ -2549,7 +2683,16 @@ export function VenueView() {
       </aside>
 
       {/* 初めての人向けの使い方の案内（開いたときの「非公式」の案内を閉じてから） */}
-      {!splash && tour && <Tour steps={TOUR_STEPS} onDone={endTour} />}
+      {!splash && tour && (
+        <Tour
+          steps={TOUR_STEPS}
+          onStep={(st) => setMenu(!!st.menu)}
+          onDone={() => {
+            setMenu(false);
+            endTour();
+          }}
+        />
+      )}
 
       {/* 開いたときの案内：非公式であることを大きく。どこかを押すと消える */}
       {splash && (
@@ -2558,6 +2701,9 @@ export function VenueView() {
             <div style={{ fontSize: "1.6rem", fontWeight: 800 }}>非公式の試作です</div>
             <p>
               この地図は、コミックマーケット準備会・株式会社東京ビッグサイトとは<strong>関係のない</strong>、個人の非公式の試作です。
+            </p>
+            <p>
+              会場の図は、株式会社東京ビッグサイトから図面の利用について了承を得て、それを参考に独自に描いたものです（同社の公認・監修ではありません）。
             </p>
             <p>島の配置・作品は仮です（C109 の本当の配置ではありません）。当日の出入口・動線は、運営の案内に従ってください。</p>
             <p style={{ color: "var(--muted)", fontSize: ".85rem", marginBottom: 0 }}>画面のどこかを押すと閉じます</p>

@@ -384,3 +384,8 @@ select:disabled {
 .tour-next {
   font-weight: 700;
 }
+.tour-arrow.left {
+  left: -9px;
+  border-right: none;
+  border-top: none;
+}

@@ -3,9 +3,9 @@
 // 部品が画面にないとき（モードによって出ない欄など）は、画面の真ん中に吹き出しだけ出す
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-export type TourStep = { target?: string; title: string; text: string };
+export type TourStep = { target?: string; title: string; text: string; menu?: boolean }; // menu：この段だけサイドバーを開く
 
-export default function Tour({ steps, onDone }: { steps: TourStep[]; onDone: () => void }) {
+export default function Tour({ steps, onDone, onStep }: { steps: TourStep[]; onDone: () => void; onStep?: (step: TourStep) => void }) {
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -21,9 +21,16 @@ export default function Tour({ steps, onDone }: { steps: TourStep[]; onDone: () 
       setSize({ w: innerWidth, h: innerHeight });
       setBh(bubble.current?.offsetHeight ?? 0);
     };
+    onStep?.(step);
     measure();
+    // サイドバーが開く・閉じる動き（0.25 秒ほど）のあとに、もう一度測る
+    const t = setTimeout(measure, 350);
     addEventListener("resize", measure);
-    return () => removeEventListener("resize", measure);
+    return () => {
+      clearTimeout(t);
+      removeEventListener("resize", measure);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 段が変わったときだけ
   }, [step]);
 
   const next = () => (i + 1 < steps.length ? setI(i + 1) : onDone());
@@ -43,10 +50,16 @@ export default function Tour({ steps, onDone }: { steps: TourStep[]; onDone: () 
   // 吹き出しの置き場所：部品の下（足りなければ上、右端の部品なら左）。部品がなければ真ん中
   let left = (size.w - W) / 2;
   let top = (size.h - bh) / 2;
-  let arrow: { x: number; side: "top" | "bottom" | "right" } | null = null;
+  let arrow: { x: number; side: "top" | "bottom" | "right" | "left" } | null = null;
   if (rect) {
     const nearRight = rect.left > size.w * 0.6 && rect.width < 120;
-    if (nearRight) {
+    const tall = rect.height > size.h * 0.6 && rect.right + W + 30 < size.w;
+    if (tall) {
+      // 縦に長い部品（サイドバー）：右に
+      left = rect.right + PAD + 14;
+      top = Math.min(Math.max(12, size.h / 2 - bh / 2), size.h - bh - 12);
+      arrow = { x: size.h / 2 - top, side: "left" };
+    } else if (nearRight) {
       left = Math.max(12, rect.left - PAD - 14 - W);
       top = Math.min(Math.max(12, rect.top + rect.height / 2 - bh / 2), size.h - bh - 12);
       arrow = { x: rect.top + rect.height / 2 - top, side: "right" };
@@ -77,7 +90,7 @@ export default function Tour({ steps, onDone }: { steps: TourStep[]; onDone: () 
         {arrow && (
           <span
             className={"tour-arrow " + arrow.side}
-            style={arrow.side === "right" ? { top: Math.min(Math.max(arrow.x - 8, 10), bh - 26) } : { left: Math.min(Math.max(arrow.x - 8, 12), W - 28) }}
+            style={arrow.side === "right" || arrow.side === "left" ? { top: Math.min(Math.max(arrow.x - 8, 10), bh - 26) } : { left: Math.min(Math.max(arrow.x - 8, 12), W - 28) }}
           />
         )}
         <div className="tour-count">
