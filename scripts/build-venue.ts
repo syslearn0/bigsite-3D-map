@@ -168,11 +168,14 @@ const WEST_V: XZ = [-WEST_U[1], WEST_U[0]];
 const fromUV = (q: XZ[]): XZ[] => q.map(([u, v]) => [Math.round((u * WEST_U[0] + v * WEST_V[0]) * 10) / 10, Math.round((u * WEST_U[1] + v * WEST_V[1]) * 10) / 10] as XZ);
 const toUV = (p: XZ): XZ => [p[0] * WEST_U[0] + p[1] * WEST_U[1], p[0] * WEST_V[0] + p[1] * WEST_V[1]];
 // 南展示棟の西の壁：OSM の建物の形は北西のすみだけ斜め（u 219〜230）だが、同じ OSM の形の西の通路の側の壁（u 230.2〜230.6）と
-// 航空写真の屋根の端は、ホールに直角にまっすぐ。なので u 230.4 の直線にする（西展示棟とのあいだは、南展示棟への通路）
+// 航空写真の屋根の端は、ホールに直角にまっすぐ（u 236。その西の u 214〜236 は、4F の通路のあいだの吹き抜け）
 const southRestSq: XZ[] = southRest.map((p) => {
   const [u, v] = toUV(p);
-  return u < 226 ? fromUV([[230.4, v]])[0] : p;
+  return u < 236 ? fromUV([[236, v]])[0] : p;
 });
+// 南展示棟の入口：西と南のつなぎ目の角にある、ホールに 45° 傾いた四角い建物（航空写真：中心 u 227.5・v 104、角から角まで 34m、
+// 屋根に小さなピラミッド）。2F のコンコースはここで屋内に入り、中のエスカレーターで 1F へ下りる
+const southEntrance: XZ[] = fromUV([[227.5, 87], [244.5, 104], [227.5, 121], [210.5, 104]]);
 
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
@@ -234,8 +237,14 @@ const areas: Area[] = [
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。航空写真では、西4 の南東の壁（u 202）と
   // 南展示棟の西の壁のあいだが、壁に直角な四角い舗装面でつながっている（v 15.9〜103.3：西4 の外の通路の端から屋上展示場の端まで）
-  // 南の側は、南展示棟の西の壁（u 230.4）まで。その先の南3 までは南展示棟の建物の中（南展示棟（4F））
-  { name: "南展示棟への通路（4F）", level: 4, poly: fromUV([[202, 15.9], [230.4, 15.9], [230.4, 103.3], [202, 103.3]]) },
+  // 南の側は、南展示棟の西の壁（u 236）まで。航空写真では、車の止まる床は西4 の外の幅 13m（u 202〜214）で、その東
+  // （u 215〜234・v 36〜88）は下の階まで暗く抜けた吹き抜け。南3・4 の北の通路（v 12.4〜34.4）とは u 214〜236 でつながる
+  {
+    name: "南展示棟への通路（4F）",
+    level: 4,
+    poly: fromUV([[202, 15.9], [214, 15.9], [214, 34.4], [236, 34.4], [236, 103.3], [202, 103.3]]),
+    holes: [fromUV([[215, 36], [234, 36], [234, 88], [215, 88]])],
+  },
   // コンコース（2F）：イベントプラザから南展示棟まで 2F のまま続く長い通路（公式フロアマップの「コンコース」）。
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
   ...southConcourse(),
@@ -307,7 +316,20 @@ const areas: Area[] = [
   }
   // 1F の南展示棟への通路：南展示棟の建物の床と重ならないよう、その形を引く
   const sp1 = areas.find((a) => a.name === "南展示棟への通路");
-  if (sp1) sp1.poly = biggest(polygonClipping.difference([ring(sp1.poly)], [ring(southRestSq)]));
+  if (sp1) {
+    sp1.poly = biggest(polygonClipping.difference([ring(sp1.poly)], [ring(southRestSq)]));
+    // 南展示棟の西の壁（u 236）までのすき間をうめる
+    sp1.poly = biggest(polygonClipping.union([ring(sp1.poly)], [ring(fromUV([[219, 25.5], [236, 25.5], [236, 61.8], [219, 61.8]]))]));
+  }
+  // 南展示棟の入口（45° の四角）：1F と 2F の屋内の床。重なる床（2F のコンコース、1F の通路と南展示棟）からは、その形を引く
+  for (const a of areas.filter((x) => (x.level === 2 && x.name === "コンコース") || (x.level === 1 && (x.name === "南展示棟への通路" || x.name === "南展示棟")))) {
+    const left = polygonClipping.difference([ring(a.poly), ...(a.holes ?? []).map(ring)], [ring(southEntrance)]);
+    const pieces = left.map((pg) => unring(pg[0])).sort((p, q) => size(q) - size(p));
+    if (pieces.length) a.poly = pieces[0];
+    for (const extra of pieces.slice(1)) if (size(extra) > 4) areas.push({ ...a, poly: extra, part: true });
+  }
+  // 名前の札は 2F の方だけ（1F を見ているときは 2F も出ているので、2 つ重なる）
+  areas.push({ name: "南展示棟の入口", level: 2, poly: southEntrance }, { name: "南展示棟の入口", level: 1, poly: southEntrance, part: true });
 }
 // 西3・西4 の外の 4F の通路（トラックが上がってくる搬入の通路。屋外）：航空写真で、西3 の北東の壁の外（v -97.5 まで、
 // u 53 から）と、西4 の南東の壁の外（u 214 まで）に、車の止まった通路がある。南東の通路は南展示棟への通路（4F）につながる
@@ -320,16 +342,15 @@ for (const a of areas) if (["屋上展示場", "エントランスプラザ", "�
 // layer=2）。屋上展示場の西の角から北西へ、エントランスプラザへ下りる。航空写真でも、ここに屋根のある幅 7m ほどの階段が見える
 type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean };
 const stairs: Stair[] = [];
+// 位置は航空写真に合わせる（OSM の線より 4m ほど南）：階段の上の端は、屋上展示場の西の縁に付いた、45° に傾いた四角い踊り場
+// （中心 u 56・v 82.5、角から角まで 15m）。階段はその踊り場の南西の辺に直角に、45° の向きでエントランスプラザ（v 60 の縁）まで下りる
 {
-  const so = existsSync("data/osm/surroundings.json") ? (JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] }) : { elements: [] };
-  const e = so.elements.find((x) => x.id === 381682023 && x.geometry);
-  if (!e) throw new Error("屋上展示場への階段：OSM の way 381682023 がない");
-  const g = e.geometry!.map((q) => project(ORIGIN, q.lat, q.lon));
-  const top = g[0], bottom = g[g.length - 1];
-  const L = Math.hypot(top[0] - bottom[0], top[1] - bottom[1]), ux = (top[0] - bottom[0]) / L, uz = (top[1] - bottom[1]) / L;
-  const r = (v: number) => Math.round(v * 10) / 10;
-  // 上の端は屋上展示場の中へ 1.5m のばす
-  stairs.push({ name: "階段", from: [r(top[0] + ux * 1.5), r(top[1] + uz * 1.5)], fromLevel: 4, to: [r(bottom[0]), r(bottom[1])], toLevel: 2, width: 7, outdoor: true });
+  const landing = fromUV([[56, 75], [63.5, 82.5], [56, 90], [48.5, 82.5]]);
+  areas.push({ name: "屋上展示場", level: 4, poly: landing, part: true, outdoor: true });
+  const d: XZ = [Math.SQRT1_2, Math.SQRT1_2];
+  const mid: XZ = [52.25, 78.75]; // 踊り場の南西の辺のまん中
+  const [top, bottom] = fromUV([[mid[0] + d[0] * 0.5, mid[1] + d[1] * 0.5], [mid[0] + d[0] * (0.5 - 28), mid[1] + d[1] * (0.5 - 28)]]);
+  stairs.push({ name: "階段", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 7, outdoor: true });
 }
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
@@ -383,7 +404,9 @@ const stairs: Stair[] = [];
         const [ua, ub] = [u - sgn * 4, u + sgn * 1].sort((a, b) => a - b);
         // （コンコースのふちは、OSM の線のとおり少し斜め（v 104.9〜107.1）なので、2F の踊り場はコンコースの中まで重ねる）
         const [va, vb] = hi === 4 ? [S_EDGE_4F - 0.5, v + w / 2 + 1.5] : [v - w / 2 - 1.5, S_EDGE_2F + 3];
-        areas.push({ name: hi === 4 ? "南展示棟（4F）" : "コンコース", level: hi, poly: fromUV([[ua, va], [ub, va], [ub, vb], [ua, vb]]), part: true });
+        const landing = fromUV([[ua, va], [ub, va], [ub, vb], [ua, vb]]);
+        // 南展示棟の入口（45° の四角）の中なら、その床に乗るので踊り場はいらない
+        if (!(hi === 2 && pointInPolygon(centroid(landing), southEntrance))) areas.push({ name: hi === 4 ? "南展示棟（4F）" : "コンコース", level: hi, poly: landing, part: true });
       }
       // 4F の南展示棟の床は、ホールの外の部屋の帯（トイレ。v 111 まで）のふちまで。その外（コンコースの上）は空
       const s4 = areas.find((a) => a.name === "南展示棟（4F）" && !a.part)!;
@@ -710,7 +733,7 @@ for (const h of halls) {
   outside("南棟立体駐車場", 1, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟"]);
   outside("南棟立体駐車場", 4, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟（4F）"], false);
   // 南：南3・南4 の北の 4F の通路（西4 の外の通路から、南展示棟への通路（4F）を通って続く。航空写真で v 12〜34）
-  outside("外の通路（4F）", 4, [[[230.4, 12.4], [444.6, 12.4], [444.6, 34.4], [230.4, 34.4]]], ["南展示棟（4F）"]);
+  outside("外の通路（4F）", 4, [[[214, 12.4], [444.6, 12.4], [444.6, 34.4], [214, 34.4]]], ["南展示棟（4F）"]);
 }
 
 // 床のない所（ホール・通路の床の外）にあるトイレ：近くに部屋の囲みがあれば札をその部屋の真ん中へ、なければ壁ぎわ（壁の 1m 外）へ。
@@ -794,11 +817,11 @@ if (existsSync("data/osm/surroundings.json")) {
 }
 
 // 屋内と屋外：公式フロアマップの色分け（白が屋内、灰が屋外）に合わせる。
-// 2F の連絡ブリッジは灰（屋外）。コンコースは、イベントプラザから南展示棟の西の壁（u 230.4）までが灰（屋外）、
+// 2F の連絡ブリッジは灰（屋外）。コンコースは、イベントプラザから南展示棟の入口（45° の四角）までが灰（屋外）、
 // そこから先の南1・南2 にそう所は白（屋内）なので、そこで 2 つに分ける
 {
   const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
-  const half = (west: boolean) => ring(fromUV(west ? [[-1000, -1000], [230.4, -1000], [230.4, 1000], [-1000, 1000]] : [[230.4, -1000], [2000, -1000], [2000, 1000], [230.4, 1000]]));
+  const half = (west: boolean) => ring(fromUV(west ? [[-1000, -1000], [236, -1000], [236, 1000], [-1000, 1000]] : [[236, -1000], [2000, -1000], [2000, 1000], [236, 1000]]));
   for (const a of areas) if (a.name === "連絡ブリッジ") a.outdoor = true;
   for (const a of areas.filter((x) => x.name === "コンコース" && x.level === 2)) {
     const pieces = [true, false].flatMap((west) =>

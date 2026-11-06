@@ -490,13 +490,15 @@ export function VenueView() {
       scene.add(f);
       partsOf(a.level).floors.push(f);
       if (a.outdoor && !a.part) {
-        // 屋外の床は、ふちを濃い水色の線でなぞる（となり合う屋外の床の境目が分かるように）
-        const edge = new THREE.LineLoop(
-          new THREE.BufferGeometry().setFromPoints(a.poly.map(([x, z]) => new THREE.Vector3(x, y + 0.06, z))),
-          new THREE.LineBasicMaterial({ color: 0x2a86b0 }),
-        );
-        scene.add(edge);
-        partsOf(a.level).solid.push(edge);
+        // 屋外の床は、ふちを濃い水色の線でなぞる（となり合う屋外の床の境目と、吹き抜けの穴が分かるように）
+        for (const r of [a.poly, ...(a.holes ?? [])]) {
+          const edge = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(r.map(([x, z]) => new THREE.Vector3(x, y + 0.06, z))),
+            new THREE.LineBasicMaterial({ color: 0x2a86b0 }),
+          );
+          scene.add(edge);
+          partsOf(a.level).solid.push(edge);
+        }
       }
       if (link) {
         // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）は、ふちを濃い線でなぞって、ひと続きの平面に見せる
