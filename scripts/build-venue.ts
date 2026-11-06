@@ -1074,9 +1074,13 @@ if (existsSync("data/osm/coast.json")) {
   sur.areas = sur.areas.filter((a) => a.kind === "water" || !inVenue(centroid(a.poly)));
 }
 
+// 屋内と屋外の境目の仕切りにあける出口。公式フロアマップの赤い「入口」（エントランスホールからエントランスプラザへ。
+// ユーザーの確認でコミケでは出口専用）。公式マップは斜めから見た図なので、会議棟の 4 本の柱の位置で座標に直した
+const exits = [{ at: fromUV([[-4, -38]])[0], level: 2, name: "出口", width: 6 }];
+
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, stairs, blocks }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);

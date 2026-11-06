@@ -33,6 +33,7 @@ type Venue = {
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
+  exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number }[];
 };
@@ -589,6 +590,8 @@ export function VenueView() {
         const outdoor = venue.areas.filter((a) => a.level === lv && a.outdoor);
         const halls4 = venue.halls.filter((h) => h.level === lv).map((h) => h.poly);
         const inAny = (p: XZ, list: XZ[][]) => list.some((q) => pointInPolygon(p, q));
+        const exits = (venue.exits ?? []).filter((e) => e.level === lv);
+        const atExit = (p: XZ) => exits.some((e) => Math.hypot(p[0] - e.at[0], p[1] - e.at[1]) < e.width / 2 + 0.6);
         const g = new THREE.Group();
         for (const a of indoor) {
           a.poly.forEach((p0, i) => {
@@ -616,7 +619,7 @@ export function VenueView() {
               const t = ((k + 0.5) / n) * L;
               const q: XZ = [p0[0] + ux * t + nx * 0.6, p0[1] + uz * t + nz * 0.6];
               const qIn: XZ = [p0[0] + ux * t - nx * 0.6, p0[1] + uz * t - nz * 0.6];
-              const border = inAny(q, outdoor.map((o) => o.poly)) && !inAny(q, indoor.filter((o) => o !== a).map((o) => o.poly)) && !inAny(q, halls4) && !inAny(qIn, halls4);
+              const border = inAny(q, outdoor.map((o) => o.poly)) && !inAny(q, indoor.filter((o) => o !== a).map((o) => o.poly)) && !inAny(q, halls4) && !inAny(qIn, halls4) && !atExit(q);
               if (border && start < 0) start = k;
               if (!border) flush(k);
             }
@@ -625,6 +628,14 @@ export function VenueView() {
         }
         scene.add(g);
         partsOf(lv).solid.push(g);
+        // 出口の札（開口の上）
+        for (const e of exits) {
+          const m = textSprite(e.name, { bg: "rgba(20,120,60,.92)", height: 2.6, px: 32 });
+          m.position.set(e.at[0], floorY(lv) + ph + 1.6, e.at[1]);
+          scene.add(m);
+          partsOf(lv).solid.push(m);
+          addLabel(m, "door");
+        }
       }
     }
     // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない（穴は開けるが、出入口の看板・札は出さない）。
