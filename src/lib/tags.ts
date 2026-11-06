@@ -51,7 +51,8 @@ export function parseTagsFile(json: unknown): Tags | null {
       if (typeof raw.genre === "string" && raw.genre.trim()) tag.genre = raw.genre.trim();
       if (works.length) tag.works = works;
       if (Object.keys(chars).length) tag.chars = chars;
-      if (tag.works) out[day][code] = tag;
+      // ジャンルだけの机（カタログのジャンルの塗り分けから作ったデータなど）も残す
+      if (tag.works || tag.genre) out[day][code] = tag;
     }
   }
   return out;

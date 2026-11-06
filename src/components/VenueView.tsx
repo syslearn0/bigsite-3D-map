@@ -1354,8 +1354,8 @@ export function VenueView() {
           else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
           else if (colorByGenre && !hit(b)) col.setHex(0xe6e5de); // 選んだ作品でない机は薄く
           else if (colorByGenre && dayTags) {
-            // 入れた作品の色（選んだ作品があればその色。なければ 1 つ目の作品の色。作品が入っていない机は白）
-            const w = work ?? dayTags[b.code]?.works?.[0];
+            // 入れた作品の色（選んだ作品があればその色。なければ 1 つ目の作品の色。作品が入っていない机はジャンルの色、どちらもなければ白）
+            const w = work ?? dayTags[b.code]?.works?.[0] ?? dayTags[b.code]?.genre;
             if (w) col.setStyle(workColor(w)).lerp(new THREE.Color(0xffffff), 0.2);
             else col.setHex(DESK_COLOR);
           } else if (colorByGenre) {
