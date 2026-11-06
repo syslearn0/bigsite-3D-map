@@ -291,11 +291,6 @@ const areas: Area[] = [
   const unring = (r: [number, number][]): XZ[] => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
   const size = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
   const biggest = (mp: [number, number][][][]): XZ[] => mp.map((pg) => unring(pg[0])).sort((a, b) => size(b) - size(a))[0];
-  // エントランスホール：OSM の北コンコースの形には、会議棟の北のガラス屋根の建物（OSM の建物 154080987、layer=2）がまるごと
-  // 入っている。公式フロアマップでは、ここはエントランスホール（北コンコースは、そこから東展示棟へ斜めにのびる所）
-  const eh = poly(byId(154080987));
-  const nc = areas.find((a) => a.name === "北コンコース")!;
-  nc.poly = biggest(polygonClipping.difference([ring(nc.poly)], [ring(eh)]));
   // イベントプラザとコンコースのあいだの 1m ほどのすき間（OSM の 2 つの形のずれ）をうめる
   const cc = areas.find((a) => a.name === "コンコース");
   if (cc) cc.poly = biggest(polygonClipping.union([ring(cc.poly)], [ring(fromUV([[-6.8, 103.5], [20.6, 103.5], [20.6, 106], [-6.8, 106]]))]));
@@ -312,13 +307,13 @@ const areas: Area[] = [
     for (let i = areas.length - 1; i >= 0; i--)
       if (areas[i].level === 2 && ["エントランスホール", "南コンコース", "エントランスプラザ", "イベントプラザ"].includes(areas[i].name)) areas.splice(i, 1);
     // 屋内：エントランスホール。南の端は会議棟の前の 2 本の柱の手前（v -18）まで張り出し（ここの南の端に出口）、張り出しの両わきの
-    // 奥に床のない切り欠き（エスカレーターの穴）。東は南コンコースの北東のふちまで屋内。西の辺は北コンコースとつながる所（u -31）
+    // 奥に床のない切り欠き（エスカレーターの穴）。東は南コンコースの北東のふちまで屋内。西の辺（u -28.5）に北コンコースがつながる
     areas.push({
       name: "エントランスホール",
       level: 2,
       poly: fromUV([
-        [-31, -143.5], [23, -143], [23, -92.5], [67.5, -92], [69, -30.5], [24, -75.5], [23.5, -44.5], [13, -44.5], [13, -36.5], [21.5, -36.5],
-        [22.5, -17.5], [-34.5, -18], [-34.5, -38], [-19, -37.5], [-19, -45], [-28, -45], [-28, -84], [-31, -84],
+        [-28.5, -143.5], [23, -143], [23, -92.5], [67.5, -92], [69, -30.5], [24, -75.5], [23.5, -44.5], [13, -44.5], [13, -36.5], [21.5, -36.5],
+        [22.5, -17.5], [-34.5, -18], [-34.5, -38], [-19, -37.5], [-19, -45], [-28, -45],
       ]),
     });
     // 屋内：南コンコース。エントランスホールから西のアトリウムの側へ斜めにのびる帯。北東のふちは途中で 1 か所内へ折れ、
@@ -355,6 +350,40 @@ const areas: Area[] = [
     ].map((h) => fromUV(h as XZ[]));
     let plazaMP: [number, number][][][] = [[ring(plaza)]];
     for (const h of plazaHoles) plazaMP = polygonClipping.difference(plazaMP, [ring(h)]);
+    // 屋内：北コンコース（エントランスホールの西の辺から北西へのびる帯。南西のふちに 1 か所切り欠き）と、
+    // 連絡ブリッジ（北コンコースの北西の端から、北東の東ガレリアへ。ブリッジの北東のふちは前の形とほぼ同じで、南西のふちは 5m 外、
+    // 東ガレリアの側の端は v -250〜-255 まで）
+    for (let i = areas.length - 1; i >= 0; i--) if (areas[i].level === 2 && ["北コンコース", "連絡ブリッジ"].includes(areas[i].name)) areas.splice(i, 1);
+    const ncPoly = fromUV([[-28, -84.5], [-48, -105], [-53.5, -100], [-60.5, -107], [-55.5, -112.5], [-105, -162], [-85.5, -181.5], [-80, -176], [-59.5, -155], [-28.5, -124]]);
+    const bridgePoly = fromUV([[-80, -176], [-74, -185.5], [-32, -255], [-2, -250.5], [-53.5, -165], [-59.5, -155]]);
+    areas.push({ name: "北コンコース", level: 2, poly: ncPoly });
+    areas.push({ name: "連絡ブリッジ", level: 2, poly: bridgePoly });
+    // 東ガレリアの 2F（東展示棟 2F）は、ブリッジの端と同じ v -250 あたりから。その手前（v -250〜-221）は屋外（下の外のデッキの一部）
+    const gal = areas.find((a) => a.level === 2 && a.name === "東展示棟 2F");
+    if (gal) {
+      const cutGal = fromUV([[-60, -200], [40, -200], [40, -250], [16, -250], [-2, -250.5], [-32, -255], [-60, -255]]);
+      const mp = polygonClipping.difference([[ring(gal.poly), ...(gal.holes ?? []).map(ring)]], [ring(cutGal)]);
+      const big = mp.map((pg) => ({ poly: unring(pg[0]), holes: pg.slice(1).map(unring) })).sort((a, b) => size(b.poly) - size(a.poly))[0];
+      gal.poly = big.poly;
+      gal.holes = big.holes;
+    }
+    // 屋外：外のデッキ（2F）。エントランスプラザの北のふちから北西へ、北コンコースの西を北へ（u -135〜-125）、東4〜6 の南の壁の
+    // 手前（v -262〜-269）を東へ、東ガレリアの入口の手前の三角（v -250〜-221）まで。北コンコースの北西の端と南西のふちにも枝がつく。
+    // 屋内（北コンコース・ブリッジ・東ガレリア）と重なる所は引く
+    {
+      const deck = fromUV([
+        [-114, -39], [-131, -85], [-135.5, -269.5], [-48, -267.5], [-24, -267], [15, -265.5], [16, -221], [8.5, -221], [-35.5, -249], [-47.5, -256.5],
+        [-47.5, -260], [-127, -262], [-125.5, -183], [-109, -166.5], [-105, -170.5], [-106, -201.5], [-86, -181.5], [-105.5, -162], [-68.5, -125],
+        [-68.5, -114.5], [-125, -171.5], [-123, -86], [-106, -39],
+      ]);
+      let mp: [number, number][][][] = [[ring(deck)]];
+      for (const a of areas.filter((x) => x.level === 2 && !x.outdoor && ["北コンコース", "連絡ブリッジ", "東展示棟 2F", "エントランスホール"].includes(x.name)))
+        mp = polygonClipping.difference(mp, [ring(a.poly)]);
+      mp.map((pg) => ({ poly: unring(pg[0]), holes: pg.slice(1).map(unring) }))
+        .filter((pc) => size(pc.poly) > 20)
+        .sort((a, b) => size(b.poly) - size(a.poly))
+        .forEach((pc, i) => areas.push({ name: "外のデッキ（2F）", level: 2, poly: pc.poly, ...(pc.holes.length ? { holes: pc.holes } : {}), outdoor: true, ...(i > 0 ? { part: true } : {}) }));
+    }
     // イベントプラザ（u -31〜24.5・v 59〜）と、そのほかのエントランスプラザに分ける（名前の札は大きい方の 1 つだけ）
     const ev = [ring(fromUV([[-31, 59], [24.5, 59], [24.5, 110], [-31, 110]]))];
     for (const [name, mp] of [
@@ -1132,7 +1161,7 @@ if (existsSync("data/osm/coast.json")) {
         [st.to[0] + uz * h, st.to[1] - ux * h],
       ] as XZ[];
     });
-  const footprints = [...halls.map((h) => h.poly), ...areas.map((a) => a.poly), southEntrance, ...ramps];
+  const footprints = [...halls.map((h) => h.poly), ...areas.filter((a) => a.name !== "外のデッキ（2F）").map((a) => a.poly), southEntrance, ...ramps];
   const inVenue = (p: XZ) => footprints.some((f) => pointInPolygon(p, f));
   for (let i = parts3d.length - 1; i >= 0; i--) {
     const b = parts3d[i];
