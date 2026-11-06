@@ -33,6 +33,7 @@ type Venue = {
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean }[];
+  blocks?: { name: string; level: number; poly: XZ[]; height: number }[];
 };
 const venue = venueJson as unknown as Venue;
 // 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
@@ -662,6 +663,19 @@ export function VenueView() {
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
       scene.add(label);
       addLabel(label, st.fromLevel === 2 && st.toLevel === 1 ? "block" : "door"); // ガレリアの階段・エスカレーターの札は、寄ったときだけ
+    }
+    // 人の入れない建物（西と南のつなぎ目の角の 45° の建物など）。その階の床の高さに立つ灰色の箱
+    {
+      const mat = new THREE.MeshLambertMaterial({ color: 0x8a908c });
+      for (const b of venue.blocks ?? []) {
+        const geo = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.height, bevelEnabled: false });
+        const m = new THREE.Mesh(geo, mat);
+        m.rotation.x = -Math.PI / 2;
+        m.position.y = floorY(b.level);
+        scene.add(m);
+        occluders.push(m);
+        partsOf(b.level).solid.push(m);
+      }
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
     if (features?.structures?.length) {

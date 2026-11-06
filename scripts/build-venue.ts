@@ -173,9 +173,10 @@ const southRestSq: XZ[] = southRest.map((p) => {
   const [u, v] = toUV(p);
   return u < 236 ? fromUV([[236, v]])[0] : p;
 });
-// 南展示棟の入口：西と南のつなぎ目の角にある、ホールに 45° 傾いた四角い建物（航空写真：中心 u 227.5・v 104、角から角まで 34m、
-// 屋根に小さなピラミッド）。2F のコンコースはここで屋内に入り、中のエスカレーターで 1F へ下りる
+// 西と南のつなぎ目の角にある、ホールに 45° 傾いた四角い建物（航空写真：中心 u 227.5・v 104、角から角まで 34m、屋根に小さな
+// ピラミッド）。人は入れないので床にはせず、4F の高さに立つ障害物（箱）として描く
 const southEntrance: XZ[] = fromUV([[227.5, 87], [244.5, 104], [227.5, 121], [210.5, 104]]);
+const blocks: { name: string; level: number; poly: XZ[]; height: number }[] = [{ name: "南の角の建物", level: 4, poly: southEntrance, height: 8 }];
 
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
@@ -237,13 +238,14 @@ const areas: Area[] = [
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。航空写真では、西4 の南東の壁（u 202）と
   // 南展示棟の西の壁のあいだが、壁に直角な四角い舗装面でつながっている（v 15.9〜103.3：西4 の外の通路の端から屋上展示場の端まで）
-  // 南の側は、南展示棟の西の壁（u 236）まで。航空写真では、車の止まる床は西4 の外の幅 13m（u 202〜214）で、その東
-  // （u 215〜234・v 36〜88）は下の階まで暗く抜けた吹き抜け。南3・4 の北の通路（v 12.4〜34.4）とは u 214〜236 でつながる
+  // 南の側は、南展示棟の西の壁（u 236）まで、v 86 まで（その先、屋上展示場の北東の角の横は下まで暗く抜けている）。
+  // まん中の u 216〜229・v 38.6〜69.7 は、下の階まで抜けた吹き抜けの穴（Google Earth の真上の写真から、角の 45° の建物を
+  // 基準に測ったもの）。南3・4 の北の通路（v 12.4〜34.4）とは u 214〜236 でつながる
   {
     name: "南展示棟への通路（4F）",
     level: 4,
-    poly: fromUV([[202, 15.9], [214, 15.9], [214, 34.4], [236, 34.4], [236, 103.3], [202, 103.3]]),
-    holes: [fromUV([[215, 36], [234, 36], [234, 88], [215, 88]])],
+    poly: fromUV([[202, 15.9], [214, 15.9], [214, 34.4], [236, 34.4], [236, 86], [202, 86]]),
+    holes: [fromUV([[216, 38.6], [229, 38.6], [229, 69.7], [216, 69.7]])],
   },
   // コンコース（2F）：イベントプラザから南展示棟まで 2F のまま続く長い通路（公式フロアマップの「コンコース」）。
   // 形は OpenStreetMap の 2F の歩道の線（way 1127507757、layer=2）を幅 8m の帯にしたもの（南1・2 の西わきを南棟の駐車場まで続く）
@@ -321,15 +323,6 @@ const areas: Area[] = [
     // 南展示棟の西の壁（u 236）までのすき間をうめる
     sp1.poly = biggest(polygonClipping.union([ring(sp1.poly)], [ring(fromUV([[219, 25.5], [236, 25.5], [236, 61.8], [219, 61.8]]))]));
   }
-  // 南展示棟の入口（45° の四角）：1F と 2F の屋内の床。重なる床（2F のコンコース、1F の通路と南展示棟）からは、その形を引く
-  for (const a of areas.filter((x) => (x.level === 2 && x.name === "コンコース") || (x.level === 1 && (x.name === "南展示棟への通路" || x.name === "南展示棟")))) {
-    const left = polygonClipping.difference([ring(a.poly), ...(a.holes ?? []).map(ring)], [ring(southEntrance)]);
-    const pieces = left.map((pg) => unring(pg[0])).sort((p, q) => size(q) - size(p));
-    if (pieces.length) a.poly = pieces[0];
-    for (const extra of pieces.slice(1)) if (size(extra) > 4) areas.push({ ...a, poly: extra, part: true });
-  }
-  // 名前の札は 2F の方だけ（1F を見ているときは 2F も出ているので、2 つ重なる）
-  areas.push({ name: "南展示棟の入口", level: 2, poly: southEntrance }, { name: "南展示棟の入口", level: 1, poly: southEntrance, part: true });
 }
 // 西3・西4 の外の 4F の通路（トラックが上がってくる搬入の通路。屋外）：航空写真で、西3 の北東の壁の外（v -97.5 まで、
 // u 53 から）と、西4 の南東の壁の外（u 214 まで）に、車の止まった通路がある。南東の通路は南展示棟への通路（4F）につながる
@@ -404,9 +397,7 @@ const stairs: Stair[] = [];
         const [ua, ub] = [u - sgn * 4, u + sgn * 1].sort((a, b) => a - b);
         // （コンコースのふちは、OSM の線のとおり少し斜め（v 104.9〜107.1）なので、2F の踊り場はコンコースの中まで重ねる）
         const [va, vb] = hi === 4 ? [S_EDGE_4F - 0.5, v + w / 2 + 1.5] : [v - w / 2 - 1.5, S_EDGE_2F + 3];
-        const landing = fromUV([[ua, va], [ub, va], [ub, vb], [ua, vb]]);
-        // 南展示棟の入口（45° の四角）の中なら、その床に乗るので踊り場はいらない
-        if (!(hi === 2 && pointInPolygon(centroid(landing), southEntrance))) areas.push({ name: hi === 4 ? "南展示棟（4F）" : "コンコース", level: hi, poly: landing, part: true });
+        areas.push({ name: hi === 4 ? "南展示棟（4F）" : "コンコース", level: hi, poly: fromUV([[ua, va], [ub, va], [ub, vb], [ua, vb]]), part: true });
       }
       // 4F の南展示棟の床は、ホールの外の部屋の帯（トイレ。v 111 まで）のふちまで。その外（コンコースの上）は空
       const s4 = areas.find((a) => a.name === "南展示棟（4F）" && !a.part)!;
@@ -843,6 +834,6 @@ if (existsSync("data/osm/surroundings.json")) {
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, stairs }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, stairs, blocks }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
