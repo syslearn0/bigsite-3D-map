@@ -26,7 +26,7 @@ type Venue = {
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
     lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" }[];
-    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water" }[];
+    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; label?: XZ }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
   };
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
@@ -63,7 +63,7 @@ const OUTDOOR_COLOR = 0x5ec8f0; // 屋外（屋上展示場・外の通路・ト
 const OUTDOOR_2F_COLOR = 0xb9a6e6; // 2F の屋外（エントランスプラザ・イベントプラザ・連絡ブリッジ・コンコースの屋外の所）。薄い紫
 const PARKING_COLOR = 0x9ccc8a; // 東棟屋外臨時駐車場（緑）
 const OUTDOOR_STAIR_COLOR = 0xe0358f; // 屋外の階段（目立つマゼンタ）
-const RAMP_COLOR = 0x8fa3ad; // 車のスロープ
+const RAMP_COLOR = 0xe8a33d; // 車のスロープ（目立つ山吹色）
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
@@ -482,6 +482,12 @@ export function VenueView() {
         mat.polygonOffset = true;
         mat.polygonOffsetFactor = -4;
         mat.polygonOffsetUnits = -4;
+        // 「海」「川」の文字
+        if (a.name && a.label) {
+          const t = textSprite(a.name, { fg: "#ffffff", bg: "rgba(40,100,160,.85)", height: 10, px: 48 });
+          t.position.set(a.label[0], 6, a.label[1]);
+          surroundings.add(t);
+        }
       }
       surroundings.add(m);
     }
@@ -730,7 +736,7 @@ export function VenueView() {
         m.rotation.set(-Math.atan2(y1 - y0, run), Math.atan2(dx, dz), 0);
         m.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 - 0.3, (st.from[1] + st.to[1]) / 2);
         scene.add(m);
-        const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(70,90,100,.92)", height: 2.6, px: 30 });
+        const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(190,120,20,.95)", height: 2.6, px: 30 });
         label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
         scene.add(label);
         addLabel(label, "door");

@@ -234,7 +234,7 @@ const areas: Area[] = [
     poly: poly(byId(543048845)),
     see: true,
     // 吹き抜け：施設案内の 2F全体図のガレリアの上の ×印の四角（scripts/extract-plan-toilets.py が data/plan-toilets.json に書く）
-    // 東4〜6 の側（u < -3）の吹き抜けは、ユーザーの確認で東4〜6 の側へ 6m 広げる（中の階段・エスカレーターもそちらへ寄せる）
+    // 東4〜6 の側（u < -3）の吹き抜けは、ユーザーの確認で丸ごと東4〜6 の側へ 6m ずらす（中の階段・エスカレーターも一緒に）
     holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : [])
       .filter((v) => pointInPolygon(centroid(v), poly(byId(543048845))))
       .map((v) => {
@@ -242,7 +242,7 @@ const areas: Area[] = [
         if (cu >= -3) return v;
         return v.map((p) => {
           const [u, w] = toUV(p);
-          return u < cu ? fromUV([[u - E456_SHIFT, w]])[0] : p;
+          return fromUV([[u - E456_SHIFT, w]])[0];
         });
       }),
   },
@@ -478,7 +478,8 @@ const stairs: Stair[] = [];
       const f = at(shift, side, 0);
       const from: XZ = [r(f[0]), r(f[1])];
       const to: XZ = [r(from[0] + ux * L), r(from[1] + uz * L)];
-      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from, fromLevel: 2, to, toLevel: 1, width: v.width });
+      // 幅：ユーザーの確認で太く（エスカレーター 3m、階段は図面の 1.5 倍）
+      stairs.push({ name: v.kind === "escalator" ? "エスカレーター" : "階段", ...(v.kind === "escalator" ? { kind: "escalator" as const } : {}), from, fromLevel: 2, to, toLevel: 1, width: v.kind === "escalator" ? 3 : Math.round(v.width * 15) / 10 });
     }
     void es;
     void ux;
@@ -827,7 +828,7 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
-type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water" };
+type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; label?: XZ };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
 if (existsSync("data/osm/surroundings.json")) {
@@ -862,8 +863,8 @@ if (existsSync("data/osm/surroundings.json")) {
 
 // 海（「周辺も表示」のときだけ）：航空写真の水面。東は駐車場の海ぞいの縁から北東、西・南は南展示棟の南西の公園の先（v 140〜）
 sur.areas.push(
-  { poly: fromUV([[-600, -1300], [-255, -945], [81, -741], [175, -560], [185, -520], [700, -520], [700, -1300]]), y: 0, kind: "water" },
-  { poly: fromUV([[-300, 150], [480, 150], [480, 520], [-300, 520]]), y: 0, kind: "water" },
+  { poly: fromUV([[-600, -1300], [-255, -945], [81, -741], [175, -560], [185, -520], [700, -520], [700, -1300]]), y: 0, kind: "water", name: "川", label: fromUV([[160, -760]])[0] },
+  { poly: fromUV([[-300, 150], [480, 150], [480, 520], [-300, 520]]), y: 0, kind: "water", name: "海", label: fromUV([[200, 230]])[0] },
 );
 
 // 南の角の建物（45° の四角）：地面（1F）から 4F の床の 6m 上まで。2F の床と、中を通るエスカレーター（幅 +1m、下の端の 2m 先まで）
@@ -912,6 +913,20 @@ sur.areas.push(
     });
     areas.splice(areas.indexOf(a), 1, ...pieces);
   }
+}
+
+// 「周辺も表示」の OSM の建物・道のうち、会場の床（ホール・通路・広場・南の角の建物）の中にあるものは出さない。
+// 会場の床として描いているので、重なって床の上に箱や線が浮く（会議棟の逆ピラミッドと柱は、目印なので残す）
+{
+  const footprints = [...halls.map((h) => h.poly), ...areas.map((a) => a.poly), southEntrance];
+  const inVenue = (p: XZ) => footprints.some((f) => pointInPolygon(p, f));
+  for (let i = parts3d.length - 1; i >= 0; i--) {
+    const b = parts3d[i];
+    if (/Conference Tower|会議棟/.test(b.name)) continue;
+    if (inVenue(centroid(b.poly))) parts3d.splice(i, 1);
+  }
+  sur.lines = sur.lines.filter((l) => l.kind === "rail" || l.pts.filter(inVenue).length < l.pts.length * 0.3);
+  sur.areas = sur.areas.filter((a) => a.kind === "water" || !inVenue(centroid(a.poly)));
 }
 
 mkdirSync("src/data", { recursive: true });
