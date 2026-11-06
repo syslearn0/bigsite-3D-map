@@ -381,9 +381,15 @@ def read_voids():
         gmid = (gx0 + gx1) / 2
         inner = q[2] if abs(q[2] - gmid) < abs(q[0] - gmid) else q[0]
         voidWalls.append([to_v(inner, q[1]), to_v(inner, q[3])])  # 真ん中の壁（2F の真ん中の通路の下）
-        # 2F全体図でも、階段の段は吹き抜けの内側（真ん中の通路の側）の辺に描かれている
-        stair_x = inner - (w * 0.22 if inner == q[2] else -w * 0.22)
-        esc_x = inner - (w * 0.1 if inner == q[2] else -w * 0.1)
+        # 2F全体図では、階段の段は吹き抜けの内側（真ん中の通路の側）の辺に描かれている。
+        # ただし東4〜6 の側（図面の右）の吹き抜けは、ユーザーの確認で東4〜6 の側の辺に寄せる
+        if (q[0] + q[2]) / 2 > gmid:
+            outer = q[0] if inner == q[2] else q[2]
+            stair_x = outer + (w * 0.22 if outer == q[0] else -w * 0.22)
+            esc_x = outer + (w * 0.1 if outer == q[0] else -w * 0.1)
+        else:
+            stair_x = inner - (w * 0.22 if inner == q[2] else -w * 0.22)
+            esc_x = inner - (w * 0.1 if inner == q[2] else -w * 0.1)
         voidStairs.append({"kind": "stairs", "from": to_v(stair_x, ye - sgn * 0.3), "to": to_v(stair_x, ye + sgn * run), "width": round(w * 0.4 * 1.64, 1)})
         # エスカレーターは、階段と反対の端で 2F に着く（ストリートビュー・写真：吹き抜けの下で、階段とエスカレーターが逆の向きに上がっている）
         yo = q[3] if top_at_y0 else q[1]

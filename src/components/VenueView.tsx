@@ -25,14 +25,14 @@ type Venue = {
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
     lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" }[];
-    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" }[];
+    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water" }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
   };
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string }[];
-  stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean }[];
+  stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number }[];
 };
 const venue = venueJson as unknown as Venue;
@@ -61,7 +61,11 @@ const DESK_COLOR = 0xf2f1ea;
 // ホールの外の歩く所（通路・広場）の色。東展示棟からの連絡路（連絡ブリッジ・北コンコース）は、ほかの通路と分ける
 const AREA_COLOR = 0xece3b6;
 const LINK_COLOR = 0xf0b48a;
-const OUTDOOR_COLOR = 0x5ec8f0; // 屋外（屋上展示場・プラザ・外の通路・屋外の階段）
+const OUTDOOR_COLOR = 0x5ec8f0; // 屋外（屋上展示場・外の通路・トラックヤード）
+const OUTDOOR_2F_COLOR = 0xb9a6e6; // 2F の屋外（エントランスプラザ・イベントプラザ・連絡ブリッジ・コンコースの屋外の所）。薄い紫
+const PARKING_COLOR = 0x9ccc8a; // 東棟屋外臨時駐車場（緑）
+const OUTDOOR_STAIR_COLOR = 0xe0358f; // 屋外の階段（目立つマゼンタ）
+const RAMP_COLOR = 0x8fa3ad; // 車のスロープ
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
@@ -420,10 +424,11 @@ export function VenueView() {
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.2;
     scene.add(ground);
-    for (const b of venue.context) scene.add(flatPoly(b.poly, 0xb9bfb8, -0.1));
     // 周辺の建物の立体（OSM の高さ。会議棟の逆ピラミッドは段ごとの部品を積んだもの）。「周辺も表示」のときだけ出す
     const surroundings = new THREE.Group();
     surroundings.visible = false;
+    // まわりの建物の足元の形も、「周辺も表示」のときだけ（ふだんは会場だけを見せる）
+    for (const b of venue.context) surroundings.add(flatPoly(b.poly, 0xb9bfb8, -0.1));
     for (const b of venue.parts3d) {
       const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.max - b.min, bevelEnabled: false });
       const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: b.color ? new THREE.Color(b.color) : new THREE.Color(0xd2d5cf) }));
@@ -449,7 +454,7 @@ export function VenueView() {
     }) })));
     surroundings.add(new THREE.Mesh(ribbons(rails), new THREE.MeshLambertMaterial({ color: 0x5b5148, side: THREE.DoubleSide })));
     surroundings.add(new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === "rail" && l.y <= 1)), new THREE.MeshLambertMaterial({ color: 0x9c9488, side: THREE.DoubleSide })));
-    for (const a of sur.areas) surroundings.add(flatPoly(a.poly, a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0)));
+    for (const a of sur.areas) surroundings.add(flatPoly(a.poly, a.kind === "water" ? 0x6fa8d6 : a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0)));
     // 駅の名前（画面の上で同じ大きさ。毎フレーム placeLabels で大きさを決める）
     const stationLabels: { s: THREE.Sprite; base: THREE.Vector3 }[] = [];
     // 重なったときに残す順（来場者がよく使う駅から）
@@ -484,10 +489,8 @@ export function VenueView() {
       const link = LINK_AREAS.has(a.name) || a.see;
       const south = a.name === "南コンコース" || a.name === "コンコース";
       // 屋外（公式フロアマップで灰色の所）は、どの階も屋上展示場と同じ水色。屋内の 2F はオレンジ、ほかの屋内は黄色
-      const f = flatPoly(a.poly, a.outdoor ? OUTDOOR_COLOR : a.level === 2 || south || link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
+      const f = flatPoly(a.poly, a.name === "東棟屋外臨時駐車場" ? PARKING_COLOR : a.outdoor ? (a.level === 2 ? OUTDOOR_2F_COLOR : OUTDOOR_COLOR) : a.level === 2 || south || link ? LINK_COLOR : AREA_COLOR, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
-      // 屋上展示場は西1・西2 の真上をおおうので、1F を見ているときは薄くしても出さない
-      if (a.name === "屋上展示場") f.userData.hideOnFloor1 = true;
       scene.add(f);
       partsOf(a.level).floors.push(f);
       if (a.outdoor && !a.part) {
@@ -523,6 +526,52 @@ export function VenueView() {
       scene.add(label);
       partsOf(a.level).solid.push(label);
       addLabel(label, "area");
+    }
+    // 2F と 4F の、屋内と屋外の境目の低い仕切り（高さ 1.2m）。屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、
+    // ほかの屋内の床でもホールでもない所に立てる
+    {
+      const partMat = new THREE.MeshLambertMaterial({ color: 0x7d8a92, transparent: true, opacity: 0.85 });
+      for (const lv of [2, 4]) {
+        const indoor = venue.areas.filter((a) => a.level === lv && !a.outdoor);
+        const outdoor = venue.areas.filter((a) => a.level === lv && a.outdoor);
+        const halls4 = venue.halls.filter((h) => h.level === lv).map((h) => h.poly);
+        const inAny = (p: XZ, list: XZ[][]) => list.some((q) => pointInPolygon(p, q));
+        const g = new THREE.Group();
+        for (const a of indoor) {
+          a.poly.forEach((p0, i) => {
+            const p1 = a.poly[(i + 1) % a.poly.length];
+            const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+            if (L < 0.5) return;
+            const ux = (p1[0] - p0[0]) / L, uz = (p1[1] - p0[1]) / L;
+            let nx = -uz, nz = ux;
+            const mid: XZ = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+            if (pointInPolygon([mid[0] + nx * 0.3, mid[1] + nz * 0.3], a.poly)) [nx, nz] = [-nx, -nz]; // 外向き
+            const n = Math.max(1, Math.round(L));
+            let start = -1;
+            const flush = (k: number) => {
+              if (start < 0) return;
+              const t0 = (start / n) * L, t1 = (k / n) * L, len = t1 - t0;
+              if (len > 0.4) {
+                const m = new THREE.Mesh(new THREE.BoxGeometry(len, 1.2, 0.15), partMat);
+                m.position.set(p0[0] + ux * (t0 + len / 2), floorY(lv) + 0.6, p0[1] + uz * (t0 + len / 2));
+                m.rotation.y = -Math.atan2(uz, ux);
+                g.add(m);
+              }
+              start = -1;
+            };
+            for (let k = 0; k < n; k++) {
+              const t = ((k + 0.5) / n) * L;
+              const q: XZ = [p0[0] + ux * t + nx * 0.6, p0[1] + uz * t + nz * 0.6];
+              const border = inAny(q, outdoor.map((o) => o.poly)) && !inAny(q, indoor.filter((o) => o !== a).map((o) => o.poly)) && !inAny(q, halls4);
+              if (border && start < 0) start = k;
+              if (!border) flush(k);
+            }
+            flush(n);
+          });
+        }
+        scene.add(g);
+        partsOf(lv).solid.push(g);
+      }
     }
     // 壁サークルが目の前に並んでいる出入口は、そのサークルが使っているので通れない（穴は開けるが、出入口の看板・札は出さない）。
     // 出入口の区間（a〜b）の前 3m 以内に、壁ぞいの列の机が区間にかかって並んでいれば「ふさがっている」
@@ -605,7 +654,8 @@ export function VenueView() {
         wallMat,
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
         // 穴は、壁サークルがふさいでいる出入口も開ける（看板だけ出さない）
-        venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口").map((d) => d.at),
+        // 西・南のホールは、搬入口（大きなシャッター。写真で壁に開いている）も穴にする
+        venue.doors.filter((d) => d.hall === h.id && (d.kind === "出入口" || (d.kind === "搬入口" && (h.building === "西" || h.building === "南")))).map((d) => d.at),
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
@@ -642,11 +692,25 @@ export function VenueView() {
     for (const st of venue.stairs ?? []) {
       const y0 = floorY(st.toLevel), y1 = floorY(st.fromLevel);
       const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
+      if (st.kind === "ramp") {
+        // 車のスロープ：段のない 1 枚の傾いた板（厚さ 0.6m）
+        const geo = new THREE.BoxGeometry(st.width, 0.6, Math.hypot(run, y1 - y0));
+        const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: RAMP_COLOR }));
+        m.rotation.order = "YXZ";
+        m.rotation.set(-Math.atan2(y1 - y0, run), Math.atan2(dx, dz), 0);
+        m.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 - 0.3, (st.from[1] + st.to[1]) / 2);
+        scene.add(m);
+        const label = textSprite(`⇅ ${st.name}`, { bg: "rgba(70,90,100,.92)", height: 2.6, px: 30 });
+        label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
+        scene.add(label);
+        addLabel(label, "door");
+        continue;
+      }
       const n = Math.max(3, Math.round((y1 - y0) / 0.2));
       const geo = new THREE.BoxGeometry(st.width, 1, run / n + 0.02);
       const esc = st.kind === "escalator";
-      // 屋外の階段（屋上展示場からエントランスプラザへ）は、屋外の床と同じ水色
-      const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : st.outdoor ? OUTDOOR_COLOR : LINK_COLOR }), n);
+      // 屋外の階段（屋上展示場からエントランスプラザへ）は、目立つマゼンタ
+      const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : st.outdoor ? OUTDOOR_STAIR_COLOR : LINK_COLOR }), n);
       const t = new THREE.Object3D();
       for (let i = 0; i < n; i++) {
         // 段は 1 段ずつ、厚さ 0.6m の板（下まで埋めた塊にすると、下の階から壁のように見える）
@@ -659,7 +723,7 @@ export function VenueView() {
       }
       m.computeBoundingSphere();
       scene.add(m);
-      const label = textSprite(`⇅ ${st.name}`, { bg: esc ? "rgba(60,95,140,.92)" : st.outdoor ? "rgba(30,140,190,.92)" : "rgba(205,110,50,.92)", height: 2.6, px: 30 });
+      const label = textSprite(`⇅ ${st.name}`, { bg: esc ? "rgba(60,95,140,.92)" : st.outdoor ? "rgba(200,30,120,.95)" : "rgba(205,110,50,.92)", height: 2.6, px: 30 });
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
       scene.add(label);
       addLabel(label, st.fromLevel === 2 && st.toLevel === 1 ? "block" : "door"); // ガレリアの階段・エスカレーターの札は、寄ったときだけ
@@ -1100,7 +1164,8 @@ export function VenueView() {
           mat.transparent = !on || see !== undefined;
           mat.opacity = on ? (see ?? 1) : 0.3;
           mat.depthWrite = on && see === undefined;
-          m.visible = (on || !walk) && !(m.userData.hideOnFloor1 && currentFloor === 1);
+          // 1F を見ているときは、4F（屋上展示場も）は薄くもせず出さない
+          m.visible = (on || !walk) && !(currentFloor === 1 && lv === 4);
         }
         // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める
         for (const o of p.solid) {

@@ -174,9 +174,10 @@ const southRestSq: XZ[] = southRest.map((p) => {
   return u < 236 ? fromUV([[236, v]])[0] : p;
 });
 // 西と南のつなぎ目の角にある、ホールに 45° 傾いた四角い建物（航空写真：中心 u 227.5・v 104、角から角まで 34m、屋根に小さな
-// ピラミッド）。人は入れないので床にはせず、4F の高さに立つ障害物（箱）として描く
+// ピラミッド）。人は入れないので床にはせず、地面から 4F の上まで続く障害物（箱）として描く（斜めからの写真：下の方まで続く）。
+// ただし 2F の床（コンコースと踊り場）と、中を通るエスカレーターの所はあける（下の「南の角の建物」）
 const southEntrance: XZ[] = fromUV([[227.5, 87], [244.5, 104], [227.5, 121], [210.5, 104]]);
-const blocks: { name: string; level: number; poly: XZ[]; height: number }[] = [{ name: "南の角の建物", level: 4, poly: southEntrance, height: 8 }];
+const blocks: { name: string; level: number; poly: XZ[]; height: number; holes?: XZ[][] }[] = [];
 
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
@@ -289,28 +290,15 @@ const areas: Area[] = [
   // イベントプラザとコンコースのあいだの 1m ほどのすき間（OSM の 2 つの形のずれ）をうめる
   const cc = areas.find((a) => a.name === "コンコース");
   if (cc) cc.poly = biggest(polygonClipping.union([ring(cc.poly)], [ring(fromUV([[-6.8, 103.5], [20.6, 103.5], [20.6, 106], [-6.8, 106]]))]));
-  // 南コンコースの屋内と屋外：OSM の南コンコースの形のうち、屋根があるのは北東のふち（エントランスホールの角から西のアトリウムへの
-  // 斜めの辺）から 14m の帯だけ（航空写真：屋根のある斜めの通路と、その横の段々の屋根）。その南西の舗装された所は屋根がない。
-  // 公式フロアマップでも、白い南コンコースは細い帯で、その南は灰色（屋外）。帯の外はエントランスプラザの続きの屋外にする
+  // 南コンコースの屋内と屋外：公式フロアマップでは、南コンコースはエントランスホールから一定の幅で斜めにのびる白い帯（屋内）で、
+  // 西のアトリウムの側の端は帯に直角に切れている。航空写真でも、屋根があるのはエントランスホールの東の辺から、北東のふち
+  // （斜めの辺）にそう 14m ほどの帯まで。その南西の、エントランスプラザの東の縁（u 43.9）から西のアトリウムまでの舗装された
+  // 中庭は屋根がない（屋外。エントランスプラザの続き）。帯と中庭の境は直線、アトリウムの側の端は帯の向きに直角な辺
   {
     const sc = areas.find((a) => a.name === "南コンコース")!;
-    const edge = fromUV([[21.2, -71.5], [50.5, -42.5], [56.5, -30.4], [84.8, -10.8]]);
-    const W = 14;
-    const band: [number, number][][][] = [];
-    edge.forEach((a, i) => {
-      // 角のすき間をうめる丸（八角形）
-      band.push([ring(Array.from({ length: 8 }, (_, k) => [a[0] + W * Math.cos((k * Math.PI) / 4), a[1] + W * Math.sin((k * Math.PI) / 4)] as XZ))]);
-      const b = edge[i + 1];
-      if (!b) return;
-      const L = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = -(b[1] - a[1]) / L, nz = (b[0] - a[0]) / L;
-      // 南コンコースの形の内側へ向く法線
-      const inward = pointInPolygon([(a[0] + b[0]) / 2 + nx, (a[1] + b[1]) / 2 + nz], sc.poly) ? 1 : -1;
-      band.push([ring([a, b, [b[0] + nx * W * inward, b[1] + nz * W * inward], [a[0] + nx * W * inward, a[1] + nz * W * inward]])]);
-    });
-    const bandU = polygonClipping.union(band[0], ...band.slice(1));
-    const inside = polygonClipping.intersection([ring(sc.poly)], bandU);
-    const outside = polygonClipping.difference([ring(sc.poly)], bandU);
-    sc.poly = biggest(inside);
+    const strip = fromUV([[21.2, -71.5], [50.5, -42.5], [56.5, -30.4], [84.8, -10.8], [77.5, -3.3], [43.9, -24.2], [43.9, -38.3], [21.2, -38.4]]);
+    const outside = polygonClipping.difference([ring(sc.poly)], [ring(strip)]);
+    sc.poly = biggest(polygonClipping.intersection([ring(sc.poly)], [ring(strip)]));
     for (const pg of outside) {
       const poly = unring(pg[0]);
       if (size(poly) > 20) areas.push({ name: "エントランスプラザ", level: 2, poly, part: true });
@@ -335,13 +323,16 @@ const areas: Area[] = [
 // 西3・西4 の外の 4F の通路（トラックが上がってくる搬入の通路。屋外）：航空写真で、西3 の北東の壁の外（v -97.5 まで、
 // u 53 から）と、西4 の南東の壁の外（u 214 まで）に、車の止まった通路がある。南東の通路は南展示棟への通路（4F）につながる
 areas.push({ name: "外の通路（4F）", level: 4, poly: fromUV([[53, -97.5], [214, -97.5], [214, 16], [202, 16], [202, -70.7], [149.8, -70.7], [149.8, -78.4], [53, -78.4]]) });
+// 車のスロープ：航空写真・斜めからの写真で、北東の 4F の通路の外（v -116〜-104）を、北西の端（u 42〜54。通路の北西の端と
+// つながる）から南東へ（u 196 で地面）下りる幅 12m の坂。北西の端の、通路とのつなぎの床（u 42〜54・v -116〜-97.5）も 4F の屋外
+areas.push({ name: "外の通路（4F）", level: 4, poly: fromUV([[42, -116], [54, -116], [54, -97.5], [42, -97.5]]), part: true });
 
 // 屋外（屋根のない所）：公式フロアマップで灰色に塗られた所。ほかは屋内（白）
 for (const a of areas) if (["屋上展示場", "エントランスプラザ", "イベントプラザ", "中央ターミナル", "南展示棟への通路", "南展示棟への通路（4F）", "外の通路（4F）"].includes(a.name)) a.outdoor = true;
 
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：OpenStreetMap の階段（way 381682023、
 // layer=2）。屋上展示場の西の角から北西へ、エントランスプラザへ下りる。航空写真でも、ここに屋根のある幅 7m ほどの階段が見える
-type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean };
+type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean };
 const stairs: Stair[] = [];
 // 位置は航空写真と斜めからの写真に合わせる：階段の上の端は、45° に傾いた四角い踊り場（中心 u 59.5・v 82.5、角から角まで 15m）。
 // 踊り場は半分ほど屋上展示場の西の縁（u 61.5）にくいこむ（写真：屋上の縁の角に踊り場がはまっている）。
@@ -354,6 +345,12 @@ const stairs: Stair[] = [];
   const mid: XZ = [c[0] - h / 2, c[1] - h / 2]; // 踊り場の南西の辺のまん中
   const [top, bottom] = fromUV([[mid[0] + d[0] * 0.5, mid[1] + d[1] * 0.5], [mid[0] + d[0] * (0.5 - 32), mid[1] + d[1] * (0.5 - 32)]]);
   stairs.push({ name: "階段", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 9.5, outdoor: true });
+}
+
+// 西の 4F の通路から 1F への車のスロープ（上の「外の通路（4F）」のところの説明）
+{
+  const [top, bottom] = fromUV([[53.5, -110], [196, -110]]);
+  stairs.push({ name: "スロープ", kind: "ramp", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 12, outdoor: true });
 }
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
@@ -377,21 +374,20 @@ const stairs: Stair[] = [];
     }
     void bearing;
     // 西 10：2F 南コンコース ⇔ 1F アトリウム。南コンコースの帯（屋内）のアトリウムの側の端の辺（(77.5,-3.3)〜(84.8,-10.8)）から、
-    // 辺に直角に、1F アトリウムへ下りる（公式フロアマップ：白い南コンコースの端から 1F アトリウムへの点線）
+    // 辺に直角に、1F アトリウムへ下りる（公式フロアマップ：白い南コンコースの端から 1F アトリウムへの点線）。目立つよう幅 4m
     {
       const [e0, e1] = [[77.5, -3.3], [84.8, -10.8]] as XZ[];
       const L = Math.hypot(e1[0] - e0[0], e1[1] - e0[1]);
       const n: XZ = [(e1[1] - e0[1]) / L, -(e1[0] - e0[0]) / L].map((x) => -x) as XZ; // 外向き（アトリウムの側）
       const mid: XZ = [(e0[0] + e1[0]) / 2, (e0[1] + e1[1]) / 2];
       const [top, bottom] = fromUV([[mid[0] - n[0] * 0.5, mid[1] - n[1] * 0.5], [mid[0] + n[0] * (run(1, 2) - 0.5), mid[1] + n[1] * (run(1, 2) - 0.5)]]);
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 2 });
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 4 });
     }
-    // 西 17：4F（西3 の入口の角）⇔ 2F 南コンコース。上の端は 4F アトリウムの西3 にそう腕の西の端（西3 の入口の角、AED の横）、
-    // 公式の図の点線のとおり、エントランスホールの方（2F 南コンコースの北へのびる所）へ斜めに下りる
+    // 西 17：4F ⇔ 2F 南コンコース。上の端は 4F アトリウムの西3 にそう腕の西の端の辺（u 56.6。西3 の入口の角、AED の横）。
+    // そこから辺に直角に（u の向きに）、下の 2F 南コンコースの帯へ下りる（西3 の壁 v -28.5 から 2m 離す）。目立つよう幅 4m
     {
-      const [top, aim] = fromUV([[60, -20], [35, -55]]);
-      const L = run(2, 4), d = Math.hypot(aim[0] - top[0], aim[1] - top[1]);
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ((aim[0] - top[0]) / d) * L), r(top[1] + ((aim[1] - top[1]) / d) * L)], toLevel: 2, width: 2 });
+      const [top, bottom] = fromUV([[57.1, -25], [57.1 - run(2, 4), -25]]);
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 4 });
     }
     // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。公式フロアマップの印を、コンコース（u の向き）の上に寄せた所（u）と向き。
     // 公式の図では、どれも通路のふちから張り出した小さな踊り場から上り下りする：
@@ -438,10 +434,13 @@ const stairs: Stair[] = [];
     // （ホールの四すみで合わせて会場の座標に写したもの）にいちばん近い吹き抜けのエスカレーターだけ残す。階段は全部残す
     const OFFICIAL_EAST: XZ[] = [[223.2, -122.5], [260.7, -147], [222.4, -147.4], [287.3, -191.2], [336.1, -198], [362.3, -240.2], [411.4, -248]];
     const escs = vs.filter((v) => v.kind === "escalator");
-    const keep = new Set(OFFICIAL_EAST.map((o) => escs.reduce((best, e) => {
-      const m = (x: typeof e): number => Math.hypot((x.from[0] + x.to[0]) / 2 - o[0], (x.from[1] + x.to[1]) / 2 - o[1]);
-      return m(e) < m(best) ? e : best;
-    }, escs[0])));
+    // 印 1 つに、まだ選んでいないいちばん近いエスカレーターを 1 本ずつ
+    const keep = new Set<(typeof escs)[number]>();
+    for (const o of OFFICIAL_EAST) {
+      const m = (x: (typeof escs)[number]): number => Math.hypot((x.from[0] + x.to[0]) / 2 - o[0], (x.from[1] + x.to[1]) / 2 - o[1]);
+      const best = escs.filter((e) => !keep.has(e)).sort((x, y) => m(x) - m(y))[0];
+      if (best) keep.add(best);
+    }
     for (const v of vs.filter((x) => x.kind !== "escalator" || keep.has(x)))
     {
       // 上の端（2F）はそのまま、長さを 2F の高さに合わせる（30° ほど）
@@ -714,20 +713,48 @@ for (const h of halls) {
       if (poly.length >= 3 && size(poly) > 30) areas.push({ name, level, poly, holes: pg.length > 1 ? pg.slice(1).map(unring) : undefined, outdoor: true });
     }
   };
-  // 東：東1〜3 の外（搬入口の側）と、東1 の端・東3 の端の広場。名前はコミケの会場案内図の「トラックヤード」
-  outside("トラックヤード", 1, [
-    [[105, -500], [140, -500], [140, -175], [105, -175]],
-    [[0, -218], [140, -218], [140, -172], [0, -172]],
-    [[10, -528], [140, -528], [140, -494], [10, -494]],
-  ]);
-  // 東7・東8 の北東の大きな駐車場（公式フロアマップの「東棟屋外臨時駐車場」。コミケでは一般参加者の待機列に使う所）
-  outside("東棟屋外臨時駐車場", 1, [[[-90, -722], [120, -722], [120, -567], [-90, -567]]]);
+  // 東ガレリアの北の端と、東7・リンクスペース・東8 のあいだ（航空写真：屋根のある通路でつながっている）。屋内の床
+  {
+    let res = polygonClipping.union([ring(fromUV([[-33, -572], [18, -572], [18, -538], [-33, -538]]))]);
+    for (const o of [...halls.filter((h) => h.level === 1).map((h) => h.poly), ...areas.filter((a) => a.level === 1).map((a) => a.poly)]) res = polygonClipping.difference(res, [ring(o)]);
+    for (const pg of res) {
+      const poly = unring(pg[0]);
+      if (size(poly) > 10) areas.push({ name: "東ガレリア", level: 1, poly, part: true });
+    }
+  }
+  // 東：東1〜3 の外（搬入口の側）と、東1 の端・東3 の端の広場。名前はコミケの会場案内図の「トラックヤード」。
+  // 航空写真の舗装のふち（u 138・東1 の端 v -172・東3 の端 v -526）までの 1 つの形で、外の角は丸く（半径 14m）
+  {
+    const roundRect = (u0: number, v0: number, u1: number, v1: number, r: number, corners: boolean[]): XZ[] => {
+      const out: XZ[] = [];
+      const arc = (cu: number, cv: number, a0: number) => {
+        for (let k = 0; k <= 6; k++) {
+          const a = a0 + (k / 6) * (Math.PI / 2);
+          out.push([cu + r * Math.cos(a), cv + r * Math.sin(a)]);
+        }
+      };
+      // 左上（u0, v0）→ 右上（u1, v0）→ 右下（u1, v1）→ 左下（u0, v1）。corners は [右上, 右下] を丸めるか
+      out.push([u0, v0]);
+      if (corners[0]) arc(u1 - r, v0 + r, -Math.PI / 2);
+      else out.push([u1, v0]);
+      if (corners[1]) arc(u1 - r, v1 - r, 0);
+      else out.push([u1, v1]);
+      out.push([u0, v1]);
+      return out;
+    };
+    outside("トラックヤード", 1, [roundRect(8, -528, 138, -172, 14, [true, true])]);
+  }
+  // 東7・東8 の北東の大きな駐車場（公式フロアマップの「東棟屋外臨時駐車場」。コミケでは一般参加者の待機列に使う所）。
+  // 航空写真で測った形：北東は海ぞいの縁（(-255,-945) から (81,-741)、そこから (175,-560)）、南西は東7・東8 の斜めの辺の
+  // 延長線（v = -701.5 + 0.624 (u + 140.3)）、北西は道の曲がり（(-150,-735)・(-300,-800)・(-300,-905)）
+  outside("東棟屋外臨時駐車場", 1, [[[-255, -945], [81, -741], [175, -560], [180, -515], [180, -501.6], [-145, -704.6], [-150, -735], [-300, -800], [-300, -905]]]);
   // 東7 の西わきの道
   outside("外の通路（1F）", 1, [[[-168, -705], [-140, -705], [-140, -545], [-168, -545]]]);
-  // 西：西1 の外（北東の 4F の通路の下と、南東の側）
+  // 西：西1 の外（北東の 4F の通路の下と、南東の側）と、車のスロープの下の端の前（u 190〜226・v -118〜-98）
   outside("外の通路（1F）", 1, [
     [[56, -98], [222, -98], [222, -83], [56, -83]],
     [[202, -98], [222, -98], [222, 16], [202, 16]],
+    [[190, -118], [226, -118], [226, -98], [190, -98]],
   ]);
   // 南棟立体駐車場：南2・南4 の東の端（航空写真で屋上に車が止まっている所。公式フロアマップ・コミケの会場案内図にも「立体駐車場」）。
   // 南展示棟の床（建物の形をそのまま敷いたもの）から切りとって、1F に駐車場として置く（会場の床ではない）
@@ -787,7 +814,7 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
-type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" };
+type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water" };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
 if (existsSync("data/osm/surroundings.json")) {
@@ -809,11 +836,44 @@ if (existsSync("data/osm/surroundings.json")) {
     } else if (t.railway && t.railway !== "station") {
       sur.lines.push({ pts, y: layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
     } else if (t.highway) {
-      const walk = /^(pedestrian|footway|path|cycleway)$/.test(t.highway);
-      const y = layer * FLOOR_Y[2] + (walk ? 0.06 : 0.03);
+      const walk = /^(pedestrian|footway|path|cycleway|steps)$/.test(t.highway);
+      // 2F 以上の歩道・階段（OSM の layer ≥ 1）は、会場の 2F の床・階段として描いているので出さない（重なって、床の上に変な線が浮く）。
+      // 高架の道路は、2F の床より少し下（8m）に
+      if (walk && layer >= 1) continue;
+      const y = layer >= 1 ? 8 : walk ? 0.06 : 0.03;
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
       else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
     }
+  }
+}
+
+// 海（「周辺も表示」のときだけ）：航空写真の水面。東は駐車場の海ぞいの縁から北東、西・南は南展示棟の南西の公園の先（v 140〜）
+sur.areas.push(
+  { poly: fromUV([[-600, -1300], [-255, -945], [81, -741], [175, -560], [185, -520], [700, -520], [700, -1300]]), y: -0.3, kind: "water" },
+  { poly: fromUV([[-300, 150], [480, 150], [480, 520], [-300, 520]]), y: -0.3, kind: "water" },
+);
+
+// 南の角の建物（45° の四角）：地面（1F）から 4F の床の 6m 上まで。2F の床と、中を通るエスカレーター（幅 +1m、下の端の 2m 先まで）
+// の所は引く。1F の床（南展示棟への通路）からは、この建物の形を引く（4F の床とは重なってよい）
+{
+  const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+  let shape: [number, number][][][] = [[ring(southEntrance)]];
+  for (const a of areas.filter((x) => x.level === 2)) shape = polygonClipping.difference(shape, [ring(a.poly)]);
+  // 中を通るのは 2F から 1F へ下りるエスカレーターだけ（4F からのものはコンコースの上を通る）
+  for (const st of stairs.filter((x) => x.fromLevel === 2 && x.toLevel === 1)) {
+    const L = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]) || 1, ux = (st.from[0] - st.to[0]) / L, uz = (st.from[1] - st.to[1]) / L;
+    const hw = st.width / 2 + 0.5, a: XZ = [st.to[0] - ux * 2, st.to[1] - uz * 2], b = st.from;
+    shape = polygonClipping.difference(shape, [ring([[a[0] - uz * hw, a[1] + ux * hw], [b[0] - uz * hw, b[1] + ux * hw], [b[0] + uz * hw, b[1] - ux * hw], [a[0] + uz * hw, a[1] - ux * hw]])]);
+  }
+  for (const pg of shape) {
+    const un = (r: [number, number][]) => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+    if (Math.abs(pg[0].reduce((t, q, i) => (i + 1 < pg[0].length ? t + q[0] * pg[0][i + 1][1] - pg[0][i + 1][0] * q[1] : t), 0)) / 2 < 30) continue; // 細い切れ端は出さない
+    blocks.push({ name: "南の角の建物", level: 1, poly: un(pg[0]), height: FLOOR_Y[4] + 6, holes: pg.length > 1 ? pg.slice(1).map(un) : undefined });
+  }
+  for (const a of areas.filter((x) => x.level === 1 && x.name === "南展示棟への通路")) {
+    const left = polygonClipping.difference([ring(a.poly)], ...shape);
+    const area2 = (r: [number, number][]) => Math.abs(r.reduce((t, q, i) => (i + 1 < r.length ? t + q[0] * r[i + 1][1] - r[i + 1][0] * q[1] : t), 0));
+    if (left.length) a.poly = left.map((pg) => pg[0]).sort((p, q) => area2(q) - area2(p))[0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
   }
 }
 
