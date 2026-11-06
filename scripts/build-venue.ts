@@ -129,7 +129,6 @@ type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
 }
-let southLine: XZ[] = [];
 function southConcourse(): Area[] {
   if (!existsSync("data/osm/surroundings.json")) return [];
   const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
@@ -141,7 +140,6 @@ function southConcourse(): Area[] {
   let k0 = 0;
   while (k0 + 2 < line.length && plazas.some((pl) => pointInPolygon(line[k0 + 1], pl) || pointInPolygon([(line[k0][0] + line[k0 + 1][0]) / 2, (line[k0][1] + line[k0 + 1][1]) / 2], pl))) k0++;
   const pts: XZ[] = line.slice(k0);
-  southLine = pts;
   const w = 4; // 半分の幅
   const left: XZ[] = [], right: XZ[] = [];
   pts.forEach((p, i) => {
@@ -312,14 +310,6 @@ const stairs: Stair[] = [];
   // 向き：公式の図には向きがないので、西の 1F⇔4F はストリートビューで見た向き（南南西へ上がる）、ほかは近くの通路の向き
   {
     const run = (lo: number, hi: number) => (FLOOR_Y[hi] - FLOOR_Y[lo]) * 1.8; // 30° ほどの傾き
-    const put = (center: XZ, dir: XZ, lo: number, hi: number, width = 2) => {
-      const L = run(lo, hi) / 2, n = Math.hypot(dir[0], dir[1]);
-      let ux = dir[0] / n, uz = dir[1] / n;
-      // 上の端がその階の床に乗らないときは、向きを反対にする（反対なら乗るとき）
-      const top = (k: number): XZ => [center[0] + ux * L * k, center[1] + uz * L * k];
-      if (!onFloor(top(1), hi) && onFloor(top(-1), hi)) [ux, uz] = [-ux, -uz];
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: [r(center[0] + ux * L), r(center[1] + uz * L)], fromLevel: hi, to: [r(center[0] - ux * L), r(center[1] - uz * L)], toLevel: lo, width });
-    };
     const bearing = (deg: number): XZ => [Math.sin((deg * Math.PI) / 180), -Math.cos((deg * Math.PI) / 180)];
     // 西 13：1F アトリウム ⇔ 4F アトリウム（屋内）。吹き抜け（天窓の下、u 78〜124・v -7〜39）の中を上がって、4F アトリウムの
     // 西4 にそう腕の縁（u 124）に、縁に直角につく（床に穴をあけて途中から出るのではない）。コミケの会場案内図の 4F 図でも、
@@ -343,23 +333,26 @@ const stairs: Stair[] = [];
       const L = run(2, 4), d = Math.hypot(aim[0] - top[0], aim[1] - top[1]);
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: [r(top[0] + ((aim[0] - top[0]) / d) * L), r(top[1] + ((aim[1] - top[1]) / d) * L)], toLevel: 2, width: 2 });
     }
-    // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。印をコンコースの線の上に寄せ、コンコースの向きにそろえる
-    if (southLine.length >= 2) {
-      const onLine = (p: XZ): [XZ, XZ] => {
-        let best: [number, XZ, XZ] = [Infinity, p, [1, 0]];
-        for (let k = 0; k + 1 < southLine.length; k++) {
-          const a = southLine[k], b = southLine[k + 1];
-          const dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx * dx + dz * dz || 1;
-          const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2));
-          const q: XZ = [a[0] + t * dx, a[1] + t * dz], d = Math.hypot(p[0] - q[0], p[1] - q[1]);
-          if (d < best[0]) best = [d, q, [dx, dz]];
-        }
-        return [best[1], best[2]];
-      };
-      for (const [p, lo, hi] of [[[70, 309], 2, 4], [[110.7, 369.8], 2, 4], [[55, 243.7], 2, 4], [[53.2, 243.2], 1, 2], [[123.8, 358.4], 1, 2], [[83.1, 297.9], 1, 2]] as [XZ, number, number][]) {
-        const [q, d] = onLine(p);
-        put(q, [-d[0], -d[1]], lo, hi); // 上（高い階）は北（エントランスプラザ）の側
+    // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。公式フロアマップの印を、コンコース（u の向き）の上に寄せた所（u）と向き。
+    // 公式の図では、どれも通路のふちから張り出した小さな踊り場から上り下りする：
+    // 2F ⇔ 1F は、コンコースのホールの側のふち（v 104.9）から張り出した踊り場から、南1・南2 の壁ぎわ（v 102.6）を 1F へ下りる。
+    // 4F ⇔ 2F は、4F の床のふち（v 111.5）から張り出した踊り場から、コンコースの外の側（v 113.2）を 2F へ下りる
+    {
+      const S_EDGE_4F = 111.5, S_EDGE_2F = 104.9;
+      for (const [u, sgn, lo, hi] of [[285.5, 1, 2, 4], [358.7, 1, 2, 4], [244.3, -1, 2, 4], [221.2, 1, 1, 2], [356.3, 1, 1, 2], [283.4, 1, 1, 2]] as [number, number, number, number][]) {
+        const w = 2, v = hi === 4 ? 113.2 : 102.6;
+        const [top, bottom] = fromUV([[u, v], [u + sgn * run(lo, hi), v]]);
+        stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: hi, to: bottom, toLevel: lo, width: w });
+        // 踊り場：上の端の後ろ 4m から前 1m まで。ふちから段の外の側 1.5m まで
+        const [ua, ub] = [u - sgn * 4, u + sgn * 1].sort((a, b) => a - b);
+        // （コンコースのふちは、OSM の線のとおり少し斜め（v 104.9〜107.1）なので、2F の踊り場はコンコースの中まで重ねる）
+        const [va, vb] = hi === 4 ? [S_EDGE_4F - 0.5, v + w / 2 + 1.5] : [v - w / 2 - 1.5, S_EDGE_2F + 3];
+        areas.push({ name: hi === 4 ? "南展示棟（4F）" : "コンコース", level: hi, poly: fromUV([[ua, va], [ub, va], [ub, vb], [ua, vb]]), part: true });
       }
+      // 4F の南展示棟の床は、ホールの外の部屋の帯（トイレ。v 111 まで）のふちまで。その外（コンコースの上）は空
+      const s4 = areas.find((a) => a.name === "南展示棟（4F）" && !a.part)!;
+      const cut = polygonClipping.intersection([[...s4.poly, s4.poly[0]].map(([x, z]) => [x, z] as [number, number])], [[...fromUV([[-1000, -1000], [1000, -1000], [1000, S_EDGE_4F], [-1000, S_EDGE_4F]]), fromUV([[-1000, -1000]])[0]].map(([x, z]) => [x, z] as [number, number])]);
+      s4.poly = cut[0][0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
     }
   }
   // 東ガレリアから東展示棟 2F の通路へ：図面の「ES」の所（図面から読めたものだけ）に、ガレリアの長い向きに 12m
@@ -456,7 +449,7 @@ const stairs: Stair[] = [];
       const floor: [number, number][][] = [ring(a.poly), ...(a.holes ?? []).map(ring)];
       if (!polygonClipping.intersection(floor, [ring(rect(st.width / 2))]).length) continue; // 段の上にこの床はない
       let res: ReturnType<typeof polygonClipping.difference> = [];
-      for (const margin of [2.5, 1, 0.3]) {
+      for (const margin of a.level === st.fromLevel ? [0.5, 0.3] : [2.5, 1, 0.3]) {
         res = polygonClipping.difference(floor, [ring(rect(st.width / 2 + margin))]);
         if (res.length <= 1) break;
       }
