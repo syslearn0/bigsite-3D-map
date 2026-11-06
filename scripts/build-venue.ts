@@ -1148,6 +1148,29 @@ if (existsSync("data/osm/coast.json")) {
   }
 }
 
+// 2F の床は、1F のホールの上にかぶらないよう、ホールの形で切る（ホールの壁でまっすぐ切れる）。公式フロアマップから写した
+// エントランスホールの東側・南コンコースが西1 の北の端に、外のデッキ・東ガレリアの 2F が東1〜3 の壁ぎわに少しかぶっていて、
+// 1F のホールの机が見にくかった（ユーザーの確認）。南のコンコースの、エスカレーターの踊り場（わざと壁ぎわに重ねた所）は切らない
+{
+  const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+  const unring = (r: [number, number][]): XZ[] => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+  const size = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
+  const hall1 = halls.filter((h) => h.level === 1).map((h) => [ring(h.poly)]);
+  for (const a of [...areas]) {
+    if (a.level !== 2 || a.name === "コンコース") continue;
+    const before = [[ring(a.poly), ...(a.holes ?? []).map(ring)]];
+    const after = polygonClipping.difference(before, ...hall1);
+    const pieces = after.map((pg) => ({ poly: unring(pg[0]), holes: pg.slice(1).map(unring) })).filter((pc) => size(pc.poly) > 2).sort((x, y) => size(y.poly) - size(x.poly));
+    const total = (mp: { poly: XZ[]; holes: XZ[][] }[]) => mp.reduce((t, pc) => t + size(pc.poly) - pc.holes.reduce((u, h) => u + size(h), 0), 0);
+    const was = size(a.poly) - (a.holes ?? []).reduce((u, h) => u + size(h), 0);
+    if (!pieces.length || was - total(pieces) < 1) continue;
+    a.poly = pieces[0].poly;
+    if (pieces[0].holes.length) a.holes = pieces[0].holes;
+    else delete a.holes;
+    for (const pc of pieces.slice(1)) areas.push({ ...a, poly: pc.poly, ...(pc.holes.length ? { holes: pc.holes } : { holes: undefined }), part: true });
+  }
+}
+
 // 「周辺も表示」の OSM の建物・道のうち、会場の床（ホール・通路・広場・南の角の建物）の中にあるものは出さない。
 // 会場の床として描いているので、重なって床の上に箱や線が浮く（会議棟の逆ピラミッドと柱は、目印なので残す）
 {
