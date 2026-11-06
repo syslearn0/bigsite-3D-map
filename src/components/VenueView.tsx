@@ -766,9 +766,9 @@ export function VenueView() {
         const m = new THREE.Mesh(geo, mat);
         m.rotation.x = -Math.PI / 2;
         m.position.y = floorY(b.level);
+        // 地面から 4F の上まで続く建物なので、どの階を見ているときも出す（階ごとの出し分けに入れない）
         scene.add(m);
         occluders.push(m);
-        partsOf(b.level).solid.push(m);
       }
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
