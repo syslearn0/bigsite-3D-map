@@ -519,8 +519,8 @@ export function VenueView() {
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
     // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
     // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
-    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block";
-    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15 };
+    type LabelKind = "hall" | "area" | "big" | "wc" | "aid" | "door" | "shutter" | "block";
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, big: 26, wc: 16, aid: 16, door: 15, shutter: 13, block: 15 };
     const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
     const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
     const levels = new Map<number, LevelParts>();
@@ -567,12 +567,16 @@ export function VenueView() {
         }
       }
       if (a.under || a.part) continue;
-      const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
+      // 東棟屋外臨時駐車場は 400m もある広い所なので、名前を大きく（緑の札）
+      const big = a.name === "東棟屋外臨時駐車場";
+      const label = big
+        ? textSprite(a.name, { fg: "#ffffff", bg: "rgba(60,120,50,.9)", height: 20, px: 48 })
+        : textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
       const [cx, cz] = insidePoint(a.poly, a.holes ?? []);
-      label.position.set(cx, y + 3, cz);
+      label.position.set(cx, y + (big ? 12 : 3), cz);
       scene.add(label);
       partsOf(a.level).solid.push(label);
-      addLabel(label, "area");
+      addLabel(label, big ? "big" : "area"); // 大きな札は、遠くから見ても隠さない
     }
     // 2F と 4F の、屋内と屋外の境目の仕切り。2F は高さ 3.6m の仕切り、4F は建物の外壁なのでホールの壁と同じ高さ。
     // 屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、ほかの屋内の床でもホールでもない所に立てる。
