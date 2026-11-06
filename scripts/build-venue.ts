@@ -1071,14 +1071,58 @@ if (existsSync("data/osm/coast.json")) {
 // 「周辺も表示」の OSM の建物・道のうち、会場の床（ホール・通路・広場・南の角の建物）の中にあるものは出さない。
 // 会場の床として描いているので、重なって床の上に箱や線が浮く（会議棟の逆ピラミッドと柱は、目印なので残す）
 {
-  const footprints = [...halls.map((h) => h.poly), ...areas.map((a) => a.poly), southEntrance];
+  // 車のスロープ（幅のまわり 8m まで）も：OSM のスロープの線が、ずれた所に高架の道として残り、スロープの下に帯が見えていた
+  const ramps = stairs
+    .filter((st) => st.kind === "ramp")
+    .map((st) => {
+      const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], L = Math.hypot(dx, dz);
+      const ux = dx / L, uz = dz / L, h = st.width / 2 + 8;
+      return [
+        [st.to[0] - uz * h, st.to[1] + ux * h],
+        [st.from[0] - uz * h, st.from[1] + ux * h],
+        [st.from[0] + uz * h, st.from[1] - ux * h],
+        [st.to[0] + uz * h, st.to[1] - ux * h],
+      ] as XZ[];
+    });
+  const footprints = [...halls.map((h) => h.poly), ...areas.map((a) => a.poly), southEntrance, ...ramps];
   const inVenue = (p: XZ) => footprints.some((f) => pointInPolygon(p, f));
   for (let i = parts3d.length - 1; i >= 0; i--) {
     const b = parts3d[i];
     if (/Conference Tower|会議棟/.test(b.name)) continue;
     if (inVenue(centroid(b.poly))) parts3d.splice(i, 1);
   }
-  sur.lines = sur.lines.filter((l) => l.kind === "rail" || l.pts.filter(inVenue).length < l.pts.length * 0.3);
+  // 道・歩道の線は、会場の床にかかる所だけ切り取る（線ごと消すと会場の外の部分まで消え、残すと床の上に帯が出る）。
+  // 線路（高架）は会場の上を通るので、そのまま
+  const cut: typeof sur.lines = [];
+  for (const l of sur.lines) {
+    if (l.kind === "rail") {
+      cut.push(l);
+      continue;
+    }
+    let run: XZ[] = [];
+    const flush = () => {
+      if (run.length >= 2) cut.push({ ...l, pts: run });
+      run = [];
+    };
+    for (let i = 0; i < l.pts.length; i++) {
+      const p = l.pts[i];
+      if (inVenue(p)) {
+        flush();
+        continue;
+      }
+      if (run.length) {
+        // 前の点からの区間が、途中で会場の床を通るなら、そこで切る
+        const q = run[run.length - 1];
+        const n = Math.ceil(Math.hypot(p[0] - q[0], p[1] - q[1]) / 2);
+        let through = false;
+        for (let k = 1; k < n && !through; k++) through = inVenue([q[0] + ((p[0] - q[0]) * k) / n, q[1] + ((p[1] - q[1]) * k) / n]);
+        if (through) flush();
+      }
+      run.push(p);
+    }
+    flush();
+  }
+  sur.lines = cut;
   sur.areas = sur.areas.filter((a) => a.kind === "water" || !inVenue(centroid(a.poly)));
 }
 
