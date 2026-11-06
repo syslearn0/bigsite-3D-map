@@ -26,7 +26,7 @@ type Venue = {
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
     lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" }[];
-    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; label?: XZ }[];
+    areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
   };
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
@@ -444,7 +444,7 @@ export function VenueView() {
     sun.position.set(-200, 400, 150);
     scene.add(sun);
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshLambertMaterial({ color: 0xcfd6cf }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000), new THREE.MeshLambertMaterial({ color: 0xcfd6cf }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.2;
     scene.add(ground);
@@ -484,7 +484,7 @@ export function VenueView() {
     surroundings.add(new THREE.Mesh(ribbons(rails), new THREE.MeshLambertMaterial({ color: 0x5b5148, side: THREE.DoubleSide })));
     surroundings.add(new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === "rail" && l.y <= 1)), new THREE.MeshLambertMaterial({ color: 0x9c9488, side: THREE.DoubleSide })));
     for (const a of sur.areas) {
-      const m = flatPoly(a.poly, a.kind === "water" ? 0x6fa8d6 : a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0));
+      const m = flatPoly(a.poly, a.kind === "water" ? 0x6fa8d6 : a.kind === "platform" ? 0xd9cfb4 : SUR_COLOR.walk, a.y - (a.kind === "walk" ? 0.08 : 0), 1, a.holes ?? []);
       // 海は地面のすぐ上の広い面。遠くで地面と奥行きの差がなくなってチカチカしないよう、少し手前に描く
       if (a.kind === "water") {
         const mat = m.material as THREE.MeshLambertMaterial;
@@ -492,9 +492,9 @@ export function VenueView() {
         mat.polygonOffsetFactor = -4;
         mat.polygonOffsetUnits = -4;
         // 「海」「川」の文字
-        if (a.name && a.label) {
-          const t = textSprite(a.name, { fg: "#ffffff", bg: "rgba(40,100,160,.85)", height: 60, px: 96 });
-          t.position.set(a.label[0], 30, a.label[1]);
+        for (const l of a.name ? (a.labels ?? []) : []) {
+          const t = textSprite(a.name!, { fg: "#ffffff", bg: "rgba(40,100,160,.85)", height: 60, px: 96 });
+          t.position.set(l[0], 30, l[1]);
           surroundings.add(t);
         }
       }
@@ -706,8 +706,8 @@ export function VenueView() {
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
-        // 南のホールは、搬入口（大きなシャッター。写真で開いている）も穴にする。西の搬入口は閉まっている
-        h.building === "南" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口").map((d) => d.at) : [],
+        // 西・南のホールは、搬入口（大きなシャッター）も穴にする（ユーザーの確認）
+        h.building === "南" || h.building === "西" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口").map((d) => d.at) : [],
       );
       scene.add(w);
       occluders.push(w);
@@ -1110,7 +1110,7 @@ export function VenueView() {
     scene.traverse((o) => {
       if (o instanceof THREE.Sprite) sprites.push(o);
     });
-    const persp = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+    const persp = new THREE.PerspectiveCamera(50, 1, 0.1, 9000);
     const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
     let camera: THREE.Camera = ortho;
     let controls: OrbitControls | MapControls | null = null;

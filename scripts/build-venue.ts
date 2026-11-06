@@ -828,7 +828,7 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
-type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; label?: XZ };
+type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
 if (existsSync("data/osm/surroundings.json")) {
@@ -861,11 +861,156 @@ if (existsSync("data/osm/surroundings.json")) {
   }
 }
 
-// 海（「周辺も表示」のときだけ。どちらも海）：航空写真の水面。東は駐車場の海ぞいの縁から北東、西・南は南展示棟の南西の公園の先（v 140〜）
-sur.areas.push(
-  { poly: fromUV([[-600, -1300], [-255, -945], [81, -741], [175, -560], [185, -520], [700, -520], [700, -1300]]), y: 0, kind: "water", name: "海", label: fromUV([[160, -760]])[0] },
-  { poly: fromUV([[-300, 150], [480, 150], [480, 520], [-300, 520]]), y: 0, kind: "water", name: "海", label: fromUV([[200, 230]])[0] },
-);
+// 海（「周辺も表示」のときだけ）：OSM の海岸線（data/osm/coast.json、npm run fetch:coast が作る）から作る。
+// 航空写真と重ねて、岸が合っていることを確かめた。海岸線は「進む向きの右が海」なので、範囲の四角で切った線を、
+// 四角のふちを時計回り（北が上の地図で見て）にたどってつなぐと、海の形になる。四角の中で閉じた輪は島（反時計回り）か池
+if (existsSync("data/osm/coast.json")) {
+  type G = { lat: number; lon: number }[];
+  const co = JSON.parse(readFileSync("data/osm/coast.json", "utf8")) as {
+    bbox: string;
+    elements: { type: string; tags?: Record<string, string>; geometry?: G; members?: { type: string; role: string; geometry?: G }[] }[];
+  };
+  const [bs, bw, bn, be] = co.bbox.split(",").map(Number);
+  // 取った範囲より 400m 内側の四角（線の端が四角の外に出るように）
+  const [xw, zn] = project(ORIGIN, bn, bw).map((v) => v + 400) as XZ;
+  const [xe, zs] = project(ORIGIN, bs, be).map((v) => v - 400) as XZ;
+  const RW = xe - xw, RH = zs - zn, PER = 2 * (RW + RH);
+  const inside = ([x, z]: XZ) => x > xw && x < xe && z > zn && z < zs;
+  // 四角のふちの点の、北西の角から時計回りの距離
+  const tOf = ([x, z]: XZ) => {
+    const d = [Math.abs(z - zn), Math.abs(x - xe), Math.abs(z - zs), Math.abs(x - xw)];
+    const k = d.indexOf(Math.min(...d));
+    return k === 0 ? x - xw : k === 1 ? RW + (z - zn) : k === 2 ? RW + RH + (xe - x) : 2 * RW + RH + (zs - z);
+  };
+  const corners: [number, XZ][] = [[0, [xw, zn]], [RW, [xe, zn]], [RW + RH, [xe, zs]], [2 * RW + RH, [xw, zs]]];
+  // 線をつなぐ（端の点が同じ線どうし）
+  const key = (p: { lat: number; lon: number }) => `${p.lat},${p.lon}`;
+  const join = (list: G[]) => {
+    const ways = [...list];
+    const out: G[] = [];
+    while (ways.length) {
+      let c = ways.shift()!;
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (let i = 0; i < ways.length; i++) {
+          if (key(ways[i][0]) === key(c[c.length - 1])) c = [...c, ...ways[i].slice(1)];
+          else if (key(ways[i][ways[i].length - 1]) === key(c[0])) c = [...ways[i], ...c.slice(1)];
+          else continue;
+          ways.splice(i, 1);
+          grew = true;
+          break;
+        }
+      }
+      out.push(c);
+    }
+    return out;
+  };
+  const chains = join(co.elements.filter((e) => e.tags?.natural === "coastline" && e.geometry).map((e) => e.geometry!));
+  // 四角で切る：四角に入ってから出るまでの切れ端
+  const pieces: XZ[][] = [];
+  const rings: XZ[][] = [];
+  for (const c of chains) {
+    let pts = c.map((g) => project(ORIGIN, g.lat, g.lon));
+    const closed = key(c[0]) === key(c[c.length - 1]);
+    if (closed && pts.every(inside)) {
+      rings.push(pts.slice(0, -1));
+      continue;
+    }
+    // 閉じた輪は、四角の外の点から始める（範囲の中から始めると、最初と最後の切れ端がつながらない）
+    if (closed) {
+      const o = pts.findIndex((q) => !inside(q));
+      pts = [...pts.slice(o, -1), ...pts.slice(0, o + 1)];
+    }
+    let cur: XZ[] | null = null;
+    if (inside(pts[0])) console.warn("海岸線の端が範囲の中にある（切れ端は捨てる）");
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+      // Liang–Barsky
+      let t0 = 0, t1 = 1;
+      const dx = bx - ax, dz = bz - az;
+      let ok = true;
+      for (const [p, q] of [[-dx, ax - xw], [dx, xe - ax], [-dz, az - zn], [dz, zs - az]] as [number, number][]) {
+        if (p === 0) {
+          if (q < 0) ok = false;
+        } else {
+          const r = q / p;
+          if (p < 0) t0 = Math.max(t0, r);
+          else t1 = Math.min(t1, r);
+        }
+      }
+      if (!ok || t0 > t1) continue;
+      const at = (t: number): XZ => [ax + dx * t, az + dz * t];
+      if (t0 > 0) cur = [at(t0)]; // 外から入った
+      if (!cur) continue; // 範囲の中で始まった線（捨てる）
+      if (t1 < 1) {
+        cur.push(at(t1)); // 外へ出た
+        pieces.push(cur);
+        cur = null;
+      } else cur.push([bx, bz]);
+    }
+  }
+  // 切れ端を、四角のふちを時計回りにたどってつなぐ
+  const used = new Set<number>();
+  let sea: [number, number][][][] = [];
+  for (let s0 = 0; s0 < pieces.length; s0++) {
+    if (used.has(s0)) continue;
+    const ring: XZ[] = [];
+    for (let k = s0; ; ) {
+      used.add(k);
+      ring.push(...pieces[k]);
+      const tOut = tOf(pieces[k][pieces[k].length - 1]);
+      // 時計回りで次に来る、切れ端の入り口
+      let best = -1, bestD = Infinity;
+      for (let j = 0; j < pieces.length; j++) {
+        const d = (((tOf(pieces[j][0]) - tOut) % PER) + PER) % PER;
+        if (d < bestD && (j === s0 || !used.has(j))) [best, bestD] = [j, d];
+      }
+      // 間の四角の角
+      const between = corners
+        .map(([ct, cp]) => [(((ct - tOut) % PER) + PER) % PER, cp] as [number, XZ])
+        .filter(([d]) => d > 0 && d < bestD)
+        .sort((p, q) => p[0] - q[0]);
+      for (const [, cp] of between) ring.push(cp);
+      if (best === s0 || best < 0) break;
+      k = best;
+    }
+    sea = polygonClipping.union(sea, [[...ring, ring[0]].map(([x, z]) => [x, z] as [number, number])]);
+  }
+  // 四角の中で閉じた輪：反時計回り（右が海＝外が海）は島なので引く、時計回りは池なので足す
+  for (const r of rings) {
+    let a = 0;
+    for (let i = 0; i < r.length; i++) a += r[i][0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * r[i][1];
+    const g = [[...r, r[0]].map(([x, z]) => [x, z] as [number, number])];
+    // x 東・z 南（北が上の地図）で a > 0 は時計回り
+    sea = a > 0 ? polygonClipping.union(sea, g) : polygonClipping.difference(sea, g);
+  }
+  // 運河・川・湾の水面（OSM の natural=water。処理場の水槽や公園の池は除く）も海に足す
+  const clip: [number, number][][] = [[[xw, zn], [xe, zn], [xe, zs], [xw, zs], [xw, zn]]];
+  const ringOf = (g: G) => g.map((q) => project(ORIGIN, q.lat, q.lon) as [number, number]);
+  for (const e of co.elements) {
+    const t = e.tags ?? {};
+    if (t.natural !== "water" || !(t.water === undefined || ["canal", "river", "bay"].includes(t.water))) continue;
+    let shape: [number, number][][][] = [];
+    if (e.type === "way" && e.geometry && key(e.geometry[0]) === key(e.geometry[e.geometry.length - 1])) shape = [[ringOf(e.geometry)]];
+    else if (e.type === "relation") {
+      const outer = join((e.members ?? []).filter((m) => m.role !== "inner" && m.geometry).map((m) => m.geometry!));
+      const inner = join((e.members ?? []).filter((m) => m.role === "inner" && m.geometry).map((m) => m.geometry!));
+      for (const r of outer) if (key(r[0]) === key(r[r.length - 1])) shape = polygonClipping.union(shape, [ringOf(r)]);
+      for (const r of inner) if (key(r[0]) === key(r[r.length - 1])) shape = polygonClipping.difference(shape, [ringOf(r)]);
+    }
+    if (shape.length) sea = polygonClipping.union(sea, polygonClipping.intersection(shape, clip));
+  }
+  // 「海」の文字の場所（航空写真で海の上：会場の北東、西ホールの西の運河の先、南東の大きな海、北西の晴海の沖）
+  const labels: XZ[] = [fromUV([[160, -760]])[0], [-235, 246], [1227, 1244], [-1940, -1460]];
+  for (const p of sea) {
+    const [outer, ...holes] = p.map((r) => r.slice(0, -1) as XZ[]);
+    const here = labels.filter((l) => pointInPolygon(l, outer) && !holes.some((h) => pointInPolygon(l, h)));
+    sur.areas.push({ poly: outer, holes, y: 0, kind: "water", ...(here.length ? { name: "海", labels: here } : {}) });
+  }
+  const lost = labels.filter((l) => !sur.areas.some((a) => a.labels?.includes(l)));
+  if (lost.length) console.warn("海の上にない「海」の文字", lost);
+  console.log(`海：海岸線 ${chains.length} 本 → 切れ端 ${pieces.length}・島や池 ${rings.length} → 海 ${sea.length} 面`);
+}
 
 // 南の角の建物（45° の四角）：地面（1F）から 4F の床の 6m 上まで。2F の床と、中を通るエスカレーター（幅 +1m、下の端の 2m 先まで）
 // の所は引く。1F の床（南展示棟への通路）からは、この建物の形を引く（4F の床とは重なってよい）
