@@ -322,6 +322,7 @@ const subscribeOnline = (cb: () => void) => {
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
+  setBoth: (on: boolean) => void;
   recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
@@ -340,6 +341,7 @@ export function VenueView() {
   // サイトを開いた最初は、どのモードでも 3D（モードを切りかえたときは、そのモードの最初の見方）
   const [view, setView] = useState<View>("orbit");
   const [floor, setFloor] = useState<Floor>(1);
+  const [both, setBoth] = useState(false); // 1F と 4F の両方を見る
   // 作品で色分け：「すべて」（作品ごとの色）・「色分けしない」・1 つの作品（とキャラ）だけ
   const [byGenre, setByGenre] = useState(true);
   const [genre, setGenre] = useState<string | null>(null);
@@ -1103,6 +1105,8 @@ export function VenueView() {
     let controls: OrbitControls | MapControls | null = null;
     let current: View = "top";
     let currentFloor: Floor = 1;
+    let bothFloors = false; // 1F と 4F の両方を見る（どちらも薄くしない）
+    const shown = (f: Floor) => bothFloors || f === currentFloor;
     let yaw = 0, pitch = 0;
     let hold: -1 | 0 | 1 = 0;
     const keys = new Set<string>();
@@ -1195,7 +1199,7 @@ export function VenueView() {
     const applyVisibility = () => {
       const walk = current === "walk";
       for (const [lv, p] of levels) {
-        const on = floorOf(lv) === currentFloor || (currentFloor === 1 && lv === 2 && !walk);
+        const on = shown(floorOf(lv)) || ((currentFloor === 1 || bothFloors) && lv === 2 && !walk);
         for (const m of p.floors) {
           const mat = m.material as THREE.MeshLambertMaterial;
           const see = m.userData.see as number | undefined;
@@ -1203,7 +1207,7 @@ export function VenueView() {
           mat.opacity = on ? (see ?? 1) : 0.3;
           mat.depthWrite = on && see === undefined;
           // 1F を見ているときは、4F（屋上展示場も）は薄くもせず出さない
-          m.visible = (on || !walk) && !(currentFloor === 1 && lv === 4);
+          m.visible = (on || !walk) && !(currentFloor === 1 && !bothFloors && lv === 4);
         }
         // 札は、階で出すかどうかを覚えておき、毎フレームの大きさの計算と合わせて決める
         for (const o of p.solid) {
@@ -1211,7 +1215,7 @@ export function VenueView() {
           else o.visible = on;
         }
       }
-      for (const { mesh, level } of numMeshes) mesh.visible = current !== "top" && floorOf(level) === currentFloor;
+      for (const { mesh, level } of numMeshes) mesh.visible = current !== "top" && shown(floorOf(level));
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
@@ -1244,7 +1248,7 @@ export function VenueView() {
     const focusBooth = (i: number) => {
       const b = booths[i];
       const lv = hallById.get(b.hall)!.level;
-      if (floorOf(lv) !== currentFloor) setFloor(floorOf(lv));
+      if (!shown(floorOf(lv))) setFloor(floorOf(lv));
       const p = new THREE.Vector3(b.at[0], floorY(lv), b.at[1]);
       pin.position.copy(p);
       pinOn = true;
@@ -1266,7 +1270,7 @@ export function VenueView() {
     };
     const focusHall = (id: string) => {
       const h = hallById.get(id)!;
-      if (floorOf(h.level) !== currentFloor) setFloor(floorOf(h.level));
+      if (!shown(floorOf(h.level))) setFloor(floorOf(h.level));
       const [x, z] = centroid(h.poly);
       const p = new THREE.Vector3(x, floorY(h.level), z);
       if (current === "walk") {
@@ -1401,7 +1405,7 @@ export function VenueView() {
         return;
       }
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-      const targets = [...deskMeshes.entries()].filter(([lv]) => floorOf(lv) === currentFloor).map(([, d]) => d.mesh);
+      const targets = [...deskMeshes.entries()].filter(([lv]) => shown(floorOf(lv))).map(([, d]) => d.mesh);
       const hit = ray.intersectObjects(targets, false)[0];
       if (hit && hit.instanceId !== undefined) {
         const d = [...deskMeshes.values()].find((x) => x.mesh === hit.object)!;
@@ -1413,7 +1417,7 @@ export function VenueView() {
       if (!p) return;
       let best = -1, bestD = 1.5;
       for (const [lv, d] of deskMeshes) {
-        if (floorOf(lv) !== currentFloor) continue;
+        if (!shown(floorOf(lv))) continue;
         for (const bi of d.index) {
           const dist = Math.hypot(booths[bi].at[0] - p.x, booths[bi].at[1] - p.z);
           if (dist < bestD) [best, bestD] = [bi, dist];
@@ -1508,7 +1512,7 @@ export function VenueView() {
         s.material.depthTest = current !== "top";
       }
       for (const { s, level, base } of pins) {
-        s.visible = floorOf(level) === currentFloor;
+        s.visible = shown(floorOf(level));
         s.material.depthTest = !(current === "top");
         // 上から・3D では画面の上で 34px、歩くときは実物 1.4m
         s.scale.copy(base);
@@ -1547,7 +1551,7 @@ export function VenueView() {
       }
       // 近づいてホールの名前を消したときは、画面の真ん中（歩くときは自分の足元）のホールの名前を隅に出す
       const near = walk || pxPerM(focus) >= 3.5;
-      const h = near ? venue.halls.find((x) => floorOf(x.level) === currentFloor && pointInPolygon([focus.x, focus.z], x.poly)) : undefined;
+      const h = near ? venue.halls.find((x) => shown(floorOf(x.level)) && pointInPolygon([focus.x, focus.z], x.poly)) : undefined;
       const name = h ? h.name + (h.level >= 4 ? "（4F）" : "") : "";
       if (name !== hereName) {
         hereName = name;
@@ -1585,7 +1589,7 @@ export function VenueView() {
         codeCtx.lineWidth = 3;
         const out = (TOP_DESK_D - DESK_D) / 2;
         for (const [lv, d] of deskMeshes) {
-          if (floorOf(lv) !== currentFloor) continue;
+          if (!shown(floorOf(lv))) continue;
           for (const bi of d.index) {
             const a = booths[bi], b = booths[bi + 1];
             if (a.half !== "a" || !b || b.line !== a.line || b.num !== a.num) continue;
@@ -1610,7 +1614,7 @@ export function VenueView() {
         codeCtx.lineWidth = 3;
         for (const e of ends) {
           const l = lines[e.line];
-          if (floorOf(hallById.get(l.hall)!.level) !== currentFloor) continue;
+          if (!shown(floorOf(hallById.get(l.hall)!.level))) continue;
           const c = Math.cos(l.angle), sn = Math.sin(l.angle);
           const x = l.start[0] + e.u * c, z = l.start[1] + e.u * sn;
           if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
@@ -1635,7 +1639,7 @@ export function VenueView() {
       codeCtx.lineWidth = 3;
       const out = (TOP_DESK_D - DESK_D) / 2;
       for (const [lv, d] of deskMeshes) {
-        if (floorOf(lv) !== currentFloor) continue;
+        if (!shown(floorOf(lv))) continue;
         for (const bi of d.index) {
           const b = booths[bi];
           // 上から描いている机の真ん中（サークルの座る側へのばした分だけずらす）
@@ -1892,7 +1896,10 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { setView, setFloor, recolor, setPins, focusBooth, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
+    api.current = { setView, setFloor, setBoth: (on) => {
+      bothFloors = on;
+      applyVisibility();
+    }, recolor, setPins, focusBooth, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
         surroundings.visible = on;
       },
     };
@@ -1920,6 +1927,7 @@ export function VenueView() {
 
   useEffect(() => api.current?.setView(view), [view]);
   useEffect(() => api.current?.setFloor(floor), [floor]);
+  useEffect(() => api.current?.setBoth(both), [both]);
   useEffect(() => {
     api.current?.setSurround(surround);
   }, [surround]);
@@ -2093,10 +2101,20 @@ export function VenueView() {
             </button>
             <div className="floor-switch" role="group" aria-label="階">
               {([4, 1] as Floor[]).map((f) => (
-                <button key={f} aria-pressed={floor === f} onClick={() => setFloor(f)}>
+                <button
+                  key={f}
+                  aria-pressed={!both && floor === f}
+                  onClick={() => {
+                    setBoth(false);
+                    setFloor(f);
+                  }}
+                >
                   {f}F
                 </button>
               ))}
+              <button aria-pressed={both} aria-label="1F と 4F の両方" onClick={() => setBoth(true)} style={{ fontSize: ".72rem" }}>
+                両方
+              </button>
             </div>
           </div>
         </div>
@@ -2266,10 +2284,21 @@ export function VenueView() {
         <h3>階</h3>
         <div className="seg" role="group" aria-label="階" style={{ display: "flex" }}>
           {([1, 4] as Floor[]).map((f) => (
-            <button key={f} style={{ flex: 1 }} aria-pressed={floor === f} onClick={() => setFloor(f)}>
+            <button
+              key={f}
+              style={{ flex: 1 }}
+              aria-pressed={!both && floor === f}
+              onClick={() => {
+                setBoth(false);
+                setFloor(f);
+              }}
+            >
               {f}F
             </button>
           ))}
+          <button style={{ flex: 1 }} aria-pressed={both} onClick={() => setBoth(true)}>
+            両方
+          </button>
         </div>
         <>
             <h3>日</h3>
