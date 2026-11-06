@@ -572,13 +572,13 @@ export function VenueView() {
       partsOf(a.level).solid.push(label);
       addLabel(label, "area");
     }
-    // 2F と 4F の、屋内と屋外の境目の仕切り。2F は低い仕切り（高さ 1.2m）、4F は建物の外壁なのでホールの壁と同じ高さ。
+    // 2F と 4F の、屋内と屋外の境目の仕切り。2F は高さ 3.6m の仕切り、4F は建物の外壁なのでホールの壁と同じ高さ。
     // 屋内の床のふちを 1m ごとに見て、すぐ外が屋外の床で、ほかの屋内の床でもホールでもない所に立てる。
     // ふちのすぐ内側がホールの中なら、そこはホールの壁（搬入口の穴もある）なので立てない
     {
       const partMat = new THREE.MeshLambertMaterial({ color: 0x7d8a92, transparent: true, opacity: 0.85 });
       for (const lv of [2, 4]) {
-        const ph = lv === 4 ? WALL_H : 1.2;
+        const ph = lv === 4 ? WALL_H : 3.6; // 2F は高さ 3.6m（ユーザーの確認で 1.2m の 3 倍）
         const indoor = venue.areas.filter((a) => a.level === lv && !a.outdoor);
         const outdoor = venue.areas.filter((a) => a.level === lv && a.outdoor);
         const halls4 = venue.halls.filter((h) => h.level === lv).map((h) => h.poly);
