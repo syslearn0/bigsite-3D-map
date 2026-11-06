@@ -167,6 +167,8 @@ const WEST_U: XZ = (() => {
 const WEST_V: XZ = [-WEST_U[1], WEST_U[0]];
 const fromUV = (q: XZ[]): XZ[] => q.map(([u, v]) => [Math.round((u * WEST_U[0] + v * WEST_V[0]) * 10) / 10, Math.round((u * WEST_U[1] + v * WEST_V[1]) * 10) / 10] as XZ);
 const toUV = (p: XZ): XZ => [p[0] * WEST_U[0] + p[1] * WEST_U[1], p[0] * WEST_V[0] + p[1] * WEST_V[1]];
+// 東ガレリアの東4〜6 の側の吹き抜けと、その中の階段・エスカレーターを東4〜6 の側へ寄せる長さ（m）
+const E456_SHIFT = 6;
 // 南展示棟の西の壁：OSM の建物の形は北西のすみだけ斜め（u 219〜230）だが、同じ OSM の形の西の通路の側の壁（u 230.2〜230.6）と
 // 航空写真の屋根の端は、ホールに直角にまっすぐ（u 236。その西の u 214〜236 は、4F の通路のあいだの吹き抜け）
 const southRestSq: XZ[] = southRest.map((p) => {
@@ -232,9 +234,17 @@ const areas: Area[] = [
     poly: poly(byId(543048845)),
     see: true,
     // 吹き抜け：施設案内の 2F全体図のガレリアの上の ×印の四角（scripts/extract-plan-toilets.py が data/plan-toilets.json に書く）
-    holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : []).filter((v) =>
-      pointInPolygon(centroid(v), poly(byId(543048845))),
-    ),
+    // 東4〜6 の側（u < -3）の吹き抜けは、ユーザーの確認で東4〜6 の側へ 6m 広げる（中の階段・エスカレーターもそちらへ寄せる）
+    holes: (existsSync("data/plan-toilets.json") ? ((JSON.parse(readFileSync("data/plan-toilets.json", "utf8")) as { voids?: XZ[][] }).voids ?? []) : [])
+      .filter((v) => pointInPolygon(centroid(v), poly(byId(543048845))))
+      .map((v) => {
+        const cu = toUV(centroid(v))[0];
+        if (cu >= -3) return v;
+        return v.map((p) => {
+          const [u, w] = toUV(p);
+          return u < cu ? fromUV([[u - E456_SHIFT, w]])[0] : p;
+        });
+      }),
   },
   { name: "南展示棟への通路", level: 1, poly: southPassage },
   // 4F でも、西4ホールと南3・4ホールは通路でつながる（ビッグサイトの館内図）。航空写真では、西4 の南東の壁（u 202）と
@@ -438,8 +448,14 @@ const stairs: Stair[] = [];
       const best = escs.filter((e) => !keep.has(e)).sort((x, y) => m(x) - m(y))[0];
       if (best) keep.add(best);
     }
-    for (const v of vs.filter((x) => x.kind !== "escalator" || keep.has(x)))
+    for (const v0 of vs.filter((x) => x.kind !== "escalator" || keep.has(x)))
     {
+      // 東4〜6 の側の吹き抜けの中のものは、吹き抜けと同じだけ東4〜6 の側へ
+      const sh = (p: XZ): XZ => {
+        const [u, w] = toUV(p);
+        return fromUV([[u - E456_SHIFT, w]])[0];
+      };
+      const v = toUV(v0.from)[0] < -3 ? { ...v0, from: sh(v0.from), to: sh(v0.to) } : v0;
       // 上の端（2F）はそのまま、長さを 2F の高さに合わせる（30° ほど）
       // 長さ：エスカレーターはほかと同じ傾き（高さの ESC_RUN 倍）、階段は 30° ほど（高さの 1.8 倍）
       const L0 = Math.hypot(v.to[0] - v.from[0], v.to[1] - v.from[1]) || 1, L = (FLOOR_Y[2] - FLOOR_Y[1]) * (v.kind === "escalator" ? ESC_RUN : 1.8);
