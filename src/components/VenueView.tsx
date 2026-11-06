@@ -10,6 +10,7 @@ import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { sampleTags } from "@/lib/sample-tags";
+import Tour, { type TourStep } from "./Tour";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -79,6 +80,20 @@ const MARK: Record<Mark, { label: string; icon: string; color: number }> = {
 const MARKS_KEY = "comiket3d:marks";
 const OLD_WISH_KEY = "comiket3d:wish"; // 「行きたい」だけだったころの保存
 const PINS_KEY = "comiket3d:pins";
+const NOTES_KEY = "comiket3d:notes"; // 印をつけた机のメモ（任意）。配置番号 → メモ
+const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
+
+// 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）
+const TOUR_STEPS: TourStep[] = [
+  { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。ドラッグで動かし、2 本指（パソコンはホイール）で拡大・回転できます。" },
+  { target: '[aria-label="メニュー"]', title: "メニュー", text: "日・ジャンル・作品の絞り込み、行きたい机の一覧と印刷、モードの切りかえはここから開きます。" },
+  { target: '[data-tour="picker"]', title: "配置番号で探す", text: "列・番号・a/b を選ぶと、その机へ移動します。" },
+  { title: "机に印とメモ", text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけた机には、メモも残せます（この端末の中だけに保存）。" },
+  { target: '[aria-label="3D にする"], [aria-label="2D にする"]', title: "2D と 3D", text: "上から見た 2D と、立体の 3D を切りかえます。" },
+  { target: '[aria-label="場所を指して歩く"]', title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
+  { target: '[aria-label="周辺も表示"]', title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
+  { target: ".floor-switch", title: "階を切りかえる", text: "1F と 4F を切りかえます。「両方」で重ねて見られます。" },
+];
 
 // 端末の保存を読む。読めないとき（プライベートモードなど）は空から
 function loadMarks(): Record<string, Mark> {
@@ -89,6 +104,20 @@ function loadMarks(): Record<string, Mark> {
     return Object.fromEntries((Array.isArray(old) ? old : []).map((c: string) => [c, "want" as Mark]));
   } catch {
     return {};
+  }
+}
+function loadNotes(): Record<string, string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(NOTES_KEY) ?? "null");
+    if (saved && typeof saved === "object") return saved;
+  } catch {}
+  return {};
+}
+function tourDone(): boolean {
+  try {
+    return localStorage.getItem(TOUR_KEY) === "done";
+  } catch {
+    return true;
   }
 }
 function loadPins(): Record<Mark, boolean> {
@@ -372,7 +401,7 @@ export function VenueView() {
   const dayWorks = useMemo(() => worksOf(tags, day), [tags, day]);
   const [surround, setSurround] = useState(true); // 周辺の建物も立体で出す（開いた最初は出す）
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
-  const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string }[] }[] } | null>(null);
+  const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string; note: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
@@ -409,6 +438,14 @@ export function VenueView() {
   // この画面はブラウザでだけ描く（page.tsx で ssr: false）ので、最初から端末の保存を読める
   const [marks, setMarks] = useState<Record<string, Mark>>(loadMarks);
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
+  const [notes, setNotes] = useState<Record<string, string>>(loadNotes);
+  const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
+  const endTour = () => {
+    setTour(false);
+    try {
+      localStorage.setItem(TOUR_KEY, "done");
+    } catch {}
+  };
   const [listOpen, setListOpen] = useState(false);
   const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
   const onHere = useRef(setHere);
@@ -420,6 +457,11 @@ export function VenueView() {
       localStorage.removeItem(OLD_WISH_KEY);
     } catch {}
   }, [marks]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+    } catch {}
+  }, [notes]);
   useEffect(() => {
     try {
       localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
@@ -2013,11 +2055,25 @@ export function VenueView() {
   const selHall = sel ? hallById.get(sel.hall)! : null;
   const selMark = sel ? marks[sel.code] : undefined;
   // 同じ印をもう一度押すと外す。違う印を押すと付け替える
-  const toggleMark = (code: string, mark: Mark) =>
+  const toggleMark = (code: string, mark: Mark) => {
+    if (marks[code] === mark)
+      setNotes((o) => {
+        const n = { ...o };
+        delete n[code];
+        return n;
+      });
     setMarks((m) => {
       const n = { ...m };
       if (n[code] === mark) delete n[code];
       else n[code] = mark;
+      return n;
+    });
+  };
+  const setNote = (code: string, text: string) =>
+    setNotes((o) => {
+      const n = { ...o };
+      if (text) n[code] = text;
+      else delete n[code];
       return n;
     });
   const listOf = (mark: Mark) =>
@@ -2108,7 +2164,7 @@ export function VenueView() {
           title: `${hs[0].building}${nums}ホール（${hs[0].level}F）`,
           img: api.current?.snapshot(ids, mine) ?? "",
           codes: mine
-            .map(({ booth, mark }) => ({ code: booths[booth].code, mark, hall: hallById.get(booths[booth].hall)!.name }))
+            .map(({ booth, mark }) => ({ code: booths[booth].code, mark, hall: hallById.get(booths[booth].hall)!.name, note: notes[booths[booth].code] ?? "" }))
             .sort((a, b) => a.code.localeCompare(b.code, "ja", { numeric: true })),
         };
       });
@@ -2137,7 +2193,11 @@ export function VenueView() {
           <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="メニュー" onClick={() => setMenu(true)}>
             <Icon name="menu" />
           </button>
-          {mode === "register" && <div style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>{codePicker}</div>}
+          {mode === "register" && (
+            <div data-tour="picker" style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>
+              {codePicker}
+            </div>
+          )}
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
             <button className="icon-btn" aria-label={view === "top" ? "3D にする" : "2D にする"} onClick={toggle3d}>
               <Icon name={view === "top" ? "3d" : "2d"} />
@@ -2240,6 +2300,7 @@ export function VenueView() {
                       <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
                         <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
                           {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
+                          {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
                         </button>
                         <button className="chip small" onClick={() => toggleMark(c, other)}>
                           {MARK[other].icon} {MARK[other].label}へ
@@ -2295,11 +2356,22 @@ export function VenueView() {
                 ✕
               </button>
             </div>
+            {selMark && (
+              <input
+                type="text"
+                aria-label="メモ（任意）"
+                placeholder="メモ（任意）　例：新刊 2 冊・午前中に"
+                maxLength={200}
+                value={notes[sel.code] ?? ""}
+                onChange={(e) => setNote(sel.code, e.target.value)}
+                style={{ width: "100%", marginTop: 8, minHeight: 40, boxSizing: "border-box" }}
+              />
+            )}
           </div>
         )}
       </div>
 
-      {/* サイドバー：モード・階・日・作品とキャラ・ホールへ移動・印の一覧と印刷・エディタ */}
+      {/* サイドバー：モード・日・作品とキャラ・ホールへ移動・印の一覧と印刷・エディタ（階は右の切りかえで） */}
       {menu && <div className="side-scrim" onClick={() => setMenu(false)} />}
       <aside className={"side" + (menu ? " open" : "")} aria-hidden={!menu}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2330,25 +2402,6 @@ export function VenueView() {
             {codePicker}
           </>
         )}
-        <h3>階</h3>
-        <div className="seg" role="group" aria-label="階" style={{ display: "flex" }}>
-          {([1, 4] as Floor[]).map((f) => (
-            <button
-              key={f}
-              style={{ flex: 1 }}
-              aria-pressed={!both && floor === f}
-              onClick={() => {
-                setBoth(false);
-                setFloor(f);
-              }}
-            >
-              {f}F
-            </button>
-          ))}
-          <button style={{ flex: 1 }} aria-pressed={both} onClick={() => setBoth(true)}>
-            両方
-          </button>
-        </div>
         <>
             <h3>日</h3>
             <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
@@ -2482,8 +2535,21 @@ export function VenueView() {
             </button>
           )}
         </div>
+        <button
+          className="chip"
+          style={{ marginTop: 12 }}
+          onClick={() => {
+            setMenu(false);
+            setTour(true);
+          }}
+        >
+          使い方を見る
+        </button>
         <p style={{ color: "var(--muted)", fontSize: ".7rem", marginTop: 14 }}>{venue.attribution}</p>
       </aside>
+
+      {/* 初めての人向けの使い方の案内（開いたときの「非公式」の案内を閉じてから） */}
+      {!splash && tour && <Tour steps={TOUR_STEPS} onDone={endTour} />}
 
       {/* 開いたときの案内：非公式であることを大きく。どこかを押すと消える */}
       {splash && (
@@ -2516,7 +2582,7 @@ export function VenueView() {
               <p className="print-marks">
                 {sec.codes.map((c) => (
                   <span key={c.code} style={{ color: hexCss(MARK[c.mark].color) }}>
-                    {MARK[c.mark].icon} {c.code}（{c.hall}）
+                    {MARK[c.mark].icon} {c.code}（{c.hall}）{c.note ? `　${c.note}` : ""}
                   </span>
                 ))}
               </p>

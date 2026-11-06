@@ -645,7 +645,10 @@ const parts3d = osm.elements
     const levels = Number(t["building:levels"]) || 0;
     const max = Number(t.height) || (levels ? levels * 4 : 10);
     const min = Number(t.min_height) || (Number(t["building:min_level"]) || 0) * 4;
-    return { poly: poly(e), min, max, color: t["building:colour"] ?? null, name: t.name ?? "", part: !!t["building:part"] };
+    // 会議棟（柱と逆ピラミッド）は 1.4 倍の高さに：地図の階の高さは見やすいよう実物より高く（2F 12m・4F 24m）してあるので、
+    // 実物の高さのままだと逆ピラミッドの下の端（25m）が 4F の床のすぐ上に来て低く見える（ユーザーの確認）
+    const k = /Conference Tower|会議棟/.test(t.name ?? "") ? 1.4 : 1;
+    return { poly: poly(e), min: Math.round(min * k * 10) / 10, max: Math.round(max * k * 10) / 10, color: t["building:colour"] ?? null, name: t.name ?? "", part: !!t["building:part"] };
   })
   .filter((b) => b.poly.length >= 3 && b.max > b.min && !inHallBuilding(b.poly))
   // 部品（building:part）がある建物は、部品だけを立てる（外形と部品が重ならないように）

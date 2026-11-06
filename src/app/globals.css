@@ -298,3 +298,89 @@ select:disabled {
 .floor-switch button + button {
   border-top: none;
 }
+
+/* 使い方の案内（Tour.tsx）：部品のまわりだけ明るく抜いた暗い幕と、吹き出し */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.tour-dim,
+.tour-hole {
+  position: fixed;
+  pointer-events: auto;
+}
+.tour-dim {
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.tour-hole {
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  outline: 3px solid #ffd23f;
+  transition: all 0.2s ease;
+}
+.tour-bubble {
+  position: fixed;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  transition: left 0.2s ease, top 0.2s ease;
+}
+.tour-arrow {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  transform: rotate(45deg);
+}
+.tour-arrow.top {
+  top: -9px;
+  border-right: none;
+  border-bottom: none;
+}
+.tour-arrow.bottom {
+  bottom: -9px;
+  border-left: none;
+  border-top: none;
+}
+.tour-arrow.right {
+  right: -9px;
+  border-left: none;
+  border-bottom: none;
+}
+.tour-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.tour-title {
+  display: block;
+  font-size: 1.05rem;
+  margin-top: 2px;
+}
+.tour-text {
+  margin: 6px 0 10px;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.tour-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tour-buttons button {
+  min-height: 38px;
+}
+.tour-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  text-decoration: underline;
+}
+.tour-next {
+  font-weight: 700;
+}
