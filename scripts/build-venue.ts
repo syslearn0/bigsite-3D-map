@@ -320,8 +320,16 @@ const areas: Area[] = [
   const sp1 = areas.find((a) => a.name === "南展示棟への通路");
   if (sp1) {
     sp1.poly = biggest(polygonClipping.difference([ring(sp1.poly)], [ring(southRestSq)]));
-    // 南展示棟の西の壁（u 236）までのすき間をうめる
-    sp1.poly = biggest(polygonClipping.union([ring(sp1.poly)], [ring(fromUV([[219, 25.5], [236, 25.5], [236, 61.8], [219, 61.8]]))]));
+    // 西と南のあいだ：OSM の形の東の端（u 210〜230）は、斜めの切れ端が多く、南展示棟の壁ともすき間がある。
+    // 東の端は、南展示棟の西の壁（u 236）までの、壁に直角な形にする：u 219〜236 の南北の通路（v 12.4〜106.3）と、
+    // その南の端から西へのびる帯（v 106.3〜123.3）
+    sp1.poly = biggest(
+      polygonClipping.union(
+        polygonClipping.intersection([ring(sp1.poly)], [ring(fromUV([[-1000, -1000], [216, -1000], [216, 1000], [-1000, 1000]]))]),
+        [ring(fromUV([[213, 106.3], [236, 106.3], [236, 123.3], [213, 123.3]]))],
+        [ring(fromUV([[219, 12.4], [236, 12.4], [236, 106.3], [219, 106.3]]))],
+      ),
+    );
   }
 }
 // 西3・西4 の外の 4F の通路（トラックが上がってくる搬入の通路。屋外）：航空写真で、西3 の北東の壁の外（v -97.5 まで、
@@ -335,15 +343,17 @@ for (const a of areas) if (["屋上展示場", "エントランスプラザ", "�
 // layer=2）。屋上展示場の西の角から北西へ、エントランスプラザへ下りる。航空写真でも、ここに屋根のある幅 7m ほどの階段が見える
 type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator"; outdoor?: boolean };
 const stairs: Stair[] = [];
-// 位置は航空写真に合わせる（OSM の線より 4m ほど南）：階段の上の端は、屋上展示場の西の縁に付いた、45° に傾いた四角い踊り場
-// （中心 u 56・v 82.5、角から角まで 15m）。階段はその踊り場の南西の辺に直角に、45° の向きでエントランスプラザ（v 60 の縁）まで下りる
+// 位置は航空写真と斜めからの写真に合わせる：階段の上の端は、45° に傾いた四角い踊り場（中心 u 59.5・v 82.5、角から角まで 15m）。
+// 踊り場は半分ほど屋上展示場の西の縁（u 61.5）にくいこむ（写真：屋上の縁の角に踊り場がはまっている）。
+// 階段は踊り場の南西の辺いっぱいの幅（9.5m）で、辺に直角に、45° の向きでエントランスプラザ（v 60 の縁）まで下りる
 {
-  const landing = fromUV([[56, 75], [63.5, 82.5], [56, 90], [48.5, 82.5]]);
+  const c: XZ = [59.5, 82.5], h = 7.5;
+  const landing = fromUV([[c[0], c[1] - h], [c[0] + h, c[1]], [c[0], c[1] + h], [c[0] - h, c[1]]]);
   areas.push({ name: "屋上展示場", level: 4, poly: landing, part: true, outdoor: true });
   const d: XZ = [Math.SQRT1_2, Math.SQRT1_2];
-  const mid: XZ = [52.25, 78.75]; // 踊り場の南西の辺のまん中
-  const [top, bottom] = fromUV([[mid[0] + d[0] * 0.5, mid[1] + d[1] * 0.5], [mid[0] + d[0] * (0.5 - 28), mid[1] + d[1] * (0.5 - 28)]]);
-  stairs.push({ name: "階段", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 7, outdoor: true });
+  const mid: XZ = [c[0] - h / 2, c[1] - h / 2]; // 踊り場の南西の辺のまん中
+  const [top, bottom] = fromUV([[mid[0] + d[0] * 0.5, mid[1] + d[1] * 0.5], [mid[0] + d[0] * (0.5 - 32), mid[1] + d[1] * (0.5 - 32)]]);
+  stairs.push({ name: "階段", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 9.5, outdoor: true });
 }
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
