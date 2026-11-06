@@ -47,12 +47,9 @@ const savedTags = loadTags(TAGS_KEY);
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
+type Mode = "register" | "plan";
+const MODE_KEY = "comiket3d:mode";
 type Floor = 1 | 4;
-const VIEWS: { id: View; label: string }[] = [
-  { id: "top", label: "上から" },
-  { id: "orbit", label: "3D" },
-  { id: "walk", label: "歩く" },
-];
 const EYE = 1.6;
 const WALK_SPEED = 6; // m/秒（見て回りやすいよう、歩く速さより速め）
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
@@ -324,7 +321,7 @@ const subscribeOnline = (cb: () => void) => {
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
-  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null) => void;
+  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, work: string | null, char: string | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
@@ -339,9 +336,28 @@ export function VenueView() {
   const api = useRef<Api | null>(null);
   const booths = useMemo<Booth[]>(() => expandBooths(lines, venue.halls), []);
   const codeIndex = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
-  const [view, setView] = useState<View>("top");
+  const [view, setView] = useState<View>(() => {
+    try {
+      return localStorage.getItem(MODE_KEY) === "plan" ? "orbit" : "top";
+    } catch {
+      return "top";
+    }
+  });
   const [floor, setFloor] = useState<Floor>(1);
+  // 作品で色分け：「すべて」（作品ごとの色）・「色分けしない」・1 つの作品（とキャラ）だけ
   const [byGenre, setByGenre] = useState(true);
+  const [work, setWork] = useState<string | null>(null);
+  const [char, setChar] = useState<string | null>(null);
+  // 2 つのモード：作品を登録する（最初は 2D・配置番号の欄をいつも出す）と、当日に使う・計画する（最初は 3D）
+  const [mode, setMode] = useState<Mode>(() => {
+    try {
+      return localStorage.getItem(MODE_KEY) === "plan" ? "plan" : "register";
+    } catch {
+      return "register";
+    }
+  });
+  const [menu, setMenu] = useState(false); // サイドバー
+  const [splash, setSplash] = useState(true); // 開いたときの「非公式」の案内
   const [day, setDay] = useState<Day>(1); // 何日目（作品・キャラは日ごと）
   const dayTags = useMemo(() => (savedTags ? (savedTags[day] ?? {}) : null), [day]);
   const dayWorks = useMemo(() => (savedTags ? worksOf(savedTags, day) : []), [day]);
@@ -1243,16 +1259,27 @@ export function VenueView() {
       }
     };
 
-    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null) => {
+    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null, work: string | null, char: string | null) => {
       const col = new THREE.Color();
+      // 作品（とキャラ）を選んでいるとき、その机か
+      const hit = (b: Booth) => {
+        if (!work) return true;
+        if (dayTags) {
+          const t = dayTags[b.code];
+          if (!t?.works?.includes(work)) return false;
+          return !char || !!t.chars?.[work]?.includes(char);
+        }
+        return lines[b.line].genre === work;
+      };
       for (const { mesh, index } of deskMeshes.values()) {
         index.forEach((bi, k) => {
           const b = booths[bi];
           if (bi === sel) col.setHex(SELECT_COLOR);
           else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
+          else if (colorByGenre && !hit(b)) col.setHex(0xe6e5de); // 選んだ作品でない机は薄く
           else if (colorByGenre && dayTags) {
-            // 入れた作品の色（作品が2つ以上なら1つ目の色。作品が入っていない机は白）
-            const w = dayTags[b.code]?.works?.[0];
+            // 入れた作品の色（選んだ作品があればその色。なければ 1 つ目の作品の色。作品が入っていない机は白）
+            const w = work ?? dayTags[b.code]?.works?.[0];
             if (w) col.setStyle(workColor(w)).lerp(new THREE.Color(0xffffff), 0.2);
             else col.setHex(DESK_COLOR);
           } else if (colorByGenre) {
@@ -1873,7 +1900,7 @@ export function VenueView() {
   useEffect(() => {
     api.current?.setSurround(surround);
   }, [surround]);
-  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags), [byGenre, marks, selected, dayTags]);
+  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags, work, char), [byGenre, marks, selected, dayTags, work, char]);
   useEffect(() => {
     const list = Object.entries(marks)
       .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
@@ -1919,6 +1946,67 @@ export function VenueView() {
       .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
   const openHalls = venue.halls.filter((h) => !h.closed);
+  // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
+  const workList = dayTags ? dayWorks.map((w) => w.work) : SAMPLE_GENRES;
+  const charList = (() => {
+    if (!work || !dayTags) return [];
+    const set = new Set<string>();
+    for (const t of Object.values(dayTags)) for (const c of t.chars?.[work] ?? []) set.add(c);
+    return [...set].sort((a, b) => a.localeCompare(b, "ja"));
+  })();
+  const chooseMode = (m: Mode) => {
+    setMode(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {}
+    cancelWalk();
+    setView(m === "plan" ? "orbit" : "top");
+  };
+  const toggle3d = () => {
+    cancelWalk();
+    setView(view === "top" ? "orbit" : "top");
+  };
+  // 配置番号を選ぶ欄（列 → 番号 → a・b）。作品を登録するモードでは地図の上に、当日・計画のモードではサイドバーに
+  const codePicker = (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 10, padding: 4, boxShadow: "0 1px 6px rgba(0,0,0,.12)" }}>
+      <select
+        aria-label="列"
+        value={pickLine ?? ""}
+        onChange={(e) => jump(Number(e.target.value), lineNums(lines[Number(e.target.value)])[0] ?? 1, "a")}
+        style={{ flex: 2, minWidth: 0 }}
+      >
+        <option value="" disabled>
+          配置番号（列）
+        </option>
+        {openHalls.map((h) => (
+          <optgroup key={h.id} label={h.name + (h.level >= 4 ? "（4F）" : "")}>
+            {lines.map((l, i) =>
+              l.hall === h.id ? (
+                <option key={i} value={i}>
+                  {h.building}
+                  {l.block}
+                </option>
+              ) : null,
+            )}
+          </optgroup>
+        ))}
+      </select>
+      <select aria-label="番号" value={pickNum} disabled={pickLine === null} onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)} style={{ flex: 1, minWidth: 0 }}>
+        {pickNums.map((n) => (
+          <option key={n} value={n}>
+            {String(n).padStart(2, "0")}
+          </option>
+        ))}
+      </select>
+      <div className="seg" role="group" aria-label="a・b">
+        {(["a", "b"] as const).map((x) => (
+          <button key={x} aria-pressed={pickLine !== null && pickHalf === x} disabled={pickLine === null} onClick={() => jump(pickLine!, pickNum, x)}>
+            {x}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   // 配置図を印刷する：同じ建物・同じ階のホールを1枚にまとめる（東1〜3・東7・8・西1・2・西3・4・南1・2・南3・4）。
   // 印をつけた机は図の上に札で、図の下に一覧で。印刷の画面で「PDF に保存」も選べる
@@ -1959,153 +2047,31 @@ export function VenueView() {
     <>
     {/* 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app） */}
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
-      <header style={{ padding: "8px 12px 6px", background: "var(--card)", borderBottom: "1px solid var(--line)" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          <strong style={{ fontSize: "1.05rem" }}>即売会 3D マップ</strong>
-          <span className="tag">{savedLines ? "編集した配置" : "見本"}</span>
-          {savedLines && (
-            <button
-              className="chip small"
-              onClick={() => {
-                clearLayout(LAYOUT_KEY);
-                location.reload();
-              }}
-            >
-              見本に戻す
+      <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
+        {/* いつも出すもの：サイドバーを開くボタン、2D・3D、歩く、周辺。作品を登録するモードでは、配置番号の欄も */}
+        <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: 8, alignItems: "flex-start", pointerEvents: "none" }}>
+          <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="メニュー" onClick={() => setMenu(true)}>
+            <Icon name="menu" />
+          </button>
+          {mode === "register" && <div style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>{codePicker}</div>}
+          <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
+            <button className="icon-btn" aria-label={view === "top" ? "3D にする" : "2D にする"} onClick={toggle3d}>
+              <Icon name={view === "top" ? "3d" : "2d"} />
             </button>
-          )}
-          <a className="chip small" href="/editor" style={{ border: "1px solid var(--line)", textDecoration: "none", color: "var(--fg)" }}>
-            島のエディタ
-          </a>
-          <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>
-            コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置・作品は仮です（C109 の本当の配置ではありません）
-          </span>
+            <button className="icon-btn" aria-label="場所を指して歩く" aria-pressed={view === "walk" || walkPending} onClick={() => chooseView(view === "walk" ? "orbit" : "walk")}>
+              <Icon name="walk" />
+            </button>
+            <button className="icon-btn" aria-label="周辺も表示" aria-pressed={surround} onClick={() => setSurround((x) => !x)}>
+              <Icon name="city" />
+            </button>
+          </div>
         </div>
         {!online && (
-          <div role="status" style={{ marginTop: 6, fontSize: ".85rem", background: "#3a3a37", color: "#fff", borderRadius: 6, padding: "3px 8px" }}>
+          <div role="status" style={{ ...OVER, top: 60, left: "50%", transform: "translateX(-50%)", background: "#3a3a37", color: "#fff", fontSize: ".85rem" }}>
             電波がありません。この端末に保存した地図と印を表示しています
           </div>
         )}
-        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <div className="seg" role="group" aria-label="見方">
-            {VIEWS.map((v) => (
-              <button key={v.id} aria-pressed={view === v.id || (v.id === "walk" && walkPending)} onClick={() => chooseView(v.id)}>
-                {v.label}
-              </button>
-            ))}
-          </div>
-          {savedTags && (
-            <div className="seg" role="group" aria-label="日">
-              {DAYS.map((d) => (
-                <button key={d} aria-pressed={day === d} onClick={() => setDay(d)}>
-                  {d}日目
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="seg" role="group" aria-label="階">
-            {([1, 4] as Floor[]).map((f) => (
-              <button key={f} aria-pressed={floor === f} onClick={() => setFloor(f)}>
-                {f}F
-              </button>
-            ))}
-          </div>
-          <button className="chip" aria-pressed={byGenre} onClick={() => setByGenre((x) => !x)}>
-            作品で色分け
-          </button>
-          <button className="chip" aria-pressed={surround} onClick={() => setSurround((x) => !x)}>
-            周辺も表示
-          </button>
-          <button className="chip" onClick={startPrint}>
-            配置図を印刷
-          </button>
-          <button className="chip" onClick={() => setListOpen((x) => !x)}>
-            ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
-          </button>
-          <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>ピン：</span>
-          {MARKS.map((m) => (
-            <button key={m} className="chip" aria-pressed={pinsOn[m]} onClick={() => setPinsOn((p) => ({ ...p, [m]: !p[m] }))}>
-              {MARK[m].icon} {MARK[m].label}
-            </button>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
-          <select
-            aria-label="列"
-            value={pickLine ?? ""}
-            onChange={(e) => jump(Number(e.target.value), lineNums(lines[Number(e.target.value)])[0] ?? 1, "a")}
-            style={{ flex: 2, minWidth: 0 }}
-          >
-            <option value="" disabled>
-              列を選ぶ
-            </option>
-            {openHalls.map((h) => (
-              <optgroup key={h.id} label={h.name + (h.level >= 4 ? "（4F）" : "")}>
-                {lines.map((l, i) =>
-                  l.hall === h.id ? (
-                    <option key={i} value={i}>
-                      {h.building}
-                      {l.block}
-                    </option>
-                  ) : null,
-                )}
-              </optgroup>
-            ))}
-          </select>
-          <select
-            aria-label="番号"
-            value={pickNum}
-            disabled={pickLine === null}
-            onChange={(e) => jump(pickLine!, Number(e.target.value), pickHalf)}
-            style={{ flex: 1, minWidth: 0 }}
-          >
-            {pickNums.map((n) => (
-              <option key={n} value={n}>
-                {String(n).padStart(2, "0")}
-              </option>
-            ))}
-          </select>
-          <div className="seg" role="group" aria-label="a・b">
-            {(["a", "b"] as const).map((x) => (
-              <button key={x} aria-pressed={pickLine !== null && pickHalf === x} disabled={pickLine === null} onClick={() => jump(pickLine!, pickNum, x)}>
-                {x}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 4, marginTop: 6, overflowX: "auto", paddingBottom: 2 }}>
-          {openHalls.map((h) => (
-            <button key={h.id} className="chip small" onClick={() => api.current?.focusHall(h.id)}>
-              {h.name.replace("ホール", "")}
-            </button>
-          ))}
-        </div>
-      </header>
-
-      <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
-        {byGenre && dayTags && (
-          <div style={{ ...OVER, top: 8, left: 8, fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 260 }}>
-            {!dayWorks.length && <span>{day}日目の作品はまだ入っていません</span>}
-            {dayWorks.slice(0, 12).map((w) => (
-              <span key={w.work} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-                <i style={{ width: 10, height: 10, borderRadius: 2, background: workColor(w.work), display: "inline-block" }} />
-                {w.work}
-              </span>
-            ))}
-            {dayWorks.length > 12 && <span>ほか {dayWorks.length - 12}</span>}
-          </div>
-        )}
-        {byGenre && !dayTags && (
-          <div style={{ ...OVER, top: 8, left: 8, fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 260 }}>
-            {SAMPLE_GENRES.map((g, i) => (
-              <span key={g} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-                <i style={{ width: 10, height: 10, borderRadius: 2, background: hexCss(GENRE_COLOR[i]), display: "inline-block" }} />
-                {g}
-              </span>
-            ))}
-          </div>
-        )}
-        {here && <div style={{ ...OVER, top: 8, right: 8, fontWeight: 700 }}>{here}</div>}
+        {here && <div style={{ ...OVER, bottom: 22, right: 8, fontWeight: 700, fontSize: ".85rem" }}>{here}{floor === 4 ? "（4F）" : ""}</div>}
         {walkPending && (
           <div role="status" style={{ position: "absolute", left: "50%", top: 12, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
             <span>歩き始める場所を、地図の上で押してください。そこにピンを立てて、その場所から歩きます</span>
@@ -2230,6 +2196,177 @@ export function VenueView() {
           </div>
         )}
       </div>
+
+      {/* サイドバー：モード・階・日・作品とキャラ・ホールへ移動・印の一覧と印刷・エディタ */}
+      {menu && <div className="side-scrim" onClick={() => setMenu(false)} />}
+      <aside className={"side" + (menu ? " open" : "")} aria-hidden={!menu}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <strong style={{ fontSize: "1.05rem" }}>即売会 3D マップ</strong>
+          <span className="tag">{savedLines ? "編集した配置" : "見本"}</span>
+          <button className="icon-btn small" style={{ marginLeft: "auto" }} aria-label="閉じる" onClick={() => setMenu(false)}>
+            ✕
+          </button>
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: ".78rem", margin: "4px 0 10px" }}>
+          コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置・作品は仮です（C109 の本当の配置ではありません）
+        </p>
+        <h3>モード</h3>
+        <div className="seg" role="group" aria-label="モード" style={{ display: "flex" }}>
+          <button style={{ flex: 1 }} aria-pressed={mode === "register"} onClick={() => chooseMode("register")}>
+            作品を登録
+          </button>
+          <button style={{ flex: 1 }} aria-pressed={mode === "plan"} onClick={() => chooseMode("plan")}>
+            当日・計画
+          </button>
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "4px 0 0" }}>
+          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）"}
+        </p>
+        {mode === "plan" && (
+          <>
+            <h3>配置番号</h3>
+            {codePicker}
+          </>
+        )}
+        <h3>階</h3>
+        <div className="seg" role="group" aria-label="階" style={{ display: "flex" }}>
+          {([1, 4] as Floor[]).map((f) => (
+            <button key={f} style={{ flex: 1 }} aria-pressed={floor === f} onClick={() => setFloor(f)}>
+              {f}F
+            </button>
+          ))}
+        </div>
+        {savedTags && (
+          <>
+            <h3>日</h3>
+            <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
+              {DAYS.map((d) => (
+                <button key={d} style={{ flex: 1 }} aria-pressed={day === d} onClick={() => setDay(d)}>
+                  {d}日目
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <h3>作品</h3>
+        <select
+          aria-label="作品"
+          value={!byGenre ? "__off" : (work ?? "__all")}
+          onChange={(e) => {
+            const v = e.target.value;
+            setByGenre(v !== "__off");
+            setWork(v === "__all" || v === "__off" ? null : v);
+            setChar(null);
+          }}
+          style={{ width: "100%" }}
+        >
+          <option value="__all">すべての作品（作品ごとに色分け）</option>
+          <option value="__off">色分けしない</option>
+          {workList.map((w) => (
+            <option key={w} value={w}>
+              {w}
+            </option>
+          ))}
+        </select>
+        {work && charList.length > 0 && (
+          <select aria-label="キャラ・グループ" value={char ?? ""} onChange={(e) => setChar(e.target.value || null)} style={{ width: "100%", marginTop: 6 }}>
+            <option value="">キャラ・グループ：すべて</option>
+            {charList.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+        {byGenre && !work && (
+          <div style={{ fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+            {dayTags && !dayWorks.length && <span>{day}日目の作品はまだ入っていません</span>}
+            {dayTags
+              ? dayWorks.slice(0, 16).map((w) => (
+                  <span key={w.work} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                    <i style={{ width: 10, height: 10, borderRadius: 2, background: workColor(w.work), display: "inline-block" }} />
+                    {w.work}
+                  </span>
+                ))
+              : SAMPLE_GENRES.map((g, i) => (
+                  <span key={g} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                    <i style={{ width: 10, height: 10, borderRadius: 2, background: hexCss(GENRE_COLOR[i]), display: "inline-block" }} />
+                    {g}
+                  </span>
+                ))}
+          </div>
+        )}
+        <h3>ホールへ移動</h3>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {openHalls.map((h) => (
+            <button
+              key={h.id}
+              className="chip small"
+              onClick={() => {
+                api.current?.focusHall(h.id);
+                setMenu(false);
+              }}
+            >
+              {h.name.replace("ホール", "")}
+            </button>
+          ))}
+        </div>
+        <h3>印</h3>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button
+            className="chip"
+            onClick={() => {
+              setListOpen(true);
+              setMenu(false);
+            }}
+          >
+            ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
+          </button>
+          <button className="chip" onClick={startPrint}>
+            配置図を印刷
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
+          <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>地図にピン：</span>
+          {MARKS.map((m) => (
+            <button key={m} className="chip small" aria-pressed={pinsOn[m]} onClick={() => setPinsOn((p) => ({ ...p, [m]: !p[m] }))}>
+              {MARK[m].icon} {MARK[m].label}
+            </button>
+          ))}
+        </div>
+        <h3>配置</h3>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <a className="chip" href="/editor" style={{ border: "1px solid var(--line)", textDecoration: "none", color: "var(--fg)" }}>
+            島のエディタ
+          </a>
+          {savedLines && (
+            <button
+              className="chip"
+              onClick={() => {
+                clearLayout(LAYOUT_KEY);
+                location.reload();
+              }}
+            >
+              見本に戻す
+            </button>
+          )}
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: ".7rem", marginTop: 14 }}>{venue.attribution}</p>
+      </aside>
+
+      {/* 開いたときの案内：非公式であることを大きく。どこかを押すと消える */}
+      {splash && (
+        <div className="splash" role="dialog" aria-label="非公式の試作です" onPointerDown={() => setSplash(false)}>
+          <div className="splash-card">
+            <div style={{ fontSize: "1.6rem", fontWeight: 800 }}>非公式の試作です</div>
+            <p>
+              この地図は、コミックマーケット準備会・株式会社東京ビッグサイトとは<strong>関係のない</strong>、個人の非公式の試作です。
+            </p>
+            <p>島の配置・作品は仮です（C109 の本当の配置ではありません）。当日の出入口・動線は、運営の案内に従ってください。</p>
+            <p style={{ color: "var(--muted)", fontSize: ".85rem", marginBottom: 0 }}>画面のどこかを押すと閉じます</p>
+          </div>
+        </div>
+      )}
     </div>
     {print && (
       <div className="print-sheet">
@@ -2274,3 +2411,47 @@ const SHEET: CSSProperties = {
   padding: "10px 12px",
   boxShadow: "0 4px 18px rgba(0,0,0,.18)",
 };
+
+// このアプリの小さなアイコン（自作の簡単な絵）
+function Icon({ name }: { name: "menu" | "2d" | "3d" | "walk" | "city" }) {
+  const common = { width: 24, height: 24, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  switch (name) {
+    case "menu":
+      return (
+        <svg {...common}>
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      );
+    case "2d":
+      // 真上から見た地図（格子の平面）
+      return (
+        <svg {...common}>
+          <rect x="4" y="4" width="16" height="16" rx="1.5" />
+          <path d="M4 12h16M12 4v16" />
+        </svg>
+      );
+    case "3d":
+      // 斜めから見た箱
+      return (
+        <svg {...common}>
+          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />
+          <path d="M12 12l8-4.5M12 12L4 7.5M12 12v9" />
+        </svg>
+      );
+    case "walk":
+      // 歩く人
+      return (
+        <svg {...common}>
+          <circle cx="13" cy="4.5" r="1.8" />
+          <path d="M13 7.5l-2 5 3 3v5M11 12.5l-3 2M13 9l3 2.5M10.5 15.5l-2 5" />
+        </svg>
+      );
+    case "city":
+      // まわりの建物
+      return (
+        <svg {...common}>
+          <path d="M3 21h18M5 21V10l4-2v13M9 21V5l6-2v18M15 21v-9l4 2v7" />
+        </svg>
+      );
+  }
+}

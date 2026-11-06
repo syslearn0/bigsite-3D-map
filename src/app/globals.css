@@ -202,3 +202,78 @@ select:disabled {
   size: A4 landscape;
   margin: 10mm;
 }
+
+/* 地図の上の小さなアイコンボタン（2D・3D、歩く、周辺、メニュー） */
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+}
+
+.icon-btn.small {
+  width: 32px;
+  height: 32px;
+  box-shadow: none;
+}
+
+/* サイドバー（左から出る） */
+.side {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(340px, 88vw);
+  background: var(--card);
+  color: var(--fg);
+  border-right: 1px solid var(--line);
+  box-shadow: 4px 0 18px rgba(0, 0, 0, 0.18);
+  padding: 12px 14px 20px;
+  overflow-y: auto;
+  transform: translateX(-105%);
+  transition: transform 0.2s ease;
+  z-index: 40;
+}
+
+.side.open {
+  transform: none;
+}
+
+.side h3 {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 14px 0 6px;
+}
+
+.side-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 39;
+}
+
+/* 開いたときの「非公式」の案内 */
+.splash {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 24, 30, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.splash-card {
+  background: var(--card);
+  color: var(--fg);
+  border-radius: 16px;
+  padding: 20px 22px;
+  max-width: 440px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  border: 3px solid #d64545;
+}
