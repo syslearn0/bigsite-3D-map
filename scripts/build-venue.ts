@@ -296,7 +296,15 @@ const areas: Area[] = [
   const eh = poly(byId(154080987));
   const nc = areas.find((a) => a.name === "北コンコース")!;
   nc.poly = biggest(polygonClipping.difference([ring(nc.poly)], [ring(eh)]));
-  areas.push({ name: "エントランスホール", level: 2, poly: eh });
+  // 公式フロアマップ（斜めの図を、会議棟の柱で上から見た形に直したもの）では、エントランスホールの屋内はもっと広い：
+  // ・南の端から会議棟の前の 2 本の柱の手前（v -18）まで張り出している（u -34.4〜22）。ここの南の端に出口（コミケでは出口専用）
+  // ・東の辺から南コンコースの北東のふちまで（u 68 まで、v -92.5 から）も屋内
+  const ehFront = fromUV([[-34.4, -38.5], [22, -38.5], [22, -18], [-34.4, -18]]);
+  const ehEast = fromUV([[20.5, -92.5], [67.5, -92.5], [69, -25.9], [21.2, -71.5]]); // 南西のふちは南コンコースの北東のふちの直線の上
+  areas.push({ name: "エントランスホール", level: 2, poly: biggest(polygonClipping.union([ring(eh)], [ring(ehFront)], [ring(ehEast)])) });
+  // エントランスプラザ（屋外）からは、張り出した屋内の所を引く
+  const ep = areas.find((a) => a.name === "エントランスプラザ" && a.level === 2)!;
+  ep.poly = biggest(polygonClipping.difference([ring(ep.poly)], [ring(ehFront)]));
   // イベントプラザとコンコースのあいだの 1m ほどのすき間（OSM の 2 つの形のずれ）をうめる
   const cc = areas.find((a) => a.name === "コンコース");
   if (cc) cc.poly = biggest(polygonClipping.union([ring(cc.poly)], [ring(fromUV([[-6.8, 103.5], [20.6, 103.5], [20.6, 106], [-6.8, 106]]))]));
@@ -1075,8 +1083,9 @@ if (existsSync("data/osm/coast.json")) {
 }
 
 // 屋内と屋外の境目の仕切りにあける出口。公式フロアマップの赤い「入口」（エントランスホールからエントランスプラザへ。
-// ユーザーの確認でコミケでは出口専用）。公式マップは斜めから見た図なので、会議棟の 4 本の柱の位置で座標に直した
-const exits = [{ at: fromUV([[-4, -38]])[0], level: 2, name: "出口", width: 6 }];
+// ユーザーの確認でコミケでは出口専用）。公式マップは斜めから見た図なので、会議棟の 4 本の柱の位置で座標に直した。
+// エントランスホールの屋内が会議棟の前の柱の手前まで張り出した所の、南の端（v -18）
+const exits = [{ at: fromUV([[-4.5, -18]])[0], level: 2, name: "出口", width: 6 }];
 
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
