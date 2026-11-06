@@ -9,6 +9,7 @@ import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
+import { sampleTags } from "@/lib/sample-tags";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -321,7 +322,7 @@ const subscribeOnline = (cb: () => void) => {
 type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
-  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, work: string | null, char: string | null) => void;
+  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
   setPins: (list: { booth: number; mark: Mark }[]) => void;
   focusBooth: (i: number) => void;
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
@@ -336,16 +337,12 @@ export function VenueView() {
   const api = useRef<Api | null>(null);
   const booths = useMemo<Booth[]>(() => expandBooths(lines, venue.halls), []);
   const codeIndex = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
-  const [view, setView] = useState<View>(() => {
-    try {
-      return localStorage.getItem(MODE_KEY) === "plan" ? "orbit" : "top";
-    } catch {
-      return "top";
-    }
-  });
+  // サイトを開いた最初は、どのモードでも 3D（モードを切りかえたときは、そのモードの最初の見方）
+  const [view, setView] = useState<View>("orbit");
   const [floor, setFloor] = useState<Floor>(1);
   // 作品で色分け：「すべて」（作品ごとの色）・「色分けしない」・1 つの作品（とキャラ）だけ
   const [byGenre, setByGenre] = useState(true);
+  const [genre, setGenre] = useState<string | null>(null);
   const [work, setWork] = useState<string | null>(null);
   const [char, setChar] = useState<string | null>(null);
   // 2 つのモード：作品を登録する（最初は 2D・配置番号の欄をいつも出す）と、当日に使う・計画する（最初は 3D）
@@ -359,9 +356,11 @@ export function VenueView() {
   const [menu, setMenu] = useState(false); // サイドバー
   const [splash, setSplash] = useState(true); // 開いたときの「非公式」の案内
   const [day, setDay] = useState<Day>(1); // 何日目（作品・キャラは日ごと）
-  const dayTags = useMemo(() => (savedTags ? (savedTags[day] ?? {}) : null), [day]);
-  const dayWorks = useMemo(() => (savedTags ? worksOf(savedTags, day) : []), [day]);
-  const [surround, setSurround] = useState(false); // 周辺の建物（会議棟の逆ピラミッドなど）も立体で出す
+  // 机の情報（ジャンル・作品・キャラ）：エディタで入れたもの。なければ公開版の見本（架空の作品）
+  const tags = useMemo(() => savedTags ?? sampleTags(booths), [booths]);
+  const dayTags: Record<string, SpaceTag> | null = useMemo(() => tags[day] ?? {}, [tags, day]);
+  const dayWorks = useMemo(() => worksOf(tags, day), [tags, day]);
+  const [surround, setSurround] = useState(true); // 周辺の建物も立体で出す（開いた最初は出す）
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -443,6 +442,7 @@ export function VenueView() {
     // 周辺の建物の立体（OSM の高さ。会議棟の逆ピラミッドは段ごとの部品を積んだもの）。「周辺も表示」のときだけ出す
     const surroundings = new THREE.Group();
     surroundings.visible = false;
+    const towerMeshes: THREE.Mesh[] = [];
     // まわりの建物の足元の形も、「周辺も表示」のときだけ（ふだんは会場だけを見せる）
     for (const b of venue.context) surroundings.add(flatPoly(b.poly, 0xb9bfb8, -0.1));
     for (const b of venue.parts3d) {
@@ -450,7 +450,11 @@ export function VenueView() {
       const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: b.color ? new THREE.Color(b.color) : new THREE.Color(0xd2d5cf) }));
       m.rotation.x = -Math.PI / 2;
       m.position.y = b.min;
-      surroundings.add(m);
+      // 会議棟（逆ピラミッドと柱）は会場の目印なので、「周辺も表示」でなくても 3D ではいつも出す
+      if (/Conference Tower|会議棟/.test(b.name)) {
+        scene.add(m);
+        towerMeshes.push(m);
+      } else surroundings.add(m);
     }
     // 道・歩道（2F の歩行者デッキを含む）・ゆりかもめの高架・駅のホーム
     const sur = venue.surroundings;
@@ -1116,6 +1120,8 @@ export function VenueView() {
       controls?.dispose();
       controls = null;
       current = v;
+      // 2D（真上から）では、会議棟は下の 2F のプラザを隠すので出さない
+      for (const m of towerMeshes) m.visible = v !== "top";
       fly = null;
       const labelSprites = new Set(labels.map((l) => l.s));
       for (const s of sprites) s.material.depthTest = v !== "top" && !labelSprites.has(s);
@@ -1259,10 +1265,11 @@ export function VenueView() {
       }
     };
 
-    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null, work: string | null, char: string | null) => {
+    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => {
       const col = new THREE.Color();
-      // 作品（とキャラ）を選んでいるとき、その机か
+      // ジャンル・作品（とキャラ）を選んでいるとき、その机か
       const hit = (b: Booth) => {
+        if (dayTags && genre && dayTags[b.code]?.genre !== genre) return false;
         if (!work) return true;
         if (dayTags) {
           const t = dayTags[b.code];
@@ -1900,7 +1907,7 @@ export function VenueView() {
   useEffect(() => {
     api.current?.setSurround(surround);
   }, [surround]);
-  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags, work, char), [byGenre, marks, selected, dayTags, work, char]);
+  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags, genre, work, char), [byGenre, marks, selected, dayTags, genre, work, char]);
   useEffect(() => {
     const list = Object.entries(marks)
       .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
@@ -1947,7 +1954,11 @@ export function VenueView() {
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
   const openHalls = venue.halls.filter((h) => !h.closed);
   // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
-  const workList = dayTags ? dayWorks.map((w) => w.work) : SAMPLE_GENRES;
+  // ジャンルの一覧と、選んだジャンルの作品の一覧
+  const genreList = [...new Set(Object.values(dayTags ?? {}).map((t) => t.genre).filter((g): g is string => !!g))].sort((a, b) => a.localeCompare(b, "ja"));
+  const workList = dayTags
+    ? dayWorks.map((w) => w.work).filter((w) => !genre || Object.values(dayTags).some((t) => t.genre === genre && t.works?.includes(w)))
+    : SAMPLE_GENRES;
   const charList = (() => {
     if (!work || !dayTags) return [];
     const set = new Set<string>();
@@ -2166,7 +2177,8 @@ export function VenueView() {
             <div style={{ fontSize: ".9rem", marginTop: 2 }}>
               {dayTags ? (
                 <>
-                  作品：{dayTags[sel.code]?.works?.join("・") ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
+                  {dayTags[sel.code]?.genre ? `ジャンル：${dayTags[sel.code].genre}　／　` : ""}
+                  作品{savedTags ? "" : "（見本）"}：{dayTags[sel.code]?.works?.join("・") ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
                   {charsText(dayTags[sel.code]) ? `　／　キャラ：${charsText(dayTags[sel.code])}` : ""}
                 </>
               ) : (
@@ -2236,8 +2248,7 @@ export function VenueView() {
             </button>
           ))}
         </div>
-        {savedTags && (
-          <>
+        <>
             <h3>日</h3>
             <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
               {DAYS.map((d) => (
@@ -2246,9 +2257,28 @@ export function VenueView() {
                 </button>
               ))}
             </div>
-          </>
+        </>
+        <h3>ジャンル・作品</h3>
+        {genreList.length > 0 && (
+          <select
+            aria-label="ジャンル"
+            value={genre ?? ""}
+            onChange={(e) => {
+              setGenre(e.target.value || null);
+              setWork(null);
+              setChar(null);
+              setByGenre(true);
+            }}
+            style={{ width: "100%", marginBottom: 6 }}
+          >
+            <option value="">ジャンル：すべて</option>
+            {genreList.map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+          </select>
         )}
-        <h3>作品</h3>
         <select
           aria-label="作品"
           value={!byGenre ? "__off" : (work ?? "__all")}
@@ -2260,7 +2290,7 @@ export function VenueView() {
           }}
           style={{ width: "100%" }}
         >
-          <option value="__all">すべての作品（作品ごとに色分け）</option>
+          <option value="__all">{genre ? `${genre}の作品すべて` : "すべての作品（作品ごとに色分け）"}</option>
           <option value="__off">色分けしない</option>
           {workList.map((w) => (
             <option key={w} value={w}>

@@ -290,19 +290,15 @@ const areas: Area[] = [
   // イベントプラザとコンコースのあいだの 1m ほどのすき間（OSM の 2 つの形のずれ）をうめる
   const cc = areas.find((a) => a.name === "コンコース");
   if (cc) cc.poly = biggest(polygonClipping.union([ring(cc.poly)], [ring(fromUV([[-6.8, 103.5], [20.6, 103.5], [20.6, 106], [-6.8, 106]]))]));
-  // 南コンコースの屋内と屋外：公式フロアマップでは、南コンコースはエントランスホールから一定の幅で斜めにのびる白い帯（屋内）で、
-  // 西のアトリウムの側の端は帯に直角に切れている。航空写真でも、屋根があるのはエントランスホールの東の辺から、北東のふち
-  // （斜めの辺）にそう 14m ほどの帯まで。その南西の、エントランスプラザの東の縁（u 43.9）から西のアトリウムまでの舗装された
-  // 中庭は屋根がない（屋外。エントランスプラザの続き）。帯と中庭の境は直線、アトリウムの側の端は帯の向きに直角な辺
+  // 南コンコースの屋内と屋外：公式フロアマップでは、南コンコースはエントランスホールから一定の幅（16m ほど）でまっすぐ斜めに
+  // のびる白い帯（屋内）で、西のアトリウムの側の端は帯に直角に切れている。北東のふちは、エントランスホールの角 (21.2,-71.5) から
+  // OSM の端 (84.8,-10.8) までの 1 本の直線（OSM の形は途中で 5m ほどふくらむが、公式の図では直線）。南西のふちはそれに平行な 16m
+  // 内側の直線で、エントランスプラザの東の縁（u 43.9）まで。エントランスホールの東の辺とプラザの角のあいだも屋内。
+  // 帯の南西の、プラザの東の縁から西のアトリウムまでの舗装された中庭は屋根がない（屋外。エントランスプラザの続き）
   {
     const sc = areas.find((a) => a.name === "南コンコース")!;
-    const strip = fromUV([[21.2, -71.5], [50.5, -42.5], [56.5, -30.4], [84.8, -10.8], [77.5, -3.3], [43.9, -24.2], [43.9, -38.3], [21.2, -38.4]]);
-    const outside = polygonClipping.difference([ring(sc.poly)], [ring(strip)]);
-    sc.poly = biggest(polygonClipping.intersection([ring(sc.poly)], [ring(strip)]));
-    for (const pg of outside) {
-      const poly = unring(pg[0]);
-      if (size(poly) > 20) areas.push({ name: "エントランスプラザ", level: 2, poly, part: true });
-    }
+    sc.poly = fromUV([[21.2, -71.5], [84.8, -10.8], [73.8, 0.8], [43.9, -27.7], [43.9, -38.3], [21.2, -38.4]]);
+    areas.push({ name: "エントランスプラザ", level: 2, poly: fromUV([[43.9, -27.7], [73.8, 0.8], [75.6, 2.5], [75.6, 22.7], [68.1, 15.8], [43.6, 15.7]]), part: true });
   }
   // 1F の南展示棟への通路：南展示棟の建物の床と重ならないよう、その形を引く
   const sp1 = areas.find((a) => a.name === "南展示棟への通路");
@@ -373,10 +369,10 @@ const stairs: Stair[] = [];
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 4 });
     }
     void bearing;
-    // 西 10：2F 南コンコース ⇔ 1F アトリウム。南コンコースの帯（屋内）のアトリウムの側の端の辺（(77.5,-3.3)〜(84.8,-10.8)）から、
+    // 西 10：2F 南コンコース ⇔ 1F アトリウム。南コンコースの帯（屋内）のアトリウムの側の端の辺（(73.8,0.8)〜(84.8,-10.8)）から、
     // 辺に直角に、1F アトリウムへ下りる（公式フロアマップ：白い南コンコースの端から 1F アトリウムへの点線）。目立つよう幅 4m
     {
-      const [e0, e1] = [[77.5, -3.3], [84.8, -10.8]] as XZ[];
+      const [e0, e1] = [[73.8, 0.8], [84.8, -10.8]] as XZ[];
       const L = Math.hypot(e1[0] - e0[0], e1[1] - e0[1]);
       const n: XZ = [(e1[1] - e0[1]) / L, -(e1[0] - e0[0]) / L].map((x) => -x) as XZ; // 外向き（アトリウムの側）
       const mid: XZ = [(e0[0] + e1[0]) / 2, (e0[1] + e1[1]) / 2];
@@ -384,10 +380,10 @@ const stairs: Stair[] = [];
       stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 4 });
     }
     // 西 17：4F ⇔ 2F 南コンコース。上の端は 4F アトリウムの西3 にそう腕の西の端の辺（u 56.6。西3 の入口の角、AED の横）。
-    // そこから辺に直角に（u の向きに）、下の 2F 南コンコースの帯へ下りる（西3 の壁 v -28.5 から 2m 離す）。目立つよう幅 4m
+    // そこから辺に直角に（u の向きに）、下の 2F 南コンコースの帯へ下りる（v -27。西3 の壁 v -28.5 にそう）。目立つよう幅 3m
     {
-      const [top, bottom] = fromUV([[57.1, -25], [57.1 - run(2, 4), -25]]);
-      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 4 });
+      const [top, bottom] = fromUV([[57.1, -27], [57.1 - run(2, 4), -27]]);
+      stairs.push({ name: "エスカレーター", kind: "escalator", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 3 });
     }
     // 南：11・12・18（4F ⇔ 2F）、19・20・21（2F ⇔ 1F）。公式フロアマップの印を、コンコース（u の向き）の上に寄せた所（u）と向き。
     // 公式の図では、どれも通路のふちから張り出した小さな踊り場から上り下りする：
@@ -878,12 +874,12 @@ sur.areas.push(
 }
 
 // 屋内と屋外：公式フロアマップの色分け（白が屋内、灰が屋外）に合わせる。
-// 2F の連絡ブリッジは灰（屋外）。コンコースは、イベントプラザから南展示棟の入口（45° の四角）までが灰（屋外）、
+// 連絡ブリッジは屋内（ユーザーの確認：屋根と壁のある通路）。コンコースは、イベントプラザから南展示棟の入口（45° の四角）までが灰（屋外）、
 // そこから先の南1・南2 にそう所は白（屋内）なので、そこで 2 つに分ける
 {
   const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
   const half = (west: boolean) => ring(fromUV(west ? [[-1000, -1000], [236, -1000], [236, 1000], [-1000, 1000]] : [[236, -1000], [2000, -1000], [2000, 1000], [236, 1000]]));
-  for (const a of areas) if (a.name === "連絡ブリッジ") a.outdoor = true;
+  for (const a of areas) if (a.name === "連絡ブリッジ") a.outdoor = false; // 連絡ブリッジは屋根と壁のある屋内の通路
   for (const a of areas.filter((x) => x.name === "コンコース" && x.level === 2)) {
     const pieces = [true, false].flatMap((west) =>
       polygonClipping.intersection([ring(a.poly), ...(a.holes ?? []).map(ring)], [half(west)]).map((pg) => ({

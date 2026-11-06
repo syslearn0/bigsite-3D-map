@@ -8,6 +8,7 @@ export type Day = 1 | 2 | 3;
 export const DAYS: Day[] = [1, 2, 3];
 
 export type SpaceTag = {
+  genre?: string; // ジャンル（「男性向」「女性向」「ゲーム」など、大まかな分類）
   works?: string[]; // 作品（「ブルーアーカイブ」「原神」など）。入れた順
   chars?: Record<string, string[]>; // 作品 → キャラ
   circle?: { name?: string; menuUrl?: string; imageUrl?: string }; // あとで（サークル本人が入れる）
@@ -47,6 +48,7 @@ export function parseTagsFile(json: unknown): Tags | null {
         for (const [w, list] of Object.entries(raw.chars as Record<string, unknown>)) if (works.includes(w) && clean(list).length) chars[w] = clean(list);
       }
       const tag: SpaceTag = {};
+      if (typeof raw.genre === "string" && raw.genre.trim()) tag.genre = raw.genre.trim();
       if (works.length) tag.works = works;
       if (Object.keys(chars).length) tag.chars = chars;
       if (tag.works) out[day][code] = tag;
