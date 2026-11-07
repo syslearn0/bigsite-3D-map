@@ -39,6 +39,8 @@ type Venue = {
     busStops?: { at: XZ; name: string }[];
     taxis?: XZ[];
     deckStairs?: { from: XZ; to: XZ }[];
+    decks?: { poly: XZ[]; holes?: XZ[][] }[]; // 歩行者デッキの広場（2F の高さの面）
+    deckRails?: XZ[][]; // 広場のふちの手すり（ほかのデッキや会場の床につながる所は除いてある）
   };
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
@@ -719,6 +721,28 @@ export function VenueView() {
           addLabel(t, "sur");
         }
       });
+      // 歩行者デッキの広場：厚さ 0.8m の板。ふちに 14m ごとの太い柱と、手すり（つながっている所は開けてある）
+      {
+        const deckMat = new THREE.MeshLambertMaterial({ color: 0xd6d0c2 });
+        for (const d of sur.decks ?? []) {
+          const m = new THREE.Mesh(new THREE.ExtrudeGeometry(shapeOf(d.poly, d.holes ?? []), { depth: 0.8, bevelEnabled: false }), deckMat);
+          m.rotation.x = -Math.PI / 2;
+          m.position.y = DECK_Y - 0.8;
+          surroundings.add(m);
+          const cx = d.poly.reduce((a, q) => a + q[0], 0) / d.poly.length, cz = d.poly.reduce((a, q) => a + q[1], 0) / d.poly.length;
+          let next = 4, run = 0;
+          d.poly.forEach((q, k) => {
+            const r = d.poly[(k + 1) % d.poly.length], L = Math.hypot(r[0] - q[0], r[1] - q[1]);
+            for (; next <= run + L; next += 14) {
+              const dd = next - run, x = q[0] + ((r[0] - q[0]) * dd) / (L || 1), z = q[1] + ((r[1] - q[1]) * dd) / (L || 1), dl = Math.hypot(cx - x, cz - z) || 1;
+              posts.push([x + ((cx - x) / dl) * 1.5, z + ((cz - z) / dl) * 1.5, -(DECK_Y - 0.8)]);
+            }
+            run += L;
+          });
+        }
+        const rails = (sur.deckRails ?? []).map((pts) => ({ pts, y: DECK_Y + 1.1, w: 0.08 }));
+        if (rails.length) surroundings.add(new THREE.Mesh(ribbons(rails, 1.1), new THREE.MeshLambertMaterial({ color: 0x9fb4c0, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
+      }
       // 柱（屋根の柱・デッキの柱・高架の道路の柱）はまとめて 1 つの形で
       const deckLines = sur.lines.filter((l) => l.kind === "deck");
       const roadHigh = sur.lines.filter((l) => l.kind === "road" && l.y > 1);
