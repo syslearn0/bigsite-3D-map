@@ -36,7 +36,8 @@ type Venue = {
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string; width?: number }[]; // width：開口の幅（シャッターなど。ないときは DOOR_W）
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean }[];
-  blocks?: { name: string; level: number; poly: XZ[]; height: number }[];
+  blocks?: { name: string; level: number; poly: XZ[]; height: number; kind?: "room"; base?: number }[];
+  canopies?: { level: number; pts: XZ[]; ys: number[]; w: number }[]; // 屋外の白い屋根（やぐら橋など）：中心の線、点ごとの屋根の下の高さ、幅 // kind "room"：ホールの外の部屋の帯の、来場者の入れない部屋（その階だけ・黒）
 };
 const venue = venueJson as unknown as Venue;
 // 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
@@ -946,17 +947,63 @@ export function VenueView() {
       scene.add(label);
       addLabel(label, st.fromLevel === 2 && st.toLevel === 1 ? "block" : "door"); // ガレリアの階段・エスカレーターの札は、寄ったときだけ
     }
-    // 人の入れない建物（西と南のつなぎ目の角の 45° の建物など）。その階の床の高さに立つ灰色の箱
+    // 人の入れない建物（西と南のつなぎ目の角の 45° の建物など）。その階の床の高さに立つ灰色の箱。
+    // 部屋の帯の、来場者の入れない部屋（東1〜3 の主催者事務室など）は、その階の黒い低い箱
     {
       const mat = new THREE.MeshLambertMaterial({ color: 0x8a908c });
+      const roomMat = new THREE.MeshLambertMaterial({ color: 0x2a2d2c });
       for (const b of venue.blocks ?? []) {
         const geo = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.height, bevelEnabled: false });
-        const m = new THREE.Mesh(geo, mat);
+        const m = new THREE.Mesh(geo, b.kind === "room" ? roomMat : mat);
         m.rotation.x = -Math.PI / 2;
-        m.position.y = floorY(b.level);
+        m.position.y = floorY(b.level) + (b.base ?? 0);
+        if (b.kind === "room") {
+          scene.add(m);
+          partsOf(b.level).solid.push(m);
+          continue;
+        }
+        // 床より上から始まる箱（南の角の建物の 3F より上）は、下の階の床が見えるよう、4F を見ているときだけ出す
+        if (b.base) {
+          scene.add(m);
+          partsOf(4).solid.push(m);
+          continue;
+        }
         // 地面から 4F の上まで続く建物なので、どの階を見ているときも出す（階ごとの出し分けに入れない）
         scene.add(m);
         occluders.push(m);
+      }
+    }
+    // 屋外の白い屋根（やぐら橋と、その先の屋根のある歩道）：中心の線にそって、厚さ 0.3m の板と、両側に 6m ごとの細い柱（高さ 3.3m）
+    {
+      const roofMat = new THREE.MeshLambertMaterial({ color: 0xf1f2ee });
+      const postMat = new THREE.MeshLambertMaterial({ color: 0xdfe2e0 });
+      const POST = 3.3;
+      for (const c of venue.canopies ?? []) {
+        const g = new THREE.Group();
+        for (let i = 0; i + 1 < c.pts.length; i++) {
+          const [ax, az] = c.pts[i], [bx, bz] = c.pts[i + 1], ya = c.ys[i], yb = c.ys[i + 1];
+          const L = Math.hypot(bx - ax, bz - az);
+          if (L < 0.1) continue;
+          const ux = (bx - ax) / L, uz = (bz - az) / L;
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(L, yb - ya) + 0.2, 0.3, c.w), roofMat);
+          slab.position.set((ax + bx) / 2, (ya + yb) / 2 + 0.15, (az + bz) / 2);
+          slab.rotation.order = "YZX";
+          slab.rotation.y = -Math.atan2(uz, ux);
+          slab.rotation.z = Math.atan2(yb - ya, L);
+          g.add(slab);
+          const n = Math.max(1, Math.round(L / 6));
+          for (let k = 0; k <= n; k++) {
+            if (k === n && i + 2 < c.pts.length) continue; // つなぎ目の柱は次の区間で
+            const t = k / n, y = ya + (yb - ya) * t;
+            for (const sgn of [-1, 1]) {
+              const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, POST, 0.25), postMat);
+              post.position.set(ax + ux * L * t - uz * sgn * (c.w / 2 - 0.3), y - POST / 2, az + uz * L * t + ux * sgn * (c.w / 2 - 0.3));
+              g.add(post);
+            }
+          }
+        }
+        scene.add(g);
+        partsOf(c.level).solid.push(g);
       }
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱

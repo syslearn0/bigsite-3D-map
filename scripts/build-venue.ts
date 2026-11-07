@@ -176,10 +176,9 @@ const southRestSq: XZ[] = southRest.map((p) => {
   return u < 236 ? fromUV([[236, v]])[0] : p;
 });
 // 西と南のつなぎ目の角にある、ホールに 45° 傾いた四角い建物（航空写真：中心 u 227.5・v 104、角から角まで 34m、屋根に小さな
-// ピラミッド）。人は入れないので床にはせず、地面から 4F の上まで続く障害物（箱）として描く（斜めからの写真：下の方まで続く）。
-// ただし 2F の床（コンコースと踊り場）と、中を通るエスカレーターの所はあける（下の「南の角の建物」）
+// ピラミッド）。公式フロアマップでは南展示棟の上り下りの所で、1F・2F は人の入れる床（下の「南の角の建物」）
 const southEntrance: XZ[] = fromUV([[227.5, 87], [244.5, 104], [227.5, 121], [210.5, 104]]);
-const blocks: { name: string; level: number; poly: XZ[]; height: number; holes?: XZ[][] }[] = [];
+const blocks: { name: string; level: number; poly: XZ[]; height: number; holes?: XZ[][]; kind?: "room"; base?: number }[] = [];
 
 // 2つのホールの列の、向かい合う壁の端の点を囲む四角（凸包）
 function between(rowA: string[], rowB: string[]): XZ[] {
@@ -451,6 +450,28 @@ const stairs: Stair[] = [];
   stairs.push({ name: "階段", from: top, fromLevel: 4, to: bottom, toLevel: 2, width: 9.5, outdoor: true });
 }
 
+// やぐら橋：エントランスプラザ（2F）から北西へ、豊洲有明線の上と、ゆりかもめの高架の下を通る歩道橋（OSM way 541645572、layer=2）と、
+// その先の大階段（会議棟の逆ピラミッドの前の階段）。航空写真（Google・Esri）と Street View から：
+// ・橋はプラザと同じ高さのまま平ら（縞模様は床のタイル。Street View で、プラザの端から高架の下まで平ら）。高架の西で u -214 まで
+// ・そこから地上へ、幅いっぱい（v -2〜24）の階段（OSM の階段 way 438228292 も u -239〜-208）。下の端は u -245
+// ・下は地上の平らな所（OSM の「イーストプロムナード」）。両側の白い屋根の端が U の字につながる所（u -276）まで
+// ・白い屋根：南の側は橋の全長（プラザの端から）、北の側は高架から西。U の字の端から、屋根のある歩道が西へ続く（りんかい線の駅の方へ）
+// エントランスプラザの OSM の形が、橋の根元（u -168 まで）を含んでいるので、その先から
+const canopies: { level: number; pts: XZ[]; ys: number[]; w: number }[] = [];
+{
+  const D = FLOOR_Y[2], R = 3.3; // 屋根の下の高さ（床から）
+  areas.push({ name: "やぐら橋", level: 2, poly: fromUV([[-168.3, -2], [-214, -2], [-214, 24], [-168.3, 24]]), outdoor: true });
+  const [top, bottom] = fromUV([[-214, 11], [-245, 11]]);
+  stairs.push({ name: "階段", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 26, outdoor: true });
+  areas.push({ name: "イーストプロムナード", level: 1, poly: fromUV([[-245, -2], [-276, -2], [-276, 24], [-245, 24]]), outdoor: true });
+  // 屋根（中心の線・屋根の下の高さ・幅）。航空写真で測った帯：南 v 19〜24、北 v -2〜3、U の字の端 u -276〜-270
+  const side = (v: number, u0: number) => ({ pts: fromUV([[u0, v], [-214, v], [-245, v], [-273, v]]), ys: [D + R, D + R, R, R] });
+  canopies.push({ level: 2, w: 5, ...side(21.5, -124) });
+  canopies.push({ level: 2, w: 5, ...side(0.5, -192) });
+  canopies.push({ level: 1, w: 6, pts: fromUV([[-273, -7.5], [-273, 24]]), ys: [R, R] });
+  canopies.push({ level: 1, w: 5.5, pts: fromUV([[-273, -5], [-330, -9], [-350, -24], [-400, -24]]), ys: [R, R, R, R] });
+}
+
 // 西の 4F の通路から 1F への車のスロープ（上の「外の通路（4F）」のところの説明）
 {
   const [top, bottom] = fromUV([[196.5, -110], [54, -110]]);
@@ -719,7 +740,19 @@ function toWall(hid: string, p: XZ, inset: number): XZ {
   return [Math.round((q[0] + n[0] * inset) * 10) / 10, Math.round((q[1] + n[1] * inset) * 10) / 10];
 }
 const usable = (hid: string | undefined) => !hid || (hallOf.has(hid) && !hallOf.get(hid)!.closed);
-const planToilets = (plan.toilets as { at: XZ; level: number; kinds: string[]; hall?: string }[]).filter((t) => usable(t.hall));
+// 東1〜3 の図面には、ガレリアの向こう側（東4〜6 の部屋の帯。工事中で使わない）と、となりのホールの端のトイレも描かれている。
+// それらは除く（となりのホールのものは、そのホールの図面から読んだものがある）
+const eastRow = (t: { at: XZ; hall?: string }) => {
+  if (!["E1", "E2", "E3"].includes(t.hall ?? "")) return true;
+  const [u, v] = toUV(t.at);
+  if (u < 0) return false;
+  const probe = fromUV([[60, v]])[0];
+  return !["E1", "E2", "E3"].some((id) => id !== t.hall && pointInPolygon(probe, halls.find((h) => h.id === id)!.poly));
+};
+// 東2 の図面から読んだものは、ガレリアの側へ 5.5m ずれている（下のトイレの囲みと同じ。そこで説明）
+const planToilets = (plan.toilets as { at: XZ; level: number; kinds: string[]; hall?: string }[])
+  .filter((t) => usable(t.hall) && eastRow(t))
+  .map((t) => (t.hall === "E2" ? { ...t, at: fromUV([[toUV(t.at)[0] + 5.5, toUV(t.at)[1]]])[0] } : t));
 const toilets: Toilet[] = [
   // トイレはホールの外（壁の外の部屋）にある。図面の文字の位置をそのまま使う。ただし壁から 15m より離れたもの
   // （文字がガレリアの真ん中などに書かれているもの）は、そのホールの壁の 3m 外に寄せる。ホールの中へは寄せない
@@ -738,6 +771,9 @@ const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; pol
   const c = centroid(r.poly), w = toWall(r.hall, c, 0);
   return Math.hypot(w[0] - c[0], w[1] - c[1]) <= 15;
 });
+// 東2 の図面から読んだトイレの囲みは、ガレリアの側へ 5.5m ずれている（図面のホールの溝が東1 より小さく、溝の中心で合わせたため。
+// 図面の出入口の文字は、どのホールでも帯のホールの側の壁から 7.3m。東2 だけ図面から読んだ会場データでは 12.9m）。帯の中へ戻す
+for (const r of toiletRooms) if (r.hall === "E2") r.poly = fromUV(r.poly.map((p) => [toUV(p)[0] + 5.5, toUV(p)[1]] as XZ));
 // ホールの外壁：会場データのホールの形（OSM）は展示場の床だけで、トイレ・事務室などの部屋の帯はその外に出ている。
 // コミケの配置図でもビッグサイトの図面でも、トイレは外壁の内側にあるので、トイレ（図面の位置・部屋の囲み）がはみ出している辺を、
 // トイレを囲むところまで外へずらす（20m まで。ほかのホールと分け合う辺は動かさない）。展示場の床の形は inner に残す
@@ -957,6 +993,35 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
   ] as [XZ, number][])
     doors.push({ at, level: 1, kind: "搬入口", hall: "E7", width });
 }
+// 東1〜3 のホールとガレリアのあいだの部屋の帯の部屋（主催者事務室・商談室・東VIPルーム・多目的室・給湯室・階段・EV）。
+// 来場者の入れない所なので、黒い低い箱（kind "room"）で描く。トイレは別に描いている。
+// 図面（白図）の四角 [x0, y0, x1, y1] を、u = 帯のホールの側の壁（展示場の床のふち）−（y − 図面の壁の y）× 縮尺、
+// v = 図面の出入口の文字の位置から（x − その x）× 縮尺 で置く（出入口とエスカレーターの位置が、図面から読んだ会場データと合う置き方）。
+// となりのホールの図面にも描かれている部屋（ホールのさかいの商談室など）は 1 つだけ
+{
+  const PT = (0.0254 / 72) * 200; // 東1・東2：1/200 の A1 の 1pt
+  const PX3 = ((0.6 * 0.0254) / 72) * 566; // 東3：A4 の図面の画像の 1px
+  const sheets: { s: number; x0: number; v0: number; y0: number; u0: number; rooms: [string, number, number, number, number][] }[] = [
+    {
+      s: PT, x0: 637, v0: -273.6, y0: 1479, u0: 28.8, // 東1
+      rooms: [["商談室", 59, 1567, 196, 1682], ["給湯室", 196, 1641, 226, 1700], ["主催者事務室", 226, 1522, 509, 1700], ["階段", 719, 1479, 834, 1570],
+        ["給湯室", 1017, 1522, 1053, 1547], ["多目的室", 1019, 1679, 1087, 1763], ["東VIPルーム", 1119, 1679, 1344, 1763]],
+    },
+    {
+      s: PT, x0: 727, v0: -367.66, y0: 1470, u0: 29.5, // 東2
+      rooms: [["商談室", 150, 1483, 283, 1690], ["給湯室", 290, 1627, 317, 1690], ["主催者事務室", 317, 1513, 600, 1693], ["階段", 783, 1470, 923, 1560], ["給湯室", 1107, 1520, 1153, 1543]],
+    },
+    {
+      s: PX3, x0: 575, v0: -439.17, y0: 870, u0: 29.5, // 東3
+      rooms: [["主催者事務室", 180, 895, 350, 985], ["給湯室", 165, 950, 178, 985], ["階段", 460, 870, 540, 925], ["給湯室", 650, 897, 670, 912], ["EV", 647, 957, 675, 982]],
+    },
+  ];
+  for (const sh of sheets)
+    for (const [name, x0, y0, x1, y1] of sh.rooms) {
+      const U = (y: number) => sh.u0 - (y - sh.y0) * sh.s, V = (x: number) => sh.v0 + (x - sh.x0) * sh.s;
+      blocks.push({ name, level: 1, kind: "room", height: 3.5, poly: fromUV([[U(y0), V(x0)], [U(y0), V(x1)], [U(y1), V(x1)], [U(y1), V(x0)]]) });
+    }
+}
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
@@ -982,7 +1047,8 @@ if (existsSync("data/osm/surroundings.json")) {
     if (t.railway === "platform") {
       sur.areas.push({ poly: pts, y: 4 + Math.max(2, layer) * 2.5 + 0.5, kind: "platform" });
     } else if (t.railway && t.railway !== "station") {
-      sur.lines.push({ pts, y: layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
+      // ゆりかもめの 4 層目の高架（やぐら橋の上を通る所）は、橋（2F の高さ）の白い屋根の上を通るよう 19m に
+      sur.lines.push({ pts, y: layer >= 4 ? 19 : layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
     } else if (t.highway) {
       const walk = /^(pedestrian|footway|path|cycleway|steps)$/.test(t.highway);
       // 2F 以上の歩道・階段（OSM の layer ≥ 1）は、会場の 2F の床・階段として描いているので出さない（重なって、床の上に変な線が浮く）。
@@ -1146,45 +1212,50 @@ if (existsSync("data/osm/coast.json")) {
   console.log(`海：海岸線 ${chains.length} 本 → 切れ端 ${pieces.length}・島や池 ${rings.length} → 海 ${sea.length} 面`);
 }
 
-// 南の角の建物（45° の四角）：地面（1F）から 4F の床の 6m 上まで。2F の床と、中を通るエスカレーター（幅 +1m、下の端の 2m 先まで）
-// の所は引く。1F の床（南展示棟への通路）からは、この建物の形を引く（4F の床とは重なってよい）
+// 南の角の建物（45° の四角）：公式フロアマップでは、1F・2F・3F・4F の同じ所にエスカレーター・エレベーター・トイレが重なる、
+// 南展示棟の上り下りの所（1F は白い床、2F は南1・2ホール入口のロビー（コインロッカー・案内所・AED）、3F は喫煙所とトイレ）。
+// 人の入れる建物として、1F と 2F に屋内の床を敷く（2F は、中を通るコンコースも屋内。下の「屋内と屋外」で分ける）。
+// 3F（会場データにない階）から屋根（4F の床の 6m 上）までは箱で描く（4F を見ているときだけ出す）。1F の南展示棟への通路からは、この形を引く
 {
   const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
-  let shape: [number, number][][][] = [[ring(southEntrance)]];
-  for (const a of areas.filter((x) => x.level === 2)) shape = polygonClipping.difference(shape, [ring(a.poly)]);
-  // 中を通るのは 2F から 1F へ下りるエスカレーターだけ（4F からのものはコンコースの上を通る）
-  for (const st of stairs.filter((x) => x.fromLevel === 2 && x.toLevel === 1)) {
-    const L = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]) || 1, ux = (st.from[0] - st.to[0]) / L, uz = (st.from[1] - st.to[1]) / L;
-    const hw = st.width / 2 + 0.5, a: XZ = [st.to[0] - ux * 2, st.to[1] - uz * 2], b = st.from;
-    shape = polygonClipping.difference(shape, [ring([[a[0] - uz * hw, a[1] + ux * hw], [b[0] - uz * hw, b[1] + ux * hw], [b[0] + uz * hw, b[1] - ux * hw], [a[0] + uz * hw, a[1] - ux * hw]])]);
+  const un = (r: [number, number][]) => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+  const area2 = (r: [number, number][]) => Math.abs(r.reduce((t, q, i) => (i + 1 < r.length ? t + q[0] * r[i + 1][1] - r[i + 1][0] * q[1] : t), 0)) / 2;
+  areas.push({ name: "南の角の建物（1F）", level: 1, poly: southEntrance });
+  let rest: [number, number][][][] = [[ring(southEntrance)]];
+  for (const a of areas.filter((x) => x.level === 2)) rest = polygonClipping.difference(rest, [ring(a.poly)]);
+  // 中を 1F へ下りるエスカレーターの上は、2F の床を開ける（吹き抜け。上の端の踊り場から下の端まで、幅 +0.6m）
+  for (const st of stairs.filter((x) => x.fromLevel === 2 && x.toLevel === 1 && pointInPolygon(x.to, southEntrance))) {
+    const L = Math.hypot(st.from[0] - st.to[0], st.from[1] - st.to[1]) || 1, ux = (st.to[0] - st.from[0]) / L, uz = (st.to[1] - st.from[1]) / L;
+    const hw = st.width / 2 + 0.3, a: XZ = st.from, b: XZ = [st.to[0] + ux * 0.5, st.to[1] + uz * 0.5];
+    rest = polygonClipping.difference(rest, [ring([[a[0] - uz * hw, a[1] + ux * hw], [b[0] - uz * hw, b[1] + ux * hw], [b[0] + uz * hw, b[1] - ux * hw], [a[0] + uz * hw, a[1] - ux * hw]])]);
   }
-  for (const pg of shape) {
-    const un = (r: [number, number][]) => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
-    if (Math.abs(pg[0].reduce((t, q, i) => (i + 1 < pg[0].length ? t + q[0] * pg[0][i + 1][1] - pg[0][i + 1][0] * q[1] : t), 0)) / 2 < 30) continue; // 細い切れ端は出さない
-    blocks.push({ name: "南の角の建物", level: 1, poly: un(pg[0]), height: FLOOR_Y[4] + 6, holes: pg.length > 1 ? pg.slice(1).map(un) : undefined });
-  }
+  for (const pg of rest) if (area2(pg[0]) >= 1) areas.push({ name: "南1・2ホール入口（2F）", level: 2, poly: un(pg[0]), part: true, ...(pg.length > 1 ? { holes: pg.slice(1).map(un) } : {}) });
+  blocks.push({ name: "南の角の建物", level: 2, base: 4, poly: southEntrance, height: FLOOR_Y[4] + 6 - FLOOR_Y[2] - 4 });
   for (const a of areas.filter((x) => x.level === 1 && x.name === "南展示棟への通路")) {
-    const left = polygonClipping.difference([ring(a.poly)], ...shape);
-    const area2 = (r: [number, number][]) => Math.abs(r.reduce((t, q, i) => (i + 1 < r.length ? t + q[0] * r[i + 1][1] - r[i + 1][0] * q[1] : t), 0));
-    if (left.length) a.poly = left.map((pg) => pg[0]).sort((p, q) => area2(q) - area2(p))[0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+    const left = polygonClipping.difference([ring(a.poly)], [ring(southEntrance)]);
+    if (left.length) a.poly = un(left.map((pg) => pg[0]).sort((p, q) => area2(q) - area2(p))[0]);
   }
 }
 
 // 屋内と屋外：公式フロアマップの色分け（白が屋内、灰が屋外）に合わせる。
-// 連絡ブリッジは屋内（ユーザーの確認：屋根と壁のある通路）。コンコースは、イベントプラザから南展示棟の入口（45° の四角）までが灰（屋外）、
-// そこから先の南1・南2 にそう所は白（屋内）なので、そこで 2 つに分ける
+// 連絡ブリッジは屋内（ユーザーの確認：屋根と壁のある通路）。コンコースは、イベントプラザから南展示棟の入口（45° の四角の建物）までが
+// 灰（屋外）、その建物の中と、そこから先の南1・南2 にそう所は白（屋内）なので、そこで 2 つに分ける
 {
   const ring = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
-  const half = (west: boolean) => ring(fromUV(west ? [[-1000, -1000], [236, -1000], [236, 1000], [-1000, 1000]] : [[236, -1000], [2000, -1000], [2000, 1000], [236, 1000]]));
+  const inside = polygonClipping.union([ring(southEntrance)], [ring(fromUV([[236, -1000], [2000, -1000], [2000, 1000], [236, 1000]]))]);
+  const part = (west: boolean, pg: [number, number][][]) =>
+    west ? polygonClipping.difference(pg, ...inside) : polygonClipping.intersection(pg, ...inside);
   for (const a of areas) if (a.name === "連絡ブリッジ") a.outdoor = false; // 連絡ブリッジは屋根と壁のある屋内の通路
   for (const a of areas.filter((x) => x.name === "コンコース" && x.level === 2)) {
     const pieces = [true, false].flatMap((west) =>
-      polygonClipping.intersection([ring(a.poly), ...(a.holes ?? []).map(ring)], [half(west)]).map((pg) => ({
+      part(west, [ring(a.poly), ...(a.holes ?? []).map(ring)]).map((pg) => ({
+        // 建物の角と u 236 のあいだに残る小さな三角（数 m²）は屋内にまぜる（仕切りを立てない）
+        tiny: Math.abs(pg[0].reduce((t, q, i) => (i + 1 < pg[0].length ? t + q[0] * pg[0][i + 1][1] - pg[0][i + 1][0] * q[1] : t), 0)) / 2 < 5,
         ...a,
         poly: pg[0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ),
         holes: pg.length > 1 ? pg.slice(1).map((h) => h.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ)) : undefined,
         outdoor: west,
-      })),
+      })).map(({ tiny, ...pc }) => (tiny ? { ...pc, outdoor: false } : pc)),
     );
     // 名前の札は 1 つだけ（最初のかけら＝屋外の長い本体）。ほかのかけらにも出すと、同じ名前が並ぶ
     pieces.forEach((pc, k) => {
@@ -1282,9 +1353,9 @@ const exits = [
   { at: fromUV([[-4.5, -17.8]])[0], level: 2, name: "出口", width: 6 },
   // 4F アトリウムの斜めの端（上の 4F アトリウムの説明）から屋上展示場へ
   { at: fromUV([[133.1, 48.1]])[0], level: 4, name: "出入口", width: 6 },
-  // 2F のコンコース（屋外）が南展示棟に入る所（建物の西の壁 u 236。公式フロアマップでは、コンコースがそのまま南1・2ホール入口へ続く）。
-  // 屋内と屋外の仕切りが通路の幅いっぱいにふさいでいたので、通路の幅（8m）ほど開ける
-  { at: fromUV([[236, 110.2]])[0], level: 2, name: "出入口", width: 7 },
+  // 2F のコンコース（屋外）が南の角の建物（屋内）に入る所（建物の南西の 45° の面。公式フロアマップでは、コンコースがそのまま
+  // 南1・2ホール入口へ続く）。通路が面を斜めに横切るので、横切る長さ（11m）ほど開ける
+  { at: fromUV([[216.5, 110.2]])[0], level: 2, name: "出入口", width: 12 },
   // 4F：西4 からの通路（南展示棟への通路（4F））が南展示棟に入る所（建物の西の壁 u 236、v 34.4〜86）。公式フロアマップの 4F 図では、
   // 吹き抜けのある通路の床が、南3 の西の端のロビー（AED・エスカレーター・エレベーター）へ壁なしでひと続き。仕切りがふさいでいたので開ける
   { at: fromUV([[236, 60.2]])[0], level: 4, name: "出入口", width: 51 },
@@ -1293,6 +1364,6 @@ const exits = [
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks, canopies }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
