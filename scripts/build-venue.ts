@@ -126,7 +126,7 @@ const southRest: XZ[] = southHall;
 
 
 // ホール以外の歩く場所（通路・広場）
-type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean }; // under：ほかの床の下に敷く（名前の札を出さない）。part：穴で切れた床のかけら（名前の札を出さない）
+type Area = { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean; sur?: boolean }; // sur：会場の外（やぐら橋など。「周辺も表示」のときだけ）。under：ほかの床の下に敷く（名前の札を出さない）。part：穴で切れた床のかけら（名前の札を出さない）
 // その階の床（ホール・通路）の上か
 function onFloor(p: XZ, lv: number): boolean {
   return halls.some((h) => h.level === lv && !h.closed && pointInPolygon(p, h.poly)) || areas.some((a) => a.level === lv && pointInPolygon(p, a.poly));
@@ -435,7 +435,7 @@ for (const a of areas) if (["屋上展示場", "エントランスプラザ", "�
 
 // 階段（階のちがう2つの所をつなぐ）。屋上展示場（4F）からエントランスプラザ（2F）へ：OpenStreetMap の階段（way 381682023、
 // layer=2）。屋上展示場の西の角から北西へ、エントランスプラザへ下りる。航空写真でも、ここに屋根のある幅 7m ほどの階段が見える
-type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean };
+type Stair = { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean; sur?: boolean };
 const stairs: Stair[] = [];
 // 位置は航空写真と斜めからの写真に合わせる：階段の上の端は、45° に傾いた四角い踊り場（中心 u 59.5・v 82.5、角から角まで 15m）。
 // 踊り場は半分ほど屋上展示場の西の縁（u 61.5）にくいこむ（写真：屋上の縁の角に踊り場がはまっている）。
@@ -455,21 +455,22 @@ const stairs: Stair[] = [];
 // ・橋はプラザと同じ高さのまま平ら（縞模様は床のタイル。Street View で、プラザの端から高架の下まで平ら）。高架の西で u -214 まで
 // ・そこから地上へ、幅いっぱい（v -2〜24）の階段（OSM の階段 way 438228292 も u -239〜-208）。下の端は u -245
 // ・下は地上の平らな所（OSM の「イーストプロムナード」）。両側の白い屋根の端が U の字につながる所（u -276）まで
-// ・白い屋根：南の側は橋の全長（プラザの端から）、北の側は高架から西。U の字の端から、屋根のある歩道が西へ続く（りんかい線の駅の方へ）
-// エントランスプラザの OSM の形が、橋の根元（u -168 まで）を含んでいるので、その先から
+// ・白い屋根：南の側は橋の全長（プラザの端から）、北の側は高架から西。U の字の端から、屋根のある歩道が西へ続く（りんかい線の駅の方へ。PLATEAU）
+// エントランスプラザの OSM の形が、橋の根元（u -168 まで）を含んでいるので、その先から。
+// 会場の外なので、橋・階段・地上の床・屋根は「周辺も表示」のときだけ出す（sur。ユーザーの指示）
 const canopies: { level: number; pts: XZ[]; ys: number[]; w: number }[] = [];
 {
   const D = FLOOR_Y[2], R = 3.3; // 屋根の下の高さ（床から）
-  areas.push({ name: "やぐら橋", level: 2, poly: fromUV([[-168.3, -2], [-214, -2], [-214, 24], [-168.3, 24]]), outdoor: true });
+  areas.push({ name: "やぐら橋", level: 2, poly: fromUV([[-168.3, -2], [-214, -2], [-214, 24], [-168.3, 24]]), outdoor: true, sur: true });
   const [top, bottom] = fromUV([[-214, 11], [-245, 11]]);
-  stairs.push({ name: "階段", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 26, outdoor: true });
-  areas.push({ name: "イーストプロムナード", level: 1, poly: fromUV([[-245, -2], [-276, -2], [-276, 24], [-245, 24]]), outdoor: true });
+  stairs.push({ name: "階段", from: top, fromLevel: 2, to: bottom, toLevel: 1, width: 26, outdoor: true, sur: true });
+  areas.push({ name: "イーストプロムナード", level: 1, poly: fromUV([[-245, -2], [-276, -2], [-276, 24], [-245, 24]]), outdoor: true, sur: true });
   // 屋根（中心の線・屋根の下の高さ・幅）。航空写真で測った帯：南 v 19〜24、北 v -2〜3、U の字の端 u -276〜-270
   const side = (v: number, u0: number) => ({ pts: fromUV([[u0, v], [-214, v], [-245, v], [-273, v]]), ys: [D + R, D + R, R, R] });
   canopies.push({ level: 2, w: 5, ...side(21.5, -124) });
   canopies.push({ level: 2, w: 5, ...side(0.5, -192) });
   canopies.push({ level: 1, w: 6, pts: fromUV([[-273, -7.5], [-273, 24]]), ys: [R, R] });
-  canopies.push({ level: 1, w: 5.5, pts: fromUV([[-273, -5], [-330, -9], [-350, -24], [-400, -24]]), ys: [R, R, R, R] });
+  // U の字の端から西（りんかい線の駅の方）へ続く屋根のある歩道は、PLATEAU の形と計測高さで描く（周辺の建物の kind "canopy"）
 }
 
 // 西の 4F の通路から 1F への車のスロープ（上の「外の通路（4F）」のところの説明）
@@ -919,7 +920,7 @@ for (const h of halls) {
 // 床のない所（ホール・通路の床の外）にあるトイレ：近くに部屋の囲みがあれば札をその部屋の真ん中へ、なければ壁ぎわ（壁の 1m 外）へ。
 // 会場から離れた OpenStreetMap のトイレ（会場の床から 15m より遠い）は「周辺」の扱いにして、「周辺も表示」のときだけ出す
 {
-  const floorsAt = (lv: number) => [...halls.filter((h) => h.level === lv && !h.closed).map((h) => h.poly), ...areas.filter((a) => a.level === lv).map((a) => a.poly)];
+  const floorsAt = (lv: number) => [...halls.filter((h) => h.level === lv && !h.closed).map((h) => h.poly), ...areas.filter((a) => a.level === lv && !a.sur).map((a) => a.poly)]; // やぐら橋など会場の外の床（sur）のそばのトイレは、会場の外のトイレ
   const gap = (p: XZ, lv: number) => {
     let best = Infinity;
     for (const f of floorsAt(lv)) {
@@ -1026,10 +1027,11 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
 // 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
-type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" };
+type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck" };
 type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
+const deckSteps: XZ[][] = []; // 歩行者デッキへ上る階段（OSM の layer ≥ 1 の steps）
 if (existsSync("data/osm/surroundings.json")) {
   const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
   const WIDTH: Record<string, number> = { motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 7, unclassified: 6, residential: 6, service: 4, pedestrian: 6, footway: 2.5, path: 2, cycleway: 2, steps: 2.5 };
@@ -1051,9 +1053,14 @@ if (existsSync("data/osm/surroundings.json")) {
       sur.lines.push({ pts, y: layer >= 4 ? 19 : layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
     } else if (t.highway) {
       const walk = /^(pedestrian|footway|path|cycleway|steps)$/.test(t.highway);
-      // 2F 以上の歩道・階段（OSM の layer ≥ 1）は、会場の 2F の床・階段として描いているので出さない（重なって、床の上に変な線が浮く）。
+      // 2F 以上の歩道（OSM の layer ≥ 1）は、まわりの建物をつなぐ歩行者デッキ。会場の 2F の床と同じ高さ（12m）の板にする
+      // （会場の床の上の所は、あとで会場の床にかかる所を切り取るので重ならない）。デッキへ上る階段は、デッキにつく端を 12m に（deckSteps）
+      if (walk && layer >= 1) {
+        if (t.highway === "steps") deckSteps.push(pts);
+        else sur.lines.push({ pts, y: FLOOR_Y[2], w: t.highway === "pedestrian" ? 8 : 5, kind: "deck" });
+        continue;
+      }
       // 高架の道路は、2F の床より少し下（8m）に
-      if (walk && layer >= 1) continue;
       const y = layer >= 1 ? 8 : walk ? 0.06 : 0.03;
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
       else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
@@ -1304,13 +1311,18 @@ if (existsSync("data/osm/coast.json")) {
         [st.to[0] + uz * h, st.to[1] - ux * h],
       ] as XZ[];
     });
-  const footprints = [...halls.map((h) => h.poly), ...areas.filter((a) => a.name !== "外のデッキ（2F）").map((a) => a.poly), southEntrance, ...ramps];
+  // やぐら橋の大階段（会場の外の階段）の形も：OSM の橋の歩道（layer 2）が、階段の上に歩行者デッキとして残らないよう
+  const bigStairs = stairs
+    .filter((st) => st.sur)
+    .map((st) => {
+      const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], L = Math.hypot(dx, dz);
+      const ux = dx / L, uz = dz / L, h = st.width / 2 + 2;
+      return [[st.to[0] - uz * h - ux * 3, st.to[1] + ux * h - uz * 3], [st.from[0] - uz * h + ux * 3, st.from[1] + ux * h + uz * 3], [st.from[0] + uz * h + ux * 3, st.from[1] - ux * h + uz * 3], [st.to[0] + uz * h - ux * 3, st.to[1] - ux * h - uz * 3]] as XZ[];
+    });
+  const footprints = [...halls.map((h) => h.poly), ...areas.filter((a) => a.name !== "外のデッキ（2F）").map((a) => a.poly), southEntrance, ...ramps, ...bigStairs];
   const inVenue = (p: XZ) => footprints.some((f) => pointInPolygon(p, f));
-  for (let i = parts3d.length - 1; i >= 0; i--) {
-    const b = parts3d[i];
-    if (/Conference Tower|会議棟/.test(b.name)) continue;
-    if (inVenue(centroid(b.poly))) parts3d.splice(i, 1);
-  }
+  // まわりの建物は、下の PLATEAU の建物（sur.buildings）で描くので、OSM の部品は会議棟（逆ピラミッドと柱）だけ残す
+  for (let i = parts3d.length - 1; i >= 0; i--) if (!/Conference Tower|会議棟/.test(parts3d[i].name)) parts3d.splice(i, 1);
   // 道・歩道の線は、会場の床にかかる所だけ切り取る（線ごと消すと会場の外の部分まで消え、残すと床の上に帯が出る）。
   // 線路（高架）は会場の上を通るので、そのまま
   const cut: typeof sur.lines = [];
@@ -1344,6 +1356,203 @@ if (existsSync("data/osm/coast.json")) {
   }
   sur.lines = cut;
   sur.areas = sur.areas.filter((a) => a.kind === "water" || !inVenue(centroid(a.poly)));
+
+  // ---- 周辺をくわしく（ユーザーの指示：駅までの道など、まわりをくわしく、リアルに）
+  // 建物：国土交通省 PLATEAU（3D 都市モデル 東京都23区 2020 年度。data/plateau/buildings.json）の屋根の形と計測高さ。
+  // PLATEAU にない建物（2020 年度より後に建ったもの）は OSM（data/osm/detail.json）の形で、高さは OSM の height・階数、
+  // それもなければ下の表（公表の階数・高さ）、それもなければ 10m（est に理由を書く）。
+  // 細長い低いもの（平均の幅 7m 未満・長さが幅の 4 倍より長い・高さ 8m 以下）は、屋根のある歩道の屋根（kind "canopy"：屋根の板と柱）
+  const det = existsSync("data/osm/detail.json") ? (JSON.parse(readFileSync("data/osm/detail.json", "utf8")) as { elements: El[] }).elements : [];
+  const plateau = existsSync("data/plateau/buildings.json")
+    ? (JSON.parse(readFileSync("data/plateau/buildings.json", "utf8")) as { buildings: { id: string; h: number; poly: [number, number][] }[] }).buildings
+    : [];
+  const ringArea = (r: XZ[]) => Math.abs(r.reduce((a2, q, i) => a2 + q[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * q[1], 0) / 2);
+  const ringLen = (r: XZ[]) => r.reduce((a2, q, i) => a2 + Math.hypot(r[(i + 1) % r.length][0] - q[0], r[(i + 1) % r.length][1] - q[1]), 0);
+  const tower = parts3d.filter((b) => /Conference Tower|会議棟/.test(b.name)).map((b) => b.poly);
+  // やぐら橋のまわり（橋の屋根と U の字の端の屋根は、会場の 2F の高さに合わせて自分で描いている）
+  const nearBridge = (q: XZ) => {
+    const [u, v] = toUV(q);
+    return u < -120 && u > -282 && v > -14 && v < 32;
+  };
+  const skip = (pl: XZ[]) => {
+    const c = centroid(pl);
+    return inVenue(c) || inHallBuilding(pl) || tower.some((t2) => pointInPolygon(c, t2) || t2.some((q) => pointInPolygon(q, pl))) || nearBridge(c);
+  };
+  // OSM の形：way はそのまま、relation（マルチポリゴン）は outer の線を端でつないだ輪
+  const shapesOf = (e: El): XZ[][] => {
+    if (e.type === "way") return e.geometry ? [poly(e)] : [];
+    const parts = ((e as El & { members?: { role: string; geometry?: { lat: number; lon: number }[] }[] }).members ?? [])
+      .filter((m) => m.role === "outer" && m.geometry?.length)
+      .map((m) => m.geometry!.map((g) => project(ORIGIN, g.lat, g.lon)));
+    const same = (a2: XZ, b2: XZ) => Math.hypot(a2[0] - b2[0], a2[1] - b2[1]) < 0.05;
+    const out: XZ[][] = [];
+    while (parts.length) {
+      let c = parts.shift()!;
+      for (let grew = true; grew && !same(c[0], c.at(-1)!); ) {
+        grew = false;
+        for (let i = 0; i < parts.length; i++) {
+          const w = parts[i];
+          if (same(w[0], c.at(-1)!)) c = [...c, ...w.slice(1)];
+          else if (same(w.at(-1)!, c.at(-1)!)) c = [...c, ...[...w].reverse().slice(1)];
+          else if (same(w.at(-1)!, c[0])) c = [...w, ...c.slice(1)];
+          else if (same(w[0], c[0])) c = [...[...w].reverse(), ...c.slice(1)];
+          else continue;
+          parts.splice(i, 1);
+          grew = true;
+          break;
+        }
+      }
+      if (same(c[0], c.at(-1)!)) c.pop();
+      if (c.length >= 3) out.push(c);
+    }
+    return out;
+  };
+  // 点の升目（2m 間隔）
+  const inside = (pl: XZ[]) => {
+    const xs = pl.map((q) => q[0]), zs = pl.map((q) => q[1]);
+    const out: XZ[] = [];
+    for (let x = Math.min(...xs) + 1; x <= Math.max(...xs); x += 2)
+      for (let z = Math.min(...zs) + 1; z <= Math.max(...zs); z += 2) if (pointInPolygon([x, z], pl)) out.push([x, z]);
+    return out;
+  };
+  type SBuilding = { poly: XZ[]; h: number; name?: string; kind?: "canopy"; est?: string };
+  const pBuildings = plateau
+    .map((b) => ({ poly: b.poly.map(([la, lo]) => project(ORIGIN, la, lo)), h: b.h }))
+    .filter((b) => b.poly.length >= 3 && !skip(b.poly));
+  const oBuildings = det
+    .filter((e) => e.tags?.building)
+    .flatMap((e) => shapesOf(e).map((pl) => ({ t: e.tags!, poly: pl })))
+    .filter((b) => !skip(b.poly));
+  // PLATEAU（2020 年度）と OSM（今）の突き合わせ：PLATEAU の建物の点が OSM の建物に入る割合（fP）と、
+  // OSM の建物の点が PLATEAU の建物に入る割合（fO）。
+  // ・PLATEAU の建物が OSM の建物と重なり（fP ≥ 0.3）、その OSM の建物が PLATEAU にほとんど入っていない（fO < 0.5）なら、
+  //   2020 年より後に建てかわった所（東京ドリームパークなど）なので、PLATEAU の古い建物は使わず OSM の建物にする
+  // ・OSM にない PLATEAU の建物（小さい建物など）は、そのまま使う
+  const pPts = pBuildings.map((b) => inside(b.poly));
+  const oPts = oBuildings.map((b) => inside(b.poly));
+  const fO = oBuildings.map((_, i) => (oPts[i].length ? oPts[i].filter((q) => pBuildings.some((b) => pointInPolygon(q, b.poly))).length / oPts[i].length : 1));
+  const buildings: SBuilding[] = [];
+  const usedP = new Set<number>();
+  pBuildings.forEach((b, i) => {
+    const pts = pPts[i];
+    const hits = oBuildings.map((o) => pts.filter((q) => pointInPolygon(q, o.poly)).length);
+    const best = hits.indexOf(Math.max(...hits));
+    const fP = pts.length ? hits[best] / pts.length : 0;
+    if (fP >= 0.3 && fO[best] < 0.5) return;
+    usedP.add(i);
+    // 細長い低いもの（平均の幅 7m 未満・長さが幅の 4 倍より長い・高さ 8m 以下）は屋根
+    const wMean = (2 * ringArea(b.poly)) / ringLen(b.poly);
+    const thin = wMean < 7 && ringArea(b.poly) / (wMean * wMean) > 4 && b.h <= 8;
+    buildings.push({ poly: b.poly, h: b.h, ...(thin ? { kind: "canopy" as const } : {}) });
+  });
+  // 名前：OSM の名前のある大きい建物（1500m² 以上）を、いちばん重なる PLATEAU の建物に付ける（名前の札にする）
+  oBuildings.forEach((o, i) => {
+    if (!o.t.name || ringArea(o.poly) < 1500 || fO[i] < 0.5) return;
+    const count = new Map<SBuilding, number>();
+    for (const q of oPts[i]) for (const b of buildings) if (!b.kind && pointInPolygon(q, b.poly)) count.set(b, (count.get(b) ?? 0) + 1);
+    const best = [...count].sort((x, y) => y[1] - x[1])[0];
+    if (best && !best[0].name) best[0].name = o.t.name.split(";")[0];
+  });
+  // PLATEAU にない（入っていない）OSM の建物。高さは OSM の height・階数、なければ公表の高さ・階数：
+  // 東京ドリームパーク：建設中の報道の高さ約 52m（竣工時は地上 9 階）。コナミクリエイティブフロント東京ベイ：地上 8 階。
+  // 有明ガーデン（商業施設）・東京ガーデンシアター：完成後の高さ・階数の公表が見つからない（都市計画の素案では、商業・ホテル・ホールの
+  // 街区の最高高さ 58m・44m だが、ホテルの塔などを含む高さ）。見た目の目安として、商業施設 30m・劇場 40m にする（資料なしの目安）。
+  // どれもなければ 10m（est に理由を書く）
+  const KNOWN: Record<string, { h?: number; levels?: number; est: string }> = {
+    東京ドリームパーク: { h: 52, est: "建設中の報道の高さ約 52m" },
+    コナミクリエイティブフロント東京ベイ: { levels: 8, est: "地上 8 階（1 階 4m）" },
+    "有明ガーデン;モール&スパ": { h: 30, est: "資料なしの目安（街区の計画の最高高さ 58m より低い商業施設の部分）" },
+    東京ガーデンシアター: { h: 40, est: "資料なしの目安（街区の計画の最高高さ 44m 以下）" },
+  };
+  oBuildings.forEach((o, i) => {
+    if (fO[i] >= 0.5) return;
+    const t = o.t;
+    // PLATEAU の建物（使うもの）で、もう大半がおおわれている所は重ねない
+    const cov = oPts[i].length ? oPts[i].filter((q) => buildings.some((b) => pointInPolygon(q, b.poly))).length / oPts[i].length : 1;
+    if (cov >= 0.5) return;
+    const k = KNOWN[t.name ?? ""];
+    const levels = Number(t["building:levels"]) || k?.levels || 0;
+    const h = Number(t.height) || k?.h || levels * 4 || 0;
+    buildings.push({
+      poly: o.poly, h: h || 10,
+      ...(t.name && ringArea(o.poly) >= 1500 ? { name: t.name.split(";")[0] } : {}),
+      ...(k ? { est: k.est } : Number(t.height) ? {} : levels ? { est: `OSM の階数 ${levels}（1 階 4m）` } : { est: "高さ・階数の資料なし（10m）" }),
+    });
+  });
+  // 緑地（公園・庭・芝生・林・植え込み・運動場）と駐車場
+  type SGreen = { poly: XZ[]; kind: "grass" | "wood" | "pitch" | "parking" };
+  const greens: SGreen[] = [];
+  for (const e of det) {
+    const t = e.tags ?? {};
+    if (e.type !== "way" || !e.geometry || e.geometry.length < 4 || t.building) continue;
+    const kind: SGreen["kind"] | null =
+      t.amenity === "parking" ? "parking"
+      : t.leisure === "pitch" ? "pitch"
+      : t.landuse === "forest" || t.natural === "wood" || t.natural === "scrub" ? "wood"
+      : /^(park|garden|playground)$/.test(t.leisure ?? "") || /^(grass|meadow|village_green|recreation_ground|flowerbed)$/.test(t.landuse ?? "") || t.natural === "grassland" ? "grass"
+      : null;
+    if (!kind) continue;
+    const pl = poly(e);
+    if (pl.length >= 3 && !inVenue(centroid(pl))) greens.push({ poly: pl, kind });
+  }
+  // 木：OSM の木（1 本ずつ）と並木（7m ごと）。林は 7m の升目に（少しずらして）並べる
+  const trees: XZ[] = [];
+  const jit = (i: number) => (Math.sin(i * 12.9898) * 43758.5453) % 1;
+  for (const e of det) {
+    const t = e.tags ?? {};
+    if (t.natural === "tree" && e.lat) trees.push(project(ORIGIN, e.lat, e.lon!));
+    if (t.natural === "tree_row" && e.geometry) {
+      const pl = e.geometry.map((g) => project(ORIGIN, g.lat, g.lon));
+      for (let i = 0; i + 1 < pl.length; i++) {
+        const L = Math.hypot(pl[i + 1][0] - pl[i][0], pl[i + 1][1] - pl[i][1]);
+        for (let d = 0; d < L; d += 7) trees.push([pl[i][0] + ((pl[i + 1][0] - pl[i][0]) * d) / L, pl[i][1] + ((pl[i + 1][1] - pl[i][1]) * d) / L]);
+      }
+    }
+  }
+  for (const g of greens.filter((g2) => g2.kind === "wood")) {
+    const xs = g.poly.map((q) => q[0]), zs = g.poly.map((q) => q[1]);
+    let i = 0;
+    for (let x = Math.min(...xs) + 3; x < Math.max(...xs); x += 7)
+      for (let z = Math.min(...zs) + 3; z < Math.max(...zs); z += 7) {
+        i++;
+        const q: XZ = [x + jit(i) * 2.5, z + jit(i + 99) * 2.5];
+        if (pointInPolygon(q, g.poly)) trees.push(q);
+      }
+  }
+  const treesOut = trees.filter((q) => !inVenue(q) && !buildings.some((b) => !b.kind && pointInPolygon(q, b.poly))).map((q) => [Math.round(q[0] * 10) / 10, Math.round(q[1] * 10) / 10] as XZ);
+  // 横断歩道（OSM の footway=crossing の線）
+  const crossings = det
+    .filter((e) => e.type === "way" && e.tags?.footway === "crossing" && e.geometry)
+    .map((e) => e.geometry!.map((g) => project(ORIGIN, g.lat, g.lon)))
+    .filter((pl) => !inVenue(pl[0]) && !inVenue(pl.at(-1)!));
+  // 駅の出入口（いちばん近い駅の名前を付ける）・バス停（同じ名前で 40m 以内は 1 つ）・タクシー乗り場
+  const near = (q: XZ) => [...sur.stations].sort((a2, b2) => Math.hypot(a2.at[0] - q[0], a2.at[1] - q[1]) - Math.hypot(b2.at[0] - q[0], b2.at[1] - q[1]))[0];
+  const entrances = det
+    .filter((e) => (e.tags?.railway === "train_station_entrance" || e.tags?.railway === "subway_entrance") && e.lat)
+    .map((e) => {
+      const at = project(ORIGIN, e.lat!, e.lon!);
+      const st = near(at);
+      return { at, name: `${st.name} 出入口${e.tags?.ref ? ` ${e.tags.ref}` : ""}`, line: st.line };
+    });
+  const busStops: { at: XZ; name: string }[] = [];
+  for (const e of det.filter((e2) => e2.tags?.highway === "bus_stop" && e2.lat)) {
+    const at = project(ORIGIN, e.lat!, e.lon!), name = e.tags!.name ?? "バス停";
+    if (inVenue(at) || busStops.some((b) => b.name === name && Math.hypot(b.at[0] - at[0], b.at[1] - at[1]) < 40)) continue;
+    busStops.push({ at, name });
+  }
+  const taxis = det.filter((e) => e.tags?.amenity === "taxi" && e.lat).map((e) => project(ORIGIN, e.lat!, e.lon!));
+  // 歩行者デッキへ上る階段：デッキの線の端に近いほうの端を 12m に
+  const deckEnds = sur.lines.filter((l) => l.kind === "deck").flatMap((l) => l.pts);
+  const dist = (q: XZ) => Math.min(...deckEnds.map((d) => Math.hypot(d[0] - q[0], d[1] - q[1])));
+  const deckStairs = deckSteps
+    .filter((pl) => !inVenue(centroid(pl)))
+    .map((pl) => {
+      const [a, b] = [pl[0], pl.at(-1)!];
+      return dist(a) < dist(b) ? { from: a, to: b } : { from: b, to: a };
+    });
+  Object.assign(sur, { buildings, greens, trees: treesOut, crossings, entrances, busStops, taxis, deckStairs });
+  console.log(`周辺：建物 ${buildings.filter((b) => !b.kind).length}（PLATEAU にないもの ${buildings.filter((b) => b.est).length}）・屋根 ${buildings.filter((b) => b.kind).length}・緑地と駐車場 ${greens.length}・木 ${treesOut.length}・横断歩道 ${crossings.length}・駅の出入口 ${entrances.length}・バス停 ${busStops.length}・デッキ ${sur.lines.filter((l) => l.kind === "deck").length}・デッキの階段 ${deckStairs.length}`);
+  for (const b of buildings.filter((b2) => b2.est)) console.log(`  高さの目安：${b.name ?? "（名前なし）"} ${b.h}m（${b.est}）`);
 }
 
 // 屋内と屋外の境目の仕切りにあける出口。公式フロアマップの赤い「入口」（エントランスホールからエントランスプラザへ。
@@ -1364,6 +1573,6 @@ const exits = [
 mkdirSync("src/data", { recursive: true });
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks, canopies }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)・周辺の建物：国土交通省 PLATEAU（CC BY 4.0）を加工", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks, canopies }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);

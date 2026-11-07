@@ -22,20 +22,30 @@ type Venue = {
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
-  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean }[];
+  areas: { name: string; level: number; poly: XZ[]; see?: boolean; holes?: XZ[][]; under?: boolean; outdoor?: boolean; part?: boolean; sur?: boolean }[]; // sur：会場の外（やぐら橋など）。「周辺も表示」のときだけ
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
-    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" }[];
+    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck" }[];
     areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
+    // 周辺をくわしく：建物（PLATEAU の形と計測高さ。kind "canopy" は屋根のある歩道などの屋根）、緑地と駐車場、木、横断歩道、
+    // 駅の出入口、バス停、タクシー乗り場、歩行者デッキへ上る階段
+    buildings?: { poly: XZ[]; h: number; name?: string; kind?: "canopy"; est?: string }[];
+    greens?: { poly: XZ[]; kind: "grass" | "wood" | "pitch" | "parking" }[];
+    trees?: XZ[];
+    crossings?: XZ[][];
+    entrances?: { at: XZ; name: string; line: string }[];
+    busStops?: { at: XZ; name: string }[];
+    taxis?: XZ[];
+    deckStairs?: { from: XZ; to: XZ }[];
   };
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
   doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string; width?: number }[]; // width：開口の幅（シャッターなど。ないときは DOOR_W）
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
-  stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean }[];
+  stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean; sur?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number; kind?: "room"; base?: number }[];
   canopies?: { level: number; pts: XZ[]; ys: number[]; w: number }[]; // 屋外の白い屋根（やぐら橋など）：中心の線、点ごとの屋根の下の高さ、幅 // kind "room"：ホールの外の部屋の帯の、来場者の入れない部屋（その階だけ・黒）
 };
@@ -535,7 +545,7 @@ export function VenueView() {
     sun.position.set(-200, 400, 150);
     scene.add(sun);
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000), new THREE.MeshLambertMaterial({ color: 0xcfd6cf }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000), new THREE.MeshLambertMaterial({ color: 0xd3d5d0 }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.2;
     scene.add(ground);
@@ -558,7 +568,7 @@ export function VenueView() {
     }
     // 道・歩道（2F の歩行者デッキを含む）・ゆりかもめの高架・駅のホーム
     const sur = venue.surroundings;
-    const SUR_COLOR = { road: 0x8f938e, walk: 0xe6e2d6, steps: 0xc9c2b0, rail: 0xb4bac0 };
+    const SUR_COLOR = { road: 0x6f7376, walk: 0xe3ddcf, steps: 0xc9c2b0, rail: 0xb4bac0 }; // 道はアスファルトの濃い灰色
     for (const kind of ["road", "walk", "steps"] as const) {
       const m = new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === kind)), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide }));
       m.position.y = -0.08; // 地面（-0.2）より上、ホールの床より下
@@ -608,10 +618,220 @@ export function VenueView() {
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
     // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
     // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
-    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block";
-    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15 };
+    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block" | "sur"; // sur：周辺の札（建物の名前・駅の出入口・バス停）
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15, sur: 14 };
     const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
     const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
+    // ---- 周辺をくわしく（ユーザーの指示：駅までの道など、まわりをくわしく、リアルに）
+    const DECK_Y = floorY(2);
+    {
+      // 緑地・駐車場（道・歩道より下に敷く）
+      const GREEN = { parking: 0x8e9294, pitch: 0x8fc27c, grass: 0xa3c98d, wood: 0x86b274 } as const;
+      for (const g of sur.greens ?? []) surroundings.add(flatPoly(g.poly, GREEN[g.kind], g.kind === "parking" || g.kind === "pitch" ? -0.13 : -0.15));
+      // 建物：高さで色の系統を分け（高い建物はガラスの青灰色、中くらいはコンクリートの白っぽい色、低い建物は薄い茶色）、
+      // 建物ごとに少し明るさを変える。壁には 1 階 4m ごとの窓の帯（模様）を貼る。屋上は少し暗く
+      const winTex = (() => {
+        const c = document.createElement("canvas");
+        c.width = 8;
+        c.height = 32;
+        const g = c.getContext("2d")!;
+        g.fillStyle = "#ffffff";
+        g.fillRect(0, 0, 8, 32);
+        g.fillStyle = "#8f9aa5";
+        g.fillRect(0, 9, 8, 15); // 窓の帯（1 階の高さの半分ほど）
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(1, 1 / 4); // ExtrudeGeometry の側面の UV はメートル（縦は高さ）。4m で 1 回
+        t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      })();
+      const tone = (h: number, i: number) => {
+        const k = 0.92 + ((Math.sin(i * 78.233) * 43758.5453) % 1 + 1) % 1 * 0.12;
+        const base = h >= 45 ? new THREE.Color(0xb3c1cc) : h >= 15 ? new THREE.Color(0xdcdad3) : new THREE.Color(0xd8cdbd);
+        return base.multiplyScalar(k);
+      };
+      const mats = new Map<string, THREE.Material[]>();
+      const matOf = (h: number, i: number) => {
+        const c = tone(h, i);
+        const key = c.getHexString().slice(0, 5) + (h >= 8 ? "w" : "");
+        if (!mats.has(key)) {
+          const roof = new THREE.MeshLambertMaterial({ color: c.clone().multiplyScalar(0.82) });
+          const wall = new THREE.MeshLambertMaterial({ color: c, map: h >= 8 ? winTex : null });
+          mats.set(key, [roof, wall]);
+        }
+        return mats.get(key)!;
+      };
+      const roofMat = new THREE.MeshLambertMaterial({ color: 0xeef0ee });
+      const postMat = new THREE.MeshLambertMaterial({ color: 0xc9cdd0 });
+      const posts: [number, number, number][] = []; // x, z, 高さ
+      (sur.buildings ?? []).forEach((b, i) => {
+        if (b.kind === "canopy") {
+          // 屋根の板（厚さ 0.3m）と、ふちに 8m ごとの柱
+          const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: 0.3, bevelEnabled: false });
+          const m = new THREE.Mesh(g, roofMat);
+          m.rotation.x = -Math.PI / 2;
+          m.position.y = b.h - 0.3;
+          surroundings.add(m);
+          const cx = b.poly.reduce((a, q) => a + q[0], 0) / b.poly.length, cz = b.poly.reduce((a, q) => a + q[1], 0) / b.poly.length;
+          // ふちを一周たどり、8m ごとに（中心の側へ 0.4m 寄せて）
+          let next = 0, run = 0;
+          b.poly.forEach((q, k) => {
+            const r = b.poly[(k + 1) % b.poly.length], L = Math.hypot(r[0] - q[0], r[1] - q[1]);
+            for (; next <= run + L; next += 8) {
+              const d = next - run, x = q[0] + ((r[0] - q[0]) * d) / (L || 1), z = q[1] + ((r[1] - q[1]) * d) / (L || 1), dl = Math.hypot(cx - x, cz - z) || 1;
+              posts.push([x + ((cx - x) / dl) * 0.4, z + ((cz - z) / dl) * 0.4, b.h - 0.3]);
+            }
+            run += L;
+          });
+          return;
+        }
+        const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.h, bevelEnabled: false });
+        const m = new THREE.Mesh(g, matOf(b.h, i));
+        m.rotation.x = -Math.PI / 2;
+        surroundings.add(m);
+        // 名前（大きい建物。OSM の名前）：屋上の少し上
+        if (b.name) {
+          const t = textSprite(b.name, { fg: "#ffffff", bg: "rgba(70,76,84,.82)", height: 3.2, px: 30 });
+          const [x, z] = insidePoint(b.poly, []);
+          t.position.set(x, b.h + 4, z);
+          surroundings.add(t);
+          addLabel(t, "sur");
+        }
+      });
+      // 柱（屋根の柱・デッキの柱・高架の道路の柱）はまとめて 1 つの形で
+      const deckLines = sur.lines.filter((l) => l.kind === "deck");
+      const roadHigh = sur.lines.filter((l) => l.kind === "road" && l.y > 1);
+      for (const l of [...deckLines, ...roadHigh])
+        for (let i = 0; i + 1 < l.pts.length; i++) {
+          const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
+          for (let d = 6; d < L - 2; d += 14) posts.push([ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L, -(l.y - 0.8)]); // マイナス：太い柱
+        }
+      {
+        const thin = posts.filter((q) => q[2] > 0), thick = posts.filter((q) => q[2] < 0);
+        const mk = (list: [number, number, number][], r: number, mat: THREE.Material) => {
+          const im = new THREE.InstancedMesh(new THREE.CylinderGeometry(r, r, 1, 8), mat, Math.max(1, list.length));
+          const o = new THREE.Object3D();
+          list.forEach(([x, z, h], i) => {
+            const hh = Math.abs(h);
+            o.position.set(x, hh / 2, z);
+            o.scale.set(1, hh, 1);
+            o.updateMatrix();
+            im.setMatrixAt(i, o.matrix);
+          });
+          im.count = list.length;
+          im.computeBoundingSphere();
+          surroundings.add(im);
+        };
+        mk(thin, 0.13, postMat);
+        mk(thick, 0.6, new THREE.MeshLambertMaterial({ color: 0xbfc2bf }));
+      }
+      // 歩行者デッキ（2F の高さ。厚さ 0.8m の板と、両側に高さ 1.1m の手すり）
+      if (deckLines.length) {
+        surroundings.add(new THREE.Mesh(ribbons(deckLines, 0.8), new THREE.MeshLambertMaterial({ color: 0xd6d0c2, side: THREE.DoubleSide })));
+        const rails = deckLines.flatMap((l) => [-1, 1].map((k) => ({
+          y: l.y + 1.1, w: 0.08,
+          pts: l.pts.map(([x, z], i) => {
+            const [bx, bz] = l.pts[Math.min(i + 1, l.pts.length - 1)], [ax, az] = l.pts[Math.max(i - 1, 0)];
+            const len = Math.hypot(bx - ax, bz - az) || 1;
+            return [x - ((bz - az) / len) * k * (l.w / 2 - 0.1), z + ((bx - ax) / len) * k * (l.w / 2 - 0.1)] as XZ;
+          }),
+        })));
+        surroundings.add(new THREE.Mesh(ribbons(rails, 1.1), new THREE.MeshLambertMaterial({ color: 0x9fb4c0, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
+      }
+      // デッキへ上る階段（デッキにつく端が 2F の高さ）：段の板を並べる
+      for (const st of sur.deckStairs ?? []) {
+        const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
+        const n = Math.max(3, Math.round(DECK_Y / 0.2));
+        const im = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 1, run / n + 0.02), new THREE.MeshLambertMaterial({ color: 0xc9c2b0 }), n);
+        const o = new THREE.Object3D();
+        for (let i = 0; i < n; i++) {
+          const f = (i + 0.5) / n, top = (DECK_Y * (i + 1)) / n, th = Math.min(1.5, top);
+          o.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
+          o.rotation.set(0, Math.atan2(dx, dz), 0);
+          o.scale.set(1, th, 1);
+          o.updateMatrix();
+          im.setMatrixAt(i, o.matrix);
+        }
+        im.computeBoundingSphere();
+        surroundings.add(im);
+      }
+      // 道路の白線：広い道（幅 9m 以上、地上）の真ん中に破線（長さ 5m・間 5m）
+      {
+        const dashes: { pts: XZ[]; y: number; w: number }[] = [];
+        for (const l of sur.lines.filter((x) => x.kind === "road" && x.y < 1 && x.w >= 9)) {
+          let on = 0;
+          for (let i = 0; i + 1 < l.pts.length; i++) {
+            const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
+            for (let d = 0; d < L; d += 5, on++)
+              if (on % 2 === 0) {
+                const e = Math.min(L, d + 5);
+                dashes.push({ pts: [[ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L], [ax + ((bx - ax) * e) / L, az + ((bz - az) * e) / L]], y: -0.035, w: 0.18 });
+              }
+          }
+        }
+        // 横断歩道：歩く向きに 0.9m ごとに、幅 0.45m・長さ 4m の白い帯
+        for (const c of sur.crossings ?? [])
+          for (let i = 0; i + 1 < c.length; i++) {
+            const [ax, az] = c[i], [bx, bz] = c[i + 1], L = Math.hypot(bx - ax, bz - az);
+            if (L < 0.5) continue;
+            const ux = (bx - ax) / L, uz = (bz - az) / L;
+            for (let d = 0.45; d < L - 0.2; d += 0.9) {
+              const x = ax + ux * d, z = az + uz * d;
+              dashes.push({ pts: [[x - uz * 2, z + ux * 2], [x + uz * 2, z - ux * 2]], y: -0.035, w: 0.45 });
+            }
+          }
+        surroundings.add(new THREE.Mesh(ribbons(dashes), new THREE.MeshBasicMaterial({ color: 0xf4f4f0, side: THREE.DoubleSide })));
+      }
+      // 木：幹（高さ 3m）と、丸い葉の塊（色を少しずつ変える）
+      {
+        const trees = sur.trees ?? [];
+        const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.25, 3, 6), new THREE.MeshLambertMaterial({ color: 0x7a6248 }), Math.max(1, trees.length));
+        const crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(2.4, 1), new THREE.MeshLambertMaterial({ color: 0xffffff }), Math.max(1, trees.length));
+        const o = new THREE.Object3D();
+        const greens = [0x5f8f4a, 0x6b9a52, 0x55833f, 0x74a35a].map((c) => new THREE.Color(c));
+        trees.forEach(([x, z], i) => {
+          const k = 0.85 + (((Math.sin(i * 12.9898) * 43758.5453) % 1) + 1) % 1 * 0.35;
+          o.position.set(x, 1.5 * k, z);
+          o.scale.set(1, k, 1);
+          o.updateMatrix();
+          trunk.setMatrixAt(i, o.matrix);
+          o.position.set(x, 3 * k + 1.6 * k, z);
+          o.scale.set(k, k * 1.05, k);
+          o.updateMatrix();
+          crown.setMatrixAt(i, o.matrix);
+          crown.setColorAt(i, greens[i % greens.length]);
+        });
+        trunk.count = crown.count = trees.length;
+        trunk.computeBoundingSphere();
+        crown.computeBoundingSphere();
+        surroundings.add(trunk, crown);
+      }
+      // 駅の出入口・バス停・タクシー乗り場の札（寄ったときだけ）。駅の出入口は小さな屋根つきの入口の箱
+      for (const e of sur.entrances ?? []) {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3, 3.2), new THREE.MeshLambertMaterial({ color: e.line === "ゆりかもめ" ? 0x2f8f6e : 0x2f5f9f }));
+        box.position.set(e.at[0], 1.5, e.at[1]);
+        surroundings.add(box);
+        const t = textSprite(`🚉 ${e.name}`, { bg: e.line === "ゆりかもめ" ? "rgba(0,120,90,.92)" : "rgba(20,80,160,.92)", height: 2.6, px: 30 });
+        t.position.set(e.at[0], 6, e.at[1]);
+        surroundings.add(t);
+        addLabel(t, "sur");
+      }
+      for (const b of sur.busStops ?? []) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.6, 6), new THREE.MeshLambertMaterial({ color: 0x3d5a80 }));
+        pole.position.set(b.at[0], 1.3, b.at[1]);
+        surroundings.add(pole);
+        const t = textSprite(`🚌 ${b.name}`, { bg: "rgba(60,90,128,.9)", height: 2.4, px: 28 });
+        t.position.set(b.at[0], 4.5, b.at[1]);
+        surroundings.add(t);
+        addLabel(t, "sur");
+      }
+      for (const at of sur.taxis ?? []) {
+        const t = textSprite("🚕 タクシー乗り場", { bg: "rgba(150,120,20,.9)", height: 2.4, px: 28 });
+        t.position.set(at[0], 4.5, at[1]);
+        surroundings.add(t);
+        addLabel(t, "sur");
+      }
+    }
     const levels = new Map<number, LevelParts>();
     const partsOf = (lv: number) => {
       if (!levels.has(lv)) levels.set(lv, { floors: [], solid: [] });
@@ -629,9 +849,20 @@ export function VenueView() {
       const color = a.name === "東棟屋外臨時駐車場" ? PARKING_COLOR : a.outdoor ? (a.level === 2 ? OUTDOOR_2F_COLOR : OUTDOOR_COLOR) : a.level === 2 || south || link ? LINK_COLOR : AREA_COLOR;
       const f = flatPoly(a.poly, color, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
+      areaColor.set(a, color);
+      // 会場の外（やぐら橋とその先の地上）は、「周辺も表示」のときだけ。階で薄くしない
+      if (a.sur) {
+        surroundings.add(f);
+        if (a.part) continue;
+        const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
+        const [cx, cz] = insidePoint(a.poly, a.holes ?? []);
+        label.position.set(cx, y + 3, cz);
+        surroundings.add(label);
+        addLabel(label, "area");
+        continue;
+      }
       scene.add(f);
       partsOf(a.level).floors.push(f);
-      areaColor.set(a, color);
       if (link) {
         // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）：吹き抜けのふちに手すり（高さ 1.1m の薄い板）
         for (const h of a.holes ?? []) {
@@ -663,14 +894,14 @@ export function VenueView() {
       };
       const boxes = new Map(venue.areas.map((a) => [a, bbox(a.poly)] as const));
       const inBox = (b: number[], q: XZ) => q[0] >= b[0] - 0.5 && q[0] <= b[2] + 0.5 && q[1] >= b[1] - 0.5 && q[1] <= b[3] + 0.5;
-      const edgeGroups = new Map<string, { color: number; level: number; runs: { pts: XZ[]; y: number; w: number }[]; lines: number[] }>();
+      const edgeGroups = new Map<string, { color: number; level: number; sur: boolean; runs: { pts: XZ[]; y: number; w: number }[]; lines: number[] }>();
       for (const a of venue.areas) {
         const color = areaColor.get(a)!;
         const others = venue.areas.filter((o) => o !== a && o.level === a.level);
         const hallPolys = venue.halls.filter((h) => h.level === a.level).map((h) => h.poly);
         const ey = floorY(a.level) + (a.under ? 0.03 : 0.07);
-        const key = `${a.level}-${color}`;
-        const out = edgeGroups.get(key) ?? { color, level: a.level, runs: [], lines: [] };
+        const key = `${a.level}-${color}${a.sur ? "-sur" : ""}`;
+        const out = edgeGroups.get(key) ?? { color, level: a.level, sur: !!a.sur, runs: [], lines: [] };
         edgeGroups.set(key, out);
         for (const r of [a.poly, ...(a.holes ?? [])]) {
           r.forEach((p0, i) => {
@@ -709,8 +940,11 @@ export function VenueView() {
         const lg = new THREE.BufferGeometry();
         lg.setAttribute("position", new THREE.Float32BufferAttribute(g.lines, 3));
         const line = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: dark }));
-        scene.add(band, line);
-        partsOf(g.level).solid.push(band, line);
+        if (g.sur) surroundings.add(band, line);
+        else {
+          scene.add(band, line);
+          partsOf(g.level).solid.push(band, line);
+        }
       }
     }
     // 2F と 4F の、屋内と屋外の境目の仕切り。2F は高さ 3.6m の仕切り、4F は建物の外壁なのでホールの壁と同じ高さ。
@@ -927,24 +1161,34 @@ export function VenueView() {
       }
       const n = Math.max(3, Math.round((y1 - y0) / 0.2));
       const geo = new THREE.BoxGeometry(st.width, 1, run / n + 0.02);
+      // 上の階の床（その階の床とホール）。段のまん中がこの中なら、その段は床の上（床と床のふちの帯より上）まで上げて、
+      // 床をつき抜けて見えるようにする（ユーザーの確認：つながっている所の上まで階段の色に）
+      const upper = [
+        ...venue.areas.filter((a) => a.level === st.fromLevel && !a.see).map((a) => ({ poly: a.poly, holes: a.holes ?? [] })),
+        ...venue.halls.filter((h) => h.level === st.fromLevel).map((h) => ({ poly: h.poly, holes: [] as XZ[][] })),
+      ];
+      const underFloor = (p: XZ) => upper.some((u) => pointInPolygon(p, u.poly) && !u.holes.some((h) => pointInPolygon(p, h)));
       const esc = st.kind === "escalator";
       // 屋外の階段（屋上展示場からエントランスプラザへ）は、目立つマゼンタ
       const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : st.outdoor ? OUTDOOR_STAIR_COLOR : LINK_COLOR }), n);
       const t = new THREE.Object3D();
       for (let i = 0; i < n; i++) {
         // 段は 1 段ずつ、厚さ 2m の板（下まで埋めた塊にすると、下の階から壁のように見える。薄いと横から線にしか見えない：ユーザーの確認）
-        const f = (i + 0.5) / n, top = y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(2, top - y0);
-        t.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
+        const f = (i + 0.5) / n, cx = st.to[0] + dx * f, cz = st.to[1] + dz * f;
+        // 床のふちの帯（幅 0.35m）にかかる、ふちのすぐ手前の段も上げる
+        const inFloor = underFloor([cx, cz]) || underFloor([cx + (dx / run) * 0.4, cz + (dz / run) * 0.4]);
+        const top = inFloor ? y1 + 0.1 : y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(2, top - y0);
+        t.position.set(cx, top - th / 2, cz);
         t.rotation.set(0, Math.atan2(dx, dz), 0);
         t.scale.set(1, th, 1);
         t.updateMatrix();
         m.setMatrixAt(i, t.matrix);
       }
       m.computeBoundingSphere();
-      scene.add(m);
       const label = textSprite(`⇅ ${st.name}`, { bg: esc ? "rgba(60,95,140,.92)" : st.outdoor ? "rgba(200,30,120,.95)" : "rgba(205,110,50,.92)", height: 2.6, px: 30 });
       label.position.set((st.from[0] + st.to[0]) / 2, (y0 + y1) / 2 + 3, (st.from[1] + st.to[1]) / 2);
-      scene.add(label);
+      // やぐら橋の大階段（会場の外）は「周辺も表示」のときだけ
+      (st.sur ? surroundings : scene).add(m, label);
       addLabel(label, st.fromLevel === 2 && st.toLevel === 1 ? "block" : "door"); // ガレリアの階段・エスカレーターの札は、寄ったときだけ
     }
     // 人の入れない建物（西と南のつなぎ目の角の 45° の建物など）。その階の床の高さに立つ灰色の箱。
@@ -1002,8 +1246,7 @@ export function VenueView() {
             }
           }
         }
-        scene.add(g);
-        partsOf(c.level).solid.push(g);
+        surroundings.add(g); // やぐら橋と、その先の屋根のある歩道は会場の外なので「周辺も表示」のときだけ
       }
     }
     // 建物の固い部分と部屋の囲み（配置図から写したとき）。高さ 3m の低い箱
@@ -1741,6 +1984,35 @@ export function VenueView() {
       }
       for (const { s } of labels) if (behind.has(s)) s.visible = false;
     };
+    // 1F と 4F の両方を見ているとき、上の階の床（不透明な床とホール）にさえぎられる点か。
+    // 机の番号と札は深さで切らずに描いているので、床ごしに下の階の番号・札が見えてしまう（ユーザーの指摘）。
+    // 点からカメラへの線（上から見る 2D は真上への線）が、点より上の床の高さを横切る所が、その床の中なら隠れている
+    const roofs = [
+      ...venue.halls.filter((h) => h.level > 1).map((h) => ({ y: floorY(h.level), poly: h.poly, holes: [] as XZ[][] })),
+      ...venue.areas.filter((a) => a.level > 1 && !a.see && !a.sur).map((a) => ({ y: floorY(a.level), poly: a.poly, holes: a.holes ?? [] })),
+      // 箱（南の角の建物の 3F より上など）の上の面も
+      ...(venue.blocks ?? []).map((b) => ({ y: floorY(b.level) + (b.base ?? 0) + b.height, poly: b.poly, holes: [] as XZ[][] })),
+    ].map((r) => {
+      const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]);
+      return { ...r, box: [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)] };
+    });
+    const covered = (x: number, y: number, z: number) => {
+      if (!bothFloors || current === "walk") return false;
+      const cp = camera.position;
+      for (const r of roofs) {
+        if (r.y <= y + 0.3) continue;
+        let qx = x, qz = z;
+        if (current !== "top") {
+          if (cp.y <= r.y) continue;
+          const t = (r.y - y) / (cp.y - y);
+          qx = x + (cp.x - x) * t;
+          qz = z + (cp.z - z) * t;
+        }
+        if (qx < r.box[0] || qx > r.box[2] || qz < r.box[1] || qz > r.box[3]) continue;
+        if (pointInPolygon([qx, qz], r.poly) && !r.holes.some((h) => pointInPolygon([qx, qz], h))) return true;
+      }
+      return false;
+    };
     let hereName = "";
     const placeLabels = () => {
       const walk = current === "walk";
@@ -1755,7 +2027,9 @@ export function VenueView() {
           if (kind === "hall" && ppm >= 3.5) show = false;
           if (kind === "block" && ppm < 2.2) show = false;
           if (kind === "area" && ppm < 0.9) show = false;
+          if (kind === "sur" && (ppm < 1.3 || !surroundings.visible)) show = false;
         }
+        if (show && covered(s.position.x, s.position.y, s.position.z)) show = false;
         s.visible = show;
       }
       hideBehindWalls();
@@ -1793,7 +2067,7 @@ export function VenueView() {
             s.visible = !b || !hits(b);
             if (b && s.visible) placed.push(b);
           }
-        for (const k of ["aid", "door", "wc", "shutter"] as const)
+        for (const k of ["aid", "door", "wc", "shutter", "sur"] as const)
           for (const { s, kind } of labels) {
             if (kind !== k || !s.visible) continue;
             const b = box(s, LABEL_PX[k], false);
@@ -1892,10 +2166,12 @@ export function VenueView() {
             const px = Math.max(9, Math.min(14, ppm * 0.9 * (full ? 0.3 : 0.42)));
             for (const sp of pair ? [a, b] : [a]) {
               const [x, z] = spot(sp);
+              if (covered(x, y, z)) continue;
               const at = scr(x, y, z);
               if (at) write(full ? `${sp.block}-${String(sp.num).padStart(2, "0")}${sp.half}` : `${String(sp.num).padStart(2, "0")}${sp.half}`, px, at, 1 / ppm);
             }
           } else if (ppm * DESK_L >= 14) {
+            if (covered(mx, y, mz)) continue;
             const at = scr(mx, y, mz);
             if (at) write(String(a.num).padStart(2, "0"), Math.max(9, Math.min(13, ppm * DESK_L * 0.45)), at, 1 / ppm);
           }
@@ -1912,6 +2188,7 @@ export function VenueView() {
         if (ppm < 3 || ppm * DESK_L >= 14) continue;
         const side = e.side * Math.max(7 / ppm, VIEW_DESK_D / 2);
         const inward = -e.out * Math.max(7 / ppm, DESK_L / 2);
+        if (covered(x0, y, z0)) continue;
         const at = scr(x0 + c * inward - sn * side, y, z0 + sn * inward + c * side);
         if (at) write(String(e.num).padStart(2, "0"), 10, at, 1 / ppm);
       }
@@ -1952,6 +2229,7 @@ export function VenueView() {
             const x = (a.at[0] + b.at[0]) / 2 - Math.sin(a.angle) * a.side * out;
             const z = (a.at[1] + b.at[1]) / 2 + Math.cos(a.angle) * a.side * out;
             if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+            if (covered(x, floorY(lv), z)) continue;
             const label = String(a.num).padStart(2, "0");
             const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
             codeCtx.strokeText(label, sx, sy);
@@ -1974,6 +2252,7 @@ export function VenueView() {
           const c = Math.cos(l.angle), sn = Math.sin(l.angle);
           const x = l.start[0] + e.u * c, z = l.start[1] + e.u * sn;
           if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          if (covered(x, floorY(hallById.get(l.hall)!.level), z)) continue;
           const sideOff = e.side * Math.max(7, (TOP_DESK_D / 2) * ppm);
           const inward = -e.out * Math.max(7, (DESK_L / 2) * ppm);
           const sx = (x - cx) * ppm + w / 2 + c * inward - sn * sideOff;
@@ -2002,6 +2281,7 @@ export function VenueView() {
           const x = b.at[0] - Math.sin(b.angle) * b.side * out;
           const z = b.at[1] + Math.cos(b.angle) * b.side * out;
           if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          if (covered(x, floorY(lv), z)) continue;
           const label = full ? `${b.block}-${String(b.num).padStart(2, "0")}${b.half}` : `${String(b.num).padStart(2, "0")}${b.half}`;
           const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
           codeCtx.strokeText(label, sx, sy);

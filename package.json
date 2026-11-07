@@ -12,6 +12,7 @@
     "fetch:osm": "tsx scripts/fetch-osm.ts",
     "fetch:surroundings": "tsx scripts/fetch-osm-surroundings.ts",
     "fetch:coast": "tsx scripts/fetch-osm-coast.ts",
+    "fetch:detail": "tsx scripts/fetch-osm-detail.ts",
     "build:venue": "tsx scripts/build-venue.ts",
     "build:layout": "tsx scripts/build-layout.ts",
     "make:icons": "tsx scripts/make-icons.ts"

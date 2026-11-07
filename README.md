@@ -19,6 +19,8 @@
 | 中身 | 出典 |
 |---|---|
 | ホール・通路・まわりの建物・トイレの形と位置 | © OpenStreetMap contributors（ODbL 1.0）。`npm run fetch:osm` → `npm run build:venue` |
+| 「周辺も表示」の道・歩行者デッキ・緑地・木・横断歩道・駅の出入口・バス停 | © OpenStreetMap contributors（ODbL 1.0）。`npm run fetch:surroundings`・`npm run fetch:detail` → `npm run build:venue` |
+| 「周辺も表示」の建物の形と高さ | 3D都市モデル（Project PLATEAU）東京都23区（CityGML 2020年度、国土交通省、CC BY 4.0）を加工（indigo-lab の MVT から。屋根の外形と計測高さ）。`python scripts/fetch-plateau-buildings.py` → `npm run build:venue`。2020 年度より後の建物は OSM の形で、高さは OSM・公表の階数、なければ目安（`npm run build:venue` が一覧を出す） |
 | 机の配置（見本） | `npm run build:layout` が、ホールの形から仮に並べる。島の大きさはコミケの長机（1800×450mm）、1スペース＝机半分（a・b） |
 | 机の配置（前回 C108 の写し） | 準備会の「会場案内図・配置図」（サークル参加者向けの PDF）から `python scripts/import-comiket-layout.py 配置図.pdf` で作る（`data/private/layout-c108.json`）。PDF もできたファイルも git に入れない。公開に使うかは準備会に確かめてから。エディタの「読み込む」で入れる |
 
