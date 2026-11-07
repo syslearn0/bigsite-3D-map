@@ -135,7 +135,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     mode: "register",
     title: "机に印とメモ",
-    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけると、その下にメモの欄が出ます（任意・この端末の中だけに保存）。メモは一覧と印刷にも出ます。印とメモは日ごとに別です（同じ番号でも日が違えば別のサークル）。",
+    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。机を選ぶと、その下にメモの欄が出ます（任意・印をつけなくても書けます・この端末の中だけに保存）。メモは一覧と印刷にも出ます。印とメモは日ごとに別です（同じ番号でも日が違えば別のサークル）。",
   },
   {
     target: '[aria-label="3D にする"], [aria-label="2D にする"]',
@@ -473,7 +473,7 @@ export function VenueView() {
   const dayWorks = useMemo(() => worksOf(tags, day), [tags, day]);
   const [surround, setSurround] = useState(true); // 周辺の建物も立体で出す（開いた最初は出す）
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
-  const [print, setPrint] = useState<{ made: string; day: Day; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string; note: string }[] }[] } | null>(null);
+  const [print, setPrint] = useState<{ made: string; day: Day; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
@@ -2694,14 +2694,8 @@ export function VenueView() {
   const sel = selected !== null ? booths[selected] : null;
   const selHall = sel ? hallById.get(sel.hall)! : null;
   const selMark = sel ? marks[sel.code] : undefined;
-  // 同じ印をもう一度押すと外す。違う印を押すと付け替える
+  // 同じ印をもう一度押すと外す。違う印を押すと付け替える。メモは印と別に書けるので、印を外しても残す
   const toggleMark = (code: string, mark: Mark) => {
-    if (marks[code] === mark)
-      setNotes((o) => {
-        const n = { ...o };
-        delete n[code];
-        return n;
-      });
     setMarks((m) => {
       const n = { ...m };
       if (n[code] === mark) delete n[code];
@@ -2721,6 +2715,10 @@ export function VenueView() {
       .filter((c) => marks[c] === mark && codeIndex.has(c))
       .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
+  // 印はつけずにメモだけ書いた机
+  const memoOnly = Object.keys(notes)
+    .filter((c) => !marks[c] && codeIndex.has(c))
+    .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const openHalls = venue.halls.filter((h) => !h.closed);
   // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
   // ジャンルの一覧と、選んだジャンルの作品の一覧
@@ -2800,10 +2798,12 @@ export function VenueView() {
         const hs = ids.map((id) => hallById.get(id)!);
         const nums = hs.map((h) => h.name.replace(/[^0-9]/g, "")).join("・");
         const mine = marked.filter((m) => ids.includes(booths[m.booth].hall));
+        // 図の札は印の机だけ。下の一覧には、メモだけの机も入れる
+        const memos = memoOnly.map((c) => ({ booth: codeIndex.get(c)!, mark: null })).filter((m) => ids.includes(booths[m.booth].hall));
         return {
           title: `${hs[0].building}${nums}ホール（${hs[0].level}F）`,
           img: api.current?.snapshot(ids, mine) ?? "",
-          codes: mine
+          codes: [...mine, ...memos]
             .map(({ booth, mark }) => ({ code: booths[booth].code, mark, hall: hallById.get(booths[booth].hall)!.name, note: notes[booths[booth].code] ?? "" }))
             .sort((a, b) => a.code.localeCompare(b.code, "ja", { numeric: true })),
         };
@@ -2923,7 +2923,7 @@ export function VenueView() {
                 </button>
               </span>
             </div>
-            {lists.want.length + lists.maybe.length === 0 && (
+            {lists.want.length + lists.maybe.length + memoOnly.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末の中だけに保存します。</p>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
@@ -2958,6 +2958,24 @@ export function VenueView() {
                 </ul>
               </section>
             ))}
+            {memoOnly.length > 0 && (
+              <section style={{ marginTop: 8 }}>
+                <strong>📝 メモだけ {memoOnly.length}</strong>
+                <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
+                  {memoOnly.map((c) => (
+                    <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+                      <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
+                        {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
+                        <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>
+                      </button>
+                      <button className="chip small" onClick={() => setNote(c, "")} aria-label={`${c} のメモを消す`}>
+                        消す
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
         )}
 
@@ -3000,17 +3018,16 @@ export function VenueView() {
                 ✕
               </button>
             </div>
-            {selMark && (
-              <input
-                type="text"
-                aria-label="メモ（任意）"
-                placeholder="メモ（任意）　例：新刊 2 冊・午前中に"
-                maxLength={200}
-                value={notes[sel.code] ?? ""}
-                onChange={(e) => setNote(sel.code, e.target.value)}
-                style={{ width: "100%", marginTop: 8, minHeight: 40, boxSizing: "border-box" }}
-              />
-            )}
+            {/* メモは印をつけなくても書ける（ユーザーの指示） */}
+            <input
+              type="text"
+              aria-label="メモ（任意）"
+              placeholder="メモ（任意）　例：新刊 2 冊・午前中に"
+              maxLength={200}
+              value={notes[sel.code] ?? ""}
+              onChange={(e) => setNote(sel.code, e.target.value)}
+              style={{ width: "100%", marginTop: 8, minHeight: 40, boxSizing: "border-box" }}
+            />
           </div>
         )}
       </div>
@@ -3237,8 +3254,8 @@ export function VenueView() {
             {sec.codes.length > 0 && (
               <p className="print-marks">
                 {sec.codes.map((c) => (
-                  <span key={c.code} style={{ color: hexCss(MARK[c.mark].color) }}>
-                    {MARK[c.mark].icon} {c.code}（{c.hall}）{c.note ? `　${c.note}` : ""}
+                  <span key={c.code} style={c.mark ? { color: hexCss(MARK[c.mark].color) } : undefined}>
+                    {c.mark ? MARK[c.mark].icon : "📝"} {c.code}（{c.hall}）{c.note ? `　${c.note}` : ""}
                   </span>
                 ))}
               </p>

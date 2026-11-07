@@ -1649,8 +1649,19 @@ if (existsSync("data/osm/coast.json")) {
     ...sur.lines.filter((l) => l.kind === "steps").map((l) => ({ pts: l.pts, esc: !!l.esc, w: Math.max(3, l.w), line: l as SLine | null })),
   ];
   const usedSteps = new Set<SLine>();
+  // 会場の階段（stairs）と同じ所を通る OSM の階段は、会場の階段のほうで描くので描かない。エントランスプラザ（2F）から
+  // 西の屋上展示場（4F）へ上がる外の階段（way 381682023、layer 2）を、プラザから地上へ下りる階段と取りちがえて二重に描いていた
+  const sameAsVenueStair = (pts: XZ[]) => {
+    const [p, q] = [pts[0], pts.at(-1)!];
+    const d = (a2: XZ, b2: XZ) => Math.hypot(a2[0] - b2[0], a2[1] - b2[1]);
+    return stairs.some((s) => Math.min(d(p, s.from) + d(q, s.to), d(p, s.to) + d(q, s.from)) < 12);
+  };
   for (const c of cand) {
     const [a2, b2] = [c.pts[0], c.pts.at(-1)!];
+    if (sameAsVenueStair(c.pts)) {
+      if (c.line) usedSteps.add(c.line);
+      continue;
+    }
     const da = deckDist(a2), db = deckDist(b2);
     if (Math.min(da, db) > 3 || Math.abs(da - db) < 1) continue; // どちらの端もデッキから遠い（地上の階段）か、両方の端がデッキの上
     if (inVenue(centroid(c.pts)) && !c.line) continue;
