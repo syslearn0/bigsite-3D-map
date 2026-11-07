@@ -94,6 +94,9 @@ const MARKS_KEY = "comiket3d:marks-by-day";
 const NOTES_KEY = "comiket3d:notes-by-day";
 const OLD_MARKS_KEY = "comiket3d:marks"; // 日を分けていなかったころの保存（読んだら 1 日目へ移す）
 const OLD_NOTES_KEY = "comiket3d:notes";
+// 当日・計画のモードでつける「行った」（日 → 配置番号 → つけた時刻）。行った机とピンは灰色にする
+const VISITED_KEY = "comiket3d:visited-by-day";
+const VISITED_COLOR = 0x8e8e93;
 const OLD_WISH_KEY = "comiket3d:wish"; // 「行きたい」だけだったころの保存
 const PINS_KEY = "comiket3d:pins";
 const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
@@ -148,7 +151,7 @@ const TOUR_STEPS: TourStep[] = [
     menu: true,
     mode: "plan",
     title: "当日・計画のモード",
-    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D です。配置番号の欄は、このモードでも地図の上にあります。",
+    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D です。このモードでは新しく印はつけず、机（ピン）を押して「✓ 行った」を押すと、その机とピンが灰色になります。一覧からも 1 回で「行った」にできます。",
   },
   { target: '[aria-label="場所を指して歩く"]', mode: "plan", title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
   { target: '[aria-label="周辺も表示"]', mode: "plan", title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
@@ -178,6 +181,9 @@ function loadMarks(): ByDay<Mark> {
     const old = JSON.parse(localStorage.getItem(OLD_WISH_KEY) ?? "[]");
     return Object.fromEntries((Array.isArray(old) ? old : []).map((c: string) => [c, "want" as Mark]));
   });
+}
+function loadVisited(): ByDay<number> {
+  return readByDay<number>(VISITED_KEY, () => ({}));
 }
 function loadNotes(): ByDay<string> {
   return readByDay<string>(NOTES_KEY, () => {
@@ -436,8 +442,8 @@ type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
   setBoth: (on: boolean) => void;
-  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
-  setPins: (list: { booth: number; mark: Mark }[]) => void;
+  recolor: (colorByGenre: boolean, marks: Record<string, Mark>, visited: Record<string, number>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
+  setPins: (list: { booth: number; mark: Mark | null; done: boolean }[]) => void;
   focusBooth: (i: number) => void;
   focusLine: (line: number) => void;
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
@@ -512,8 +518,17 @@ export function VenueView() {
   const [marksByDay, setMarksByDay] = useState<ByDay<Mark>>(loadMarks);
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
   const [notesByDay, setNotesByDay] = useState<ByDay<string>>(loadNotes);
+  const [visitedByDay, setVisitedByDay] = useState<ByDay<number>>(loadVisited);
   const marks = marksByDay[day];
   const notes = notesByDay[day];
+  const visited = visitedByDay[day];
+  const toggleVisited = (code: string) =>
+    setVisitedByDay((all) => {
+      const n = { ...all[day] };
+      if (n[code]) delete n[code];
+      else n[code] = Date.now();
+      return { ...all, [day]: n };
+    });
   const setMarks = (f: (m: Record<string, Mark>) => Record<string, Mark>) => setMarksByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const setNotes = (f: (n: Record<string, string>) => Record<string, string>) => setNotesByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
@@ -542,6 +557,11 @@ export function VenueView() {
       localStorage.removeItem(OLD_NOTES_KEY);
     } catch {}
   }, [notesByDay]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(VISITED_KEY, JSON.stringify(visitedByDay));
+    } catch {}
+  }, [visitedByDay]);
   useEffect(() => {
     try {
       localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
@@ -1866,7 +1886,7 @@ export function VenueView() {
       }
     };
 
-    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, sel: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => {
+    const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, visited: Record<string, number>, sel: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => {
       const col = new THREE.Color();
       // ジャンル・作品（とキャラ）を選んでいるとき、その机か
       const hit = (b: Booth) => {
@@ -1883,6 +1903,7 @@ export function VenueView() {
         index.forEach((bi, k) => {
           const b = booths[bi];
           if (bi === sel) col.setHex(SELECT_COLOR);
+          else if (visited[b.code]) col.setHex(VISITED_COLOR);
           else if (marks[b.code]) col.setHex(MARK[marks[b.code]].color);
           else if (colorByGenre && !hit(b)) col.setHex(0xe6e5de); // 選んだ作品でない机は薄く
           else if (colorByGenre && dayTags) {
@@ -2019,17 +2040,18 @@ export function VenueView() {
 
     // 印をつけた机のピン。数は少ないので、変わるたびに作り直す
     const pins: { s: THREE.Sprite; level: number; base: THREE.Vector3; booth: number }[] = [];
-    const setPins = (list: { booth: number; mark: Mark }[]) => {
+    const setPins = (list: { booth: number; mark: Mark | null; done: boolean }[]) => {
       for (const p of pins) {
         scene.remove(p.s);
         p.s.material.map?.dispose();
         p.s.material.dispose();
       }
       pins.length = 0;
-      for (const { booth, mark } of list) {
+      for (const { booth, mark, done } of list) {
         const b = booths[booth];
         const lv = hallById.get(b.hall)!.level;
-        const s = pinSprite(MARK[mark].color, MARK[mark].icon);
+        // 行った机は灰色に ✓（ユーザーの指示：行った所はピンの色を変える）
+        const s = done || !mark ? pinSprite(VISITED_COLOR, "✓") : pinSprite(MARK[mark].color, MARK[mark].icon);
         s.position.set(b.at[0], floorY(lv) + 0.75, b.at[1]);
         scene.add(s);
         pins.push({ s, level: lv, base: s.scale.clone(), booth });
@@ -2653,13 +2675,19 @@ export function VenueView() {
   useEffect(() => {
     api.current?.setSurround(surround);
   }, [surround]);
-  useEffect(() => api.current?.recolor(byGenre, marks, selected, dayTags, genre, work, char), [byGenre, marks, selected, dayTags, genre, work, char]);
+  useEffect(() => api.current?.recolor(byGenre, marks, visited, selected, dayTags, genre, work, char), [byGenre, marks, visited, selected, dayTags, genre, work, char]);
   useEffect(() => {
-    const list = Object.entries(marks)
-      .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
-      .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark }));
+    // 印の机（ピンを立てる印だけ）と、印なしで「行った」をつけた机
+    const list = [
+      ...Object.entries(marks)
+        .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
+        .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark: mark as Mark | null, done: !!visited[code] })),
+      ...Object.keys(visited)
+        .filter((code) => !marks[code] && codeIndex.has(code))
+        .map((code) => ({ booth: codeIndex.get(code)!, mark: null, done: true })),
+    ];
     api.current?.setPins(list);
-  }, [marks, pinsOn, codeIndex]);
+  }, [marks, visited, pinsOn, codeIndex]);
 
   const select = useCallback(
     (i: number) => {
@@ -2715,9 +2743,15 @@ export function VenueView() {
       .filter((c) => marks[c] === mark && codeIndex.has(c))
       .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
-  // 印はつけずにメモだけ書いた机
-  const memoOnly = Object.keys(notes)
+  // 印なしで「行った」をつけた机（当日に寄った所）
+  const visitedOnly = Object.keys(visited)
     .filter((c) => !marks[c] && codeIndex.has(c))
+    .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+  const marked = lists.want.length + lists.maybe.length;
+  const markedDone = [...lists.want, ...lists.maybe].filter((c) => visited[c]).length;
+  // 印はつけずにメモだけ書いた机（「行った」の机は上に出すので除く）
+  const memoOnly = Object.keys(notes)
+    .filter((c) => !marks[c] && !visited[c] && codeIndex.has(c))
     .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const openHalls = venue.halls.filter((h) => !h.closed);
   // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
@@ -2913,7 +2947,10 @@ export function VenueView() {
         {listOpen && (
           <div style={{ ...SHEET, top: 8, bottom: "auto", maxHeight: "60%", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong>印をつけたサークル（{day}日目）</strong>
+              <strong>
+                印をつけたサークル<span style={{ whiteSpace: "nowrap" }}>（{day}日目）</span>
+                {mode === "plan" && marked > 0 && <span style={{ fontWeight: 400, fontSize: ".85rem", marginLeft: 6, whiteSpace: "nowrap" }}>✓ 行った {markedDone}/{marked}</span>}
+              </strong>
               <span style={{ display: "flex", gap: 6 }}>
                 <button className="chip small" onClick={startPrint}>
                   配置図を印刷
@@ -2923,7 +2960,7 @@ export function VenueView() {
                 </button>
               </span>
             </div>
-            {lists.want.length + lists.maybe.length + memoOnly.length === 0 && (
+            {marked + visitedOnly.length + memoOnly.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末の中だけに保存します。</p>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
@@ -2942,22 +2979,52 @@ export function VenueView() {
                     const other: Mark = m === "want" ? "maybe" : "want";
                     return (
                       <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
-                        <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
+                        <button
+                          className="chip small"
+                          style={{ flex: 1, textAlign: "left", ...(visited[c] ? { color: "var(--muted)", textDecoration: "line-through" } : {}) }}
+                          onClick={() => select(codeIndex.get(c)!)}
+                        >
                           {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
                           {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
                         </button>
-                        <button className="chip small" onClick={() => toggleMark(c, other)}>
-                          {MARK[other].icon} {MARK[other].label}へ
-                        </button>
-                        <button className="chip small" onClick={() => toggleMark(c, m)} aria-label={`${c} の印を外す`}>
-                          外す
-                        </button>
+                        {mode === "plan" ? (
+                          <button className="chip small" style={{ minHeight: 40, minWidth: 92 }} aria-pressed={!!visited[c]} onClick={() => toggleVisited(c)}>
+                            {visited[c] ? "✓ 行った" : "行った？"}
+                          </button>
+                        ) : (
+                          <>
+                            <button className="chip small" onClick={() => toggleMark(c, other)}>
+                              {MARK[other].icon} {MARK[other].label}へ
+                            </button>
+                            <button className="chip small" onClick={() => toggleMark(c, m)} aria-label={`${c} の印を外す`}>
+                              外す
+                            </button>
+                          </>
+                        )}
                       </li>
                     );
                   })}
                 </ul>
               </section>
             ))}
+            {visitedOnly.length > 0 && (
+              <section style={{ marginTop: 8 }}>
+                <strong style={{ color: hexCss(VISITED_COLOR) }}>✓ 行った（印なし） {visitedOnly.length}</strong>
+                <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
+                  {visitedOnly.map((c) => (
+                    <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+                      <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
+                        {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
+                        {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
+                      </button>
+                      <button className="chip small" aria-label={`${c} の「行った」を取り消す`} onClick={() => toggleVisited(c)}>
+                        取り消す
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {memoOnly.length > 0 && (
               <section style={{ marginTop: 8 }}>
                 <strong>📝 メモだけ {memoOnly.length}</strong>
@@ -3000,12 +3067,31 @@ export function VenueView() {
               　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              {MARKS.map((m) => (
-                <button key={m} style={{ flex: 1, minHeight: 44, fontWeight: 700 }} aria-pressed={selMark === m} onClick={() => toggleMark(sel.code, m)}>
-                  {MARK[m].icon} {MARK[m].label}
-                  {selMark === m ? "（外す）" : ""}
-                </button>
-              ))}
+              {/* 当日・計画のモードでは新しく印をつけず、「行った」を 1 回押すだけにする（ユーザーの指示） */}
+              {mode === "plan" ? (
+                <>
+                  {/* 押しやすいように 1 行まるごと使う（スマホで折り返さない） */}
+                  <button
+                    style={{ flex: "1 1 100%", minHeight: 52, fontWeight: 700, fontSize: "1.1rem" }}
+                    aria-pressed={!!visited[sel.code]}
+                    onClick={() => toggleVisited(sel.code)}
+                  >
+                    {visited[sel.code] ? "✓ 行った（取り消す）" : "✓ 行った"}
+                  </button>
+                  {selMark && (
+                    <span style={{ alignSelf: "center", fontWeight: 700, marginRight: "auto", color: hexCss(MARK[selMark].color) }}>
+                      {MARK[selMark].icon} {MARK[selMark].label}
+                    </span>
+                  )}
+                </>
+              ) : (
+                MARKS.map((m) => (
+                  <button key={m} style={{ flex: 1, minHeight: 44, fontWeight: 700 }} aria-pressed={selMark === m} onClick={() => toggleMark(sel.code, m)}>
+                    {MARK[m].icon} {MARK[m].label}
+                    {selMark === m ? "（外す）" : ""}
+                  </button>
+                ))
+              )}
               {view !== "walk" && (
                 <button
                   style={{ minHeight: 44 }}
@@ -3055,7 +3141,7 @@ export function VenueView() {
           </button>
         </div>
         <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "4px 0 0" }}>
-          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）"}
+          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）。机を押して「✓ 行った」で、行った所が灰色になります"}
         </p>
         <>
             <h3>日</h3>
