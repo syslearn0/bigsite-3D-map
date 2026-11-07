@@ -107,7 +107,7 @@ const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
 const PICK = '[data-tour="picker"]';
 const MODE_SEG = '[aria-label="モード"]';
 const TOUR_STEPS: TourStep[] = [
-  { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。ドラッグで動かし、2 本指（パソコンはホイール）で拡大・回転できます。" },
+  { title: "ようこそ", text: "即売会の会場を立体で見られる地図です。1 本指（パソコンは左ドラッグ）で動かし、2 本指（パソコンは右ドラッグ）で向きを変えます。拡大は 2 本指のつまみ（パソコンはホイール）です。" },
   { target: '[aria-label="メニュー"]', title: "メニュー", text: "左上のこのボタンで、サイドバーを開きます。" },
   {
     target: "aside.side",
@@ -308,6 +308,19 @@ function flatPoly(poly: XZ[], color: number, y: number, opacity = 1, holes: XZ[]
   );
   m.rotation.x = -Math.PI / 2;
   m.position.y = y;
+  return m;
+}
+
+// 床の厚み：平らな床のすぐ下に、床の色を少し暗くした板（ユーザーの指示「すべての床を少し厚みつけて」）。
+// 2F・4F の床は 0.6m、1F の床は地面（-0.2m）まで届く 0.25m。上の面は床より少し下にして、床の色とちらつかないように
+function slabUnder(poly: XZ[], color: number, y: number, level: number, holes: XZ[][] = []) {
+  const t = level > 1 ? 0.6 : 0.25;
+  const m = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(shapeOf(poly, holes), { depth: t, bevelEnabled: false }),
+    new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.8) }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = y - t - 0.005;
   return m;
 }
 
@@ -946,9 +959,12 @@ export function VenueView() {
       const f = flatPoly(a.poly, color, y + (a.under ? 0.01 : south ? 0.05 : 0.02), a.see ? 0.8 : 1, a.holes ?? []);
       if (a.see) f.userData.see = 0.8; // 下（ガレリア）が少し透けて見える床
       areaColor.set(a, color);
+      // 床の厚み（下が透けて見える床と、ほかの床の下に敷いた床にはつけない）
+      const slab = a.see || a.under ? null : slabUnder(a.poly, color, f.position.y, a.level, a.holes ?? []);
       // 会場の外（やぐら橋とその先の地上）は、「周辺も表示」のときだけ。階で薄くしない
       if (a.sur) {
         surroundings.add(f);
+        if (slab) surroundings.add(slab);
         if (a.part) continue;
         const label = textSprite(a.name, { fg: "#55584f", height: 3.2, px: 32 });
         const [cx, cz] = insidePoint(a.poly, a.holes ?? []);
@@ -959,6 +975,10 @@ export function VenueView() {
       }
       scene.add(f);
       partsOf(a.level).floors.push(f);
+      if (slab) {
+        scene.add(slab);
+        partsOf(a.level).floors.push(slab);
+      }
       if (link) {
         // 連絡通路（東展示棟 2F・連絡ブリッジ・北コンコース）：吹き抜けのふちに手すり（高さ 1.1m の薄い板）
         for (const h of a.holes ?? []) {
@@ -1176,6 +1196,9 @@ export function VenueView() {
       const f = flatPoly(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05);
       scene.add(f);
       partsOf(h.level).floors.push(f);
+      const hs = slabUnder(h.poly, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], y + 0.05, h.level);
+      scene.add(hs);
+      partsOf(h.level).floors.push(hs);
       const w = walls(
         h.poly,
         y,
@@ -1411,9 +1434,13 @@ export function VenueView() {
             if (o1 - o0 < 1) return;
             const vAt = (u: number) => vp + ((vq - vp) * (u - up)) / (uq - up);
             const at = (u: number, v: number): XZ => [a[0] + c * u - sn * v, a[1] + sn * u + c * v];
-            const f = flatPoly([at(o0, 0), at(o1, 0), at(o1, vAt(o1)), at(o0, vAt(o0))], h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], floorY(h.level) + 0.05);
+            const gap: XZ[] = [at(o0, 0), at(o1, 0), at(o1, vAt(o1)), at(o0, vAt(o0))];
+            const f = flatPoly(gap, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], floorY(h.level) + 0.05);
             scene.add(f);
             partsOf(h.level).floors.push(f);
+            const gs = slabUnder(gap, h.closed ? 0xc4c4bf : BUILDING_COLOR[h.building], floorY(h.level) + 0.05, h.level);
+            scene.add(gs);
+            partsOf(h.level).floors.push(gs);
           });
         });
       }
@@ -1746,6 +1773,10 @@ export function VenueView() {
         // 拡大は指・カーソルの場所へ向かって
         c.screenSpacePanning = false;
         c.zoomToCursor = true;
+        // 1 本指（マウスは左ドラッグ）は床に沿って水平に動かす。向きを変えるのは 2 本指（マウスは右ドラッグ）。拡大は 2 本指のつまみとホイール
+        // （ユーザーの指示。三.js の OrbitControls の初めは 1 本指で回る）
+        c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+        c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
         c.minDistance = 5;
         c.maxDistance = 1200;
         c.target.copy(focus);
@@ -2030,6 +2061,41 @@ export function VenueView() {
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerup", onUp);
+    // 3D：2 本指をひねって向きを変える（ユーザーの指示「二本指で向きを変える」）。OrbitControls の 2 本指は、つまむと拡大・
+    // 2 本そろえてずらすと回転だけで、ひねりには反応しないので、指を結ぶ線の向きが変わった分だけ、注視点のまわりを水平に回す
+    const twist = new Map<number, { x: number; y: number }>();
+    let twistA: number | null = null;
+    const twistAngle = () => {
+      const [a, b] = [...twist.values()];
+      return Math.atan2(b.y - a.y, b.x - a.x);
+    };
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const onTwistDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      twist.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      twistA = twist.size === 2 ? twistAngle() : null;
+    };
+    const onTwistMove = (e: PointerEvent) => {
+      if (!twist.has(e.pointerId)) return;
+      twist.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (twist.size !== 2 || twistA === null || current !== "orbit" || !(controls instanceof OrbitControls)) return;
+      const a = twistAngle();
+      let d = a - twistA;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      twistA = a;
+      const off = persp.position.clone().sub(controls.target).applyAxisAngle(yAxis, d);
+      persp.position.copy(controls.target).add(off);
+      controls.update();
+    };
+    const onTwistUp = (e: PointerEvent) => {
+      twist.delete(e.pointerId);
+      twistA = twist.size === 2 ? twistAngle() : null;
+    };
+    renderer.domElement.addEventListener("pointerdown", onTwistDown);
+    renderer.domElement.addEventListener("pointermove", onTwistMove);
+    renderer.domElement.addEventListener("pointerup", onTwistUp);
+    renderer.domElement.addEventListener("pointercancel", onTwistUp);
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
       if (e.type === "keydown") keys.add(e.key.toLowerCase());

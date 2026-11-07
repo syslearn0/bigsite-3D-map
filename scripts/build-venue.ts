@@ -1098,6 +1098,35 @@ if (existsSync("data/osm/surroundings.json")) {
   }
 }
 
+// 外のデッキ（2F）のうち、エントランスプラザの北から北へ、東4〜6 の手前を東へ行く細い歩道橋は、航空写真の歩道橋に合っているのは
+// OSM の歩行者デッキの広場（way 174407849・174407850・174407854）のほうで、上で手で描いた形は 8〜13m ずれて二重に見えていた
+// （ユーザーの指摘、2026-11-08）。この区間（u -140〜-40・v -275〜-36）は手で描いた形を捨てて OSM の形にする。
+// 屋内の床（北コンコース・連絡ブリッジ・東ガレリアの 2F・エントランスホール）にかかる所は、これまでどおり引く
+{
+  const rg = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+  const ur = (r: [number, number][]): XZ[] => r.slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+  const sz = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
+  const zone = [rg(fromUV([[-140, -36], [-40, -36], [-40, -275], [-140, -275]]))];
+  const osm = deckAreas.filter((pl) => {
+    const [u, v] = toUV(centroid(pl));
+    return u > -140 && u < -40 && v > -275 && v < -36;
+  });
+  const olds = areas.filter((a) => a.name === "外のデッキ（2F）");
+  if (osm.length && olds.length) {
+    let mp = polygonClipping.union([rg(olds[0].poly), ...(olds[0].holes ?? []).map(rg)], ...olds.slice(1).map((a) => [rg(a.poly), ...(a.holes ?? []).map(rg)]));
+    mp = polygonClipping.difference(mp, zone);
+    mp = polygonClipping.union(mp, ...osm.map((pl) => [rg(pl)]));
+    for (const a of areas.filter((x) => x.level === 2 && !x.outdoor && ["北コンコース", "連絡ブリッジ", "東展示棟 2F", "エントランスホール"].includes(x.name)))
+      mp = polygonClipping.difference(mp, [rg(a.poly), ...(a.holes ?? []).map(rg)]);
+    for (let i = areas.length - 1; i >= 0; i--) if (areas[i].name === "外のデッキ（2F）") areas.splice(i, 1);
+    mp.map((pg) => ({ poly: ur(pg[0]), holes: pg.slice(1).map(ur) }))
+      .filter((pc) => sz(pc.poly) > 20)
+      .sort((a, b) => sz(b.poly) - sz(a.poly))
+      .forEach((pc, i) => areas.push({ name: "外のデッキ（2F）", level: 2, poly: pc.poly, ...(pc.holes.length ? { holes: pc.holes } : {}), outdoor: true, ...(i > 0 ? { part: true } : {}) }));
+    console.log(`外のデッキ（2F）：歩道橋の区間を OSM の形に（${osm.length} 個）→ ${areas.filter((a) => a.name === "外のデッキ（2F）").length} 枚`);
+  }
+}
+
 // 海（「周辺も表示」のときだけ）：OSM の海岸線（data/osm/coast.json、npm run fetch:coast が作る）から作る。
 // 航空写真と重ねて、岸が合っていることを確かめた。海岸線は「進む向きの右が海」なので、範囲の四角で切った線を、
 // 四角のふちを時計回り（北が上の地図で見て）にたどってつなぐと、海の形になる。四角の中で閉じた輪は島（反時計回り）か池
@@ -1513,6 +1542,25 @@ if (existsSync("data/osm/coast.json")) {
     }
     buildings.push({ poly: b.poly, h: b.h, ...(thin ? { kind: "canopy" as const } : {}) });
   });
+  // 駅の建物が PLATEAU で 2 棟に分かれている所（有明駅：北西と南東の半分が 50m² 重なる）は 1 棟にまとめる。
+  // 分かれたままだと、高さの違う屋根が 2 枚ずれて重なって見えた（ユーザーの指摘：有明駅のまわりが崩れている）
+  for (let i = buildings.length - 1; i >= 0; i--) {
+    const a = buildings[i];
+    if (a.kind !== "station") continue;
+    const j = buildings.findIndex((b2, k) => k !== i && b2.kind === "station" && (a.poly.some((q) => pointInPolygon(q, b2.poly)) || b2.poly.some((q) => pointInPolygon(q, a.poly))));
+    if (j < 0) continue;
+    const b2 = buildings[j];
+    const u = polygonClipping.union([[...a.poly, a.poly[0]].map(([x, z]) => [x, z] as [number, number])], [[...b2.poly, b2.poly[0]].map(([x, z]) => [x, z] as [number, number])]);
+    if (u.length !== 1) continue;
+    b2.poly = u[0][0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ);
+    b2.h = Math.max(a.h, b2.h);
+    buildings.splice(i, 1);
+  }
+  // 高い建物の上の庭の小道（OSM の layer ≥ 1 の歩道。有明駅の東の、有明の丘の防災拠点のあたりの way）は、デッキの高さ（12m）だと
+  // 建物の中を通って見えた（ユーザーの指摘：有明駅のまわりが崩れている）。その建物のどの高さの屋上か資料で決められないので、描かない
+  sur.lines = sur.lines.filter(
+    (l) => l.kind !== "deck" || !buildings.some((b) => !b.kind && b.h >= FLOOR_Y[2] + 2 && l.pts.filter((q) => pointInPolygon(q, b.poly)).length / l.pts.length >= 0.6),
+  );
   // 名前：OSM の名前のある大きい建物（1500m² 以上）を、いちばん重なる PLATEAU の建物に付ける（名前の札にする）
   oBuildings.forEach((o, i) => {
     if (!o.t.name || ringArea(o.poly) < 1500 || fO[i] < 0.5) return;
