@@ -121,7 +121,7 @@ const TOUR_STEPS: TourStep[] = [
     menu: true,
     mode: "register",
     title: "作品を登録のモード",
-    text: "行きたい作品のスペースに印をつけるモードです。地図は机が見やすい上からの 2D になり、配置番号の欄が地図の上にいつも出ます。",
+    text: "行きたい作品のスペースに印をつけるモードです。地図は机が見やすい上からの 2D になります。",
   },
   {
     target: PICK,
@@ -145,7 +145,7 @@ const TOUR_STEPS: TourStep[] = [
     menu: true,
     mode: "plan",
     title: "当日・計画のモード",
-    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D で、配置番号の欄はサイドバーの中にあります。",
+    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D です。配置番号の欄は、このモードでも地図の上にあります。",
   },
   { target: '[aria-label="場所を指して歩く"]', mode: "plan", title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
   { target: '[aria-label="周辺も表示"]', mode: "plan", title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
@@ -446,7 +446,7 @@ export function VenueView() {
   const [genre, setGenre] = useState<string | null>(null);
   const [work, setWork] = useState<string | null>(null);
   const [char, setChar] = useState<string | null>(null);
-  // 2 つのモード：作品を登録する（最初は 2D・配置番号の欄をいつも出す）と、当日に使う・計画する（最初は 3D）。
+  // 2 つのモード：作品を登録する（最初は 2D）と、当日に使う・計画する（最初は 3D）。配置番号の欄はどちらでも地図の上に出す。
   // 開いたときはいつも「当日・計画」（ユーザーの確認）
   const [mode, setMode] = useState<Mode>("plan");
   const [menu, setMenu] = useState(false); // サイドバー
@@ -2721,7 +2721,7 @@ export function VenueView() {
     cancelWalk();
     setView(view === "top" ? "orbit" : "top");
   };
-  // 配置番号を選ぶ欄（列 → 番号 → a・b）。作品を登録するモードでは地図の上に、当日・計画のモードではサイドバーに
+  // 配置番号を選ぶ欄（列 → 番号 → a・b）。どちらのモードでも地図の上に
   const codePicker = (
     <div style={{ display: "flex", gap: 6, alignItems: "center", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 10, padding: 4, boxShadow: "0 1px 6px rgba(0,0,0,.12)" }}>
       <select
@@ -2806,16 +2806,15 @@ export function VenueView() {
     {/* 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app） */}
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
       <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
-        {/* いつも出すもの：サイドバーを開くボタン、2D・3D、歩く、周辺。作品を登録するモードでは、配置番号の欄も */}
+        {/* いつも出すもの：サイドバーを開くボタン、配置番号の欄、2D・3D、歩く、周辺 */}
         <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: 8, alignItems: "flex-start", pointerEvents: "none" }}>
           <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="メニュー" onClick={() => setMenu(true)}>
             <Icon name="menu" />
           </button>
-          {mode === "register" && (
-            <div data-tour="picker" style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>
-              {codePicker}
-            </div>
-          )}
+          {/* 配置番号の欄はモードによらずいつも地図の上に（ユーザーの指示） */}
+          <div data-tour="picker" style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>
+            {codePicker}
+          </div>
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
             <button className="icon-btn" aria-label={view === "top" ? "3D にする" : "2D にする"} onClick={toggle3d}>
               {/* 絵より文字のほうが分かりやすい（ユーザーの確認）。押すとなる見え方を出す */}
@@ -2856,7 +2855,8 @@ export function VenueView() {
         )}
         {here && <div style={{ ...OVER, bottom: 22, right: 8, fontWeight: 700, fontSize: ".85rem" }}>{here}{floor === 4 ? "（4F）" : ""}</div>}
         {walkPending && (
-          <div role="status" style={{ position: "absolute", left: "50%", top: 12, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
+          // 配置番号の欄（いつも上にある）と、電波がないときの札の下に出す
+          <div role="status" style={{ position: "absolute", left: "50%", top: online ? 64 : 116, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
             <span>歩き始める場所を、地図の上で押してください。そこにピンを立てて、その場所から歩きます</span>
             <button className="chip small" onClick={cancelWalk}>やめる</button>
           </div>
@@ -3018,12 +3018,6 @@ export function VenueView() {
         <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "4px 0 0" }}>
           {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）"}
         </p>
-        {mode === "plan" && (
-          <>
-            <h3>配置番号</h3>
-            <div data-tour="picker">{codePicker}</div>
-          </>
-        )}
         <>
             <h3>日</h3>
             <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
