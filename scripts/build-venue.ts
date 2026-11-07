@@ -404,9 +404,14 @@ const areas: Area[] = [
     // 西と南のあいだ：OSM の形の東の端（u 210〜230）は、斜めの切れ端が多く、南展示棟の壁ともすき間がある。
     // 東の端は、南展示棟の西の壁（u 236）までの、壁に直角な形にする：u 219〜236 の南北の通路（v 12.4〜106.3）と、
     // その南の端から西へのびる帯（v 106.3〜123.3）
+    // 西の端（u -80：エントランスプラザの南の端から、道を渡る橋と階段のある所）までのばし、南の角の建物の南の端の外（v 118〜126）も
+    // 帯でつなぐ（ユーザーの指示：西と南のあいだの 1F を、西の端から端まで青い床でつなぐ。航空写真で、建物の南の歩道が u -80 まで続き、
+    // 角の建物の南の外も歩道）
     sp1.poly = biggest(
       polygonClipping.union(
         polygonClipping.intersection([ring(sp1.poly)], [ring(fromUV([[-1000, -1000], [216, -1000], [216, 1000], [-1000, 1000]]))]),
+        [ring(fromUV([[-80, 103.8], [8, 103.8], [8, 118.6], [-80, 118.6]]))],
+        [ring(fromUV([[190, 118], [236, 118], [236, 126], [190, 126]]))],
         [ring(fromUV([[213, 106.3], [236, 106.3], [236, 123.3], [213, 123.3]]))],
         [ring(fromUV([[219, 12.4], [236, 12.4], [236, 106.3], [219, 106.3]]))],
       ),
@@ -1040,12 +1045,12 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // どこも同じ 17m（2F の歩行者デッキ 12m と、やぐら橋の白い屋根 15.3m の上を通る高さ。OSM の layer は区間・線ごとにまちまちで、
 // そのまま高さにすると 2 本の線路の高さがずれる）。ホームは 17.5m
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
-type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck" };
+type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; esc?: boolean }; // esc：エスカレーター（OSM の conveying）
 type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
 const RAIL_Y = 17; // ゆりかもめの高架の高さ（上の説明）
-const deckSteps: XZ[][] = []; // 歩行者デッキへ上る階段（OSM の layer ≥ 1 の steps）
+const deckSteps: { pts: XZ[]; esc: boolean }[] = []; // 歩行者デッキへ上る階段（OSM の layer ≥ 1 の steps）
 const gateLines: XZ[][] = []; // 駅の改札口へ行くデッキの歩道（OSM の名前に「改札」）
 const deckAreas: XZ[][] = []; // 歩行者デッキの広場（OSM の layer ≥ 1 の閉じた pedestrian・area=yes）
 if (existsSync("data/osm/surroundings.json")) {
@@ -1077,7 +1082,7 @@ if (existsSync("data/osm/surroundings.json")) {
       const elevated = layer >= 2 || t.highway === "pedestrian" || t.bridge === "yes" || t.level !== undefined;
       if (walk && layer >= 1 && elevated) {
         const closed = pts.length > 3 && pts[0][0] === pts.at(-1)![0] && pts[0][1] === pts.at(-1)![1];
-        if (t.highway === "steps") deckSteps.push(pts);
+        if (t.highway === "steps") deckSteps.push({ pts, esc: t.conveying === "yes" });
         else if (t.area === "yes" || (t.highway === "pedestrian" && closed)) deckAreas.push(pts.slice(0, -1));
         else if (/改札/.test(t.name ?? "")) gateLines.push(pts);
         else sur.lines.push({ pts, y: FLOOR_Y[2], w: t.highway === "pedestrian" ? 8 : 5, kind: "deck" });
@@ -1086,7 +1091,7 @@ if (existsSync("data/osm/surroundings.json")) {
       // 高架の道路は、2F の床より少し下（8m）に
       const y = layer >= 1 && !walk ? 8 : walk ? 0.06 : 0.03;
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
-      else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road" });
+      else sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road", ...(t.conveying === "yes" ? { esc: true } : {}) });
     }
   }
 }
@@ -1602,15 +1607,55 @@ if (existsSync("data/osm/coast.json")) {
     busStops.push({ at, name });
   }
   const taxis = det.filter((e) => e.tags?.amenity === "taxi" && e.lat).map((e) => project(ORIGIN, e.lat!, e.lon!));
-  // 歩行者デッキへ上る階段：デッキの線の端に近いほうの端を 12m に
-  const deckEnds = sur.lines.filter((l) => l.kind === "deck").flatMap((l) => l.pts);
-  const dist = (q: XZ) => Math.min(...deckEnds.map((d) => Math.hypot(d[0] - q[0], d[1] - q[1])));
-  const deckStairs = deckSteps
-    .filter((pl) => !inVenue(centroid(pl)))
-    .map((pl) => {
-      const [a, b] = [pl[0], pl.at(-1)!];
-      return dist(a) < dist(b) ? { from: a, to: b } : { from: b, to: a };
-    });
+  // 歩行者デッキと地上をむすぶ階段・エスカレーター：OSM の階段（layer のないものも）のうち、片方の端がデッキ（広場・線）か
+  // 会場の 2F の床にかかっているもの。その端を 2F の高さ、もう片方を地上にする（ユーザーの指摘：駅への道のデッキから 1F に降りられない。
+  // 東京ビッグサイト駅の前の階段 way 243799255・243799257 などは layer がなく、地上の平らな帯として描いていた）
+  const segDist = (q: XZ, a2: XZ, b2: XZ) => {
+    const dx = b2[0] - a2[0], dz = b2[1] - a2[1], L2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((q[0] - a2[0]) * dx + (q[1] - a2[1]) * dz) / L2));
+    return Math.hypot(q[0] - a2[0] - t * dx, q[1] - a2[1] - t * dz);
+  };
+  const polyDist = (q: XZ, pl: XZ[]) => (pointInPolygon(q, pl) ? 0 : Math.min(...pl.map((a2, i) => segDist(q, a2, pl[(i + 1) % pl.length]))));
+  const lv2Polys = areas.filter((a) => a.level === 2).map((a) => a.poly);
+  const deckDist = (q: XZ) =>
+    Math.min(
+      ...decks.map((d) => polyDist(q, d.poly)),
+      ...sur.lines.filter((l) => l.kind === "deck").map((l) => Math.min(...l.pts.slice(1).map((b2, i) => segDist(q, l.pts[i], b2))) - l.w / 2),
+      ...lv2Polys.map((pl) => polyDist(q, pl)),
+    );
+  const deckStairs: { from: XZ; to: XZ; w: number; esc?: boolean }[] = [];
+  // 両方の端がデッキの広場の中にある階段は、広場の形が階段の上まで含んでいる（東京ビッグサイト駅の南の、屋根つきの
+  // エスカレーターと階段 way 243799255：OSM の広場の細い尾）。階段の形（幅＋1m）を広場から切りとってから、上の端を決める
+  const stairRect = (pts: XZ[], w: number): [number, number][] => {
+    const [a2, b2] = [pts[0], pts.at(-1)!], L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1;
+    const ux = (b2[0] - a2[0]) / L, uz = (b2[1] - a2[1]) / L, h = w / 2 + 0.5;
+    const r: XZ[] = [[a2[0] - uz * h - ux * 0.5, a2[1] + ux * h - uz * 0.5], [b2[0] - uz * h + ux * 0.5, b2[1] + ux * h + uz * 0.5], [b2[0] + uz * h + ux * 0.5, b2[1] - ux * h + uz * 0.5], [a2[0] + uz * h - ux * 0.5, a2[1] - ux * h - uz * 0.5]];
+    return [...r, r[0]].map(([x, z]) => [x, z]);
+  };
+  for (const l of sur.lines.filter((x) => x.kind === "steps")) {
+    const inDeck = (q: XZ) => decks.some((d) => pointInPolygon(q, d.poly));
+    if (!inDeck(l.pts[0]) || !inDeck(l.pts.at(-1)!)) continue;
+    const cut2 = stairRect(l.pts, Math.max(3, l.w));
+    for (let i = decks.length - 1; i >= 0; i--) {
+      const d = decks[i];
+      const res = polygonClipping.difference([[...d.poly, d.poly[0]].map(([x, z]) => [x, z] as [number, number]), ...(d.holes ?? []).map((h) => [...h, h[0]].map(([x, z]) => [x, z] as [number, number]))], [cut2]);
+      decks.splice(i, 1, ...res.filter((pg) => pg[0].length > 3).map((pg) => ({ poly: pg[0].slice(0, -1).map(([x, z]) => [x, z] as XZ), ...(pg.length > 1 ? { holes: pg.slice(1).map((h) => h.slice(0, -1).map(([x, z]) => [x, z] as XZ)) } : {}) })));
+    }
+  }
+  const cand = [
+    ...deckSteps.map((d) => ({ pts: d.pts, esc: d.esc, w: 3, line: null as SLine | null })),
+    ...sur.lines.filter((l) => l.kind === "steps").map((l) => ({ pts: l.pts, esc: !!l.esc, w: Math.max(3, l.w), line: l as SLine | null })),
+  ];
+  const usedSteps = new Set<SLine>();
+  for (const c of cand) {
+    const [a2, b2] = [c.pts[0], c.pts.at(-1)!];
+    const da = deckDist(a2), db = deckDist(b2);
+    if (Math.min(da, db) > 3 || Math.abs(da - db) < 1) continue; // どちらの端もデッキから遠い（地上の階段）か、両方の端がデッキの上
+    if (inVenue(centroid(c.pts)) && !c.line) continue;
+    deckStairs.push({ ...(da < db ? { from: a2, to: b2 } : { from: b2, to: a2 }), w: c.w, ...(c.esc ? { esc: true } : {}) });
+    if (c.line) usedSteps.add(c.line);
+  }
+  sur.lines = sur.lines.filter((l) => !usedSteps.has(l));
   // 駅とデッキのつなぎ：駅（kind "station"）の 10m 以内までデッキ（広場・線）が来ている所は、いちばん近い所どうしを幅 6m のデッキで
   // つなぐ（OSM の改札口の歩道（way 381908109 など）は、駅の建物（PLATEAU）の 3m ほど手前で終わっていて、デッキが駅に届かなかった）
   // OSM の改札口の歩道があれば、それを駅の建物のふちの 1.5m 先まで伸ばす
@@ -1683,7 +1728,9 @@ if (existsSync("data/osm/coast.json")) {
         for (let k = 0; k <= n; k++) {
           const q: XZ = [p0[0] + (ux * L * k) / n, p0[1] + (uz * L * k) / n];
           const out: XZ = [q[0] + nx * 0.8, q[1] + nz * 0.8];
-          const open = onDeck(out) || lv2.some((pl) => pointInPolygon(out, pl)) || nearLine(out) || inVenue(out);
+          // 階段・エスカレーターの上の端も開ける
+          const atStair = deckStairs.some((st) => Math.hypot(q[0] - st.from[0], q[1] - st.from[1]) < st.w / 2 + 2);
+          const open = onDeck(out) || lv2.some((pl) => pointInPolygon(out, pl)) || nearLine(out) || inVenue(out) || atStair;
           if (open) flush();
           else run.push([Math.round(q[0] * 10) / 10, Math.round(q[1] * 10) / 10]);
         }

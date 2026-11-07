@@ -38,7 +38,7 @@ type Venue = {
     entrances?: { at: XZ; name: string; line: string }[];
     busStops?: { at: XZ; name: string }[];
     taxis?: XZ[];
-    deckStairs?: { from: XZ; to: XZ }[];
+    deckStairs?: { from: XZ; to: XZ; w?: number; esc?: boolean }[]; // デッキと地上をむすぶ階段（esc：エスカレーター）
     decks?: { poly: XZ[]; holes?: XZ[][] }[]; // 歩行者デッキの広場（2F の高さの面）
     deckRails?: XZ[][]; // 広場のふちの手すり（ほかのデッキや会場の床につながる所は除いてある）
   };
@@ -791,7 +791,7 @@ export function VenueView() {
       for (const st of sur.deckStairs ?? []) {
         const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
         const n = Math.max(3, Math.round(DECK_Y / 0.2));
-        const im = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 1, run / n + 0.02), new THREE.MeshLambertMaterial({ color: 0xc9c2b0 }), n);
+        const im = new THREE.InstancedMesh(new THREE.BoxGeometry(st.w ?? 3, 1, run / n + 0.02), new THREE.MeshLambertMaterial({ color: st.esc ? 0x6f8fb3 : 0xc9c2b0 }), n);
         const o = new THREE.Object3D();
         for (let i = 0; i < n; i++) {
           const f = (i + 0.5) / n, top = (DECK_Y * (i + 1)) / n, th = Math.min(1.5, top);
@@ -803,6 +803,11 @@ export function VenueView() {
         }
         im.computeBoundingSphere();
         surroundings.add(im);
+        // 札（寄ったときだけ）：デッキと地上のあいだを上り下りできる所
+        const t = textSprite(st.esc ? "⇅ エスカレーター" : "⇅ 階段", { bg: st.esc ? "rgba(60,95,140,.92)" : "rgba(150,120,80,.92)", height: 2.4, px: 28 });
+        t.position.set((st.from[0] + st.to[0]) / 2, DECK_Y / 2 + 3, (st.from[1] + st.to[1]) / 2);
+        surroundings.add(t);
+        addLabel(t, "sur");
       }
       // 道路の白線：広い道（幅 9m 以上、地上）の真ん中に破線（長さ 5m・間 5m）
       {
