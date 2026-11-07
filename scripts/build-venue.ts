@@ -876,9 +876,11 @@ for (const h of halls) {
       if (poly.length >= 3 && size(poly) > 30) areas.push({ name, level, poly, holes: pg.length > 1 ? pg.slice(1).map(unring) : undefined, outdoor: true });
     }
   };
-  // 東ガレリアの北の端と、東7・リンクスペース・東8 のあいだ（航空写真：屋根のある通路でつながっている）。屋内の床
+  // 東ガレリアの北の端と、東7・リンクスペース・東8 のあいだ（航空写真：屋根のある通路でつながっている）。屋内の床。
+  // 南の端は v -529 まで（東ガレリアの北の端は v -534 ほどで、切れこみもある。v -538 からだと、すき間に地面が見えていた：ユーザーの指摘）。
+  // ほかの床と重なる所は引くので、すき間だけが埋まる
   {
-    let res = polygonClipping.union([ring(fromUV([[-33, -572], [18, -572], [18, -538], [-33, -538]]))]);
+    let res = polygonClipping.union([ring(fromUV([[-33, -572], [18, -572], [18, -529], [-33, -529]]))]);
     for (const o of [...halls.filter((h) => h.level === 1).map((h) => h.poly), ...areas.filter((a) => a.level === 1).map((a) => a.poly)]) res = polygonClipping.difference(res, [ring(o)]);
     for (const pg of res) {
       const poly = unring(pg[0]);
