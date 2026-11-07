@@ -478,6 +478,13 @@ const canopies: { level: number; pts: XZ[]; ys: number[]; w: number }[] = [];
   const [top, bottom] = fromUV([[196.5, -110], [54, -110]]);
   stairs.push({ name: "スロープ", kind: "ramp", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 12, outdoor: true });
 }
+// 南のスロープ：南3・南4 の北の 4F の外の通路（トラックヤード）の東の端から、立体駐車場の東の側にそって南へ地上まで下りる車のスロープ
+// （ユーザーの指摘と斜めからの写真。航空写真で、駐車場の建物（u 429 まで）と白い手すりの壁（u 442）のあいだの幅 9m の帯が、
+// v 30 ほどから v 105 ほどまで続き、その先は地上の車路）
+{
+  const [top, bottom] = fromUV([[437.5, 31], [437.5, 106]]);
+  stairs.push({ name: "スロープ", kind: "ramp", from: top, fromLevel: 4, to: bottom, toLevel: 1, width: 9, outdoor: true });
+}
 
 // エスカレーター（ビッグサイトの館内図・図面にあるもの。位置と長さは目安）
 {
@@ -909,8 +916,12 @@ for (const h of halls) {
   ]);
   // 南棟立体駐車場：南2・南4 の東の端（航空写真で屋上に車が止まっている所。公式フロアマップ・コミケの会場案内図にも「立体駐車場」）。
   // 南展示棟の床（建物の形をそのまま敷いたもの）から切りとって、1F に駐車場として置く（会場の床ではない）
-  outside("南棟立体駐車場", 1, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟"]);
-  outside("南棟立体駐車場", 4, [[[401, 34.4], [446, 34.4], [446, 124], [401, 124]]], ["南展示棟（4F）"], false);
+  // 駐車場の建物は u 429 まで（航空写真で屋上の車の止まる所の東のふち）。その東（u 429〜446）は、4F の外の通路（トラックヤード）から
+  // 地上へ下りる車のスロープ（下の「南のスロープ」）と、その下の地面なので、南展示棟の床から切りとるだけ
+  outside("南棟立体駐車場", 1, [[[401, 34.4], [429, 34.4], [429, 124], [401, 124]]], ["南展示棟"]);
+  outside("南棟立体駐車場", 4, [[[401, 34.4], [429, 34.4], [429, 124], [401, 124]]], ["南展示棟（4F）"], false);
+  outside("スロープの下", 1, [[[429, 34.4], [446, 34.4], [446, 124], [429, 124]]], ["南展示棟"], false);
+  outside("スロープの下", 4, [[[429, 34.4], [446, 34.4], [446, 124], [429, 124]]], ["南展示棟（4F）"], false);
   // 南：南3・南4 の北の 4F の通路（図面の「トラックヤード」。西4 の外の通路から、南展示棟への通路（4F）を通って続く）。
   // 外のふちは v 19.2：航空写真で、建物の北のふち（v 31.7）から、トラックの止まる明るい帯の外のふちまで 12.5m。
   // 図面のトラックヤードの幅（建物の北の外壁から 11.5〜13.4m）と合う。トイレなどの部屋の帯（v 28〜34）の外に 9m の車路が残る
@@ -1025,12 +1036,15 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 }
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
-// 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）、ゆりかもめの高架は 4m + 1層 2.5m。
+// 高さは OSM の layer（何層目か）から：歩道・道路は 1層＝2F の高さ（2F の歩行者デッキと同じ）。ゆりかもめの高架（layer 2〜4）は、
+// どこも同じ 17m（2F の歩行者デッキ 12m と、やぐら橋の白い屋根 15.3m の上を通る高さ。OSM の layer は区間・線ごとにまちまちで、
+// そのまま高さにすると 2 本の線路の高さがずれる）。ホームは 17.5m
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck" };
 type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
+const RAIL_Y = 17; // ゆりかもめの高架の高さ（上の説明）
 const deckSteps: XZ[][] = []; // 歩行者デッキへ上る階段（OSM の layer ≥ 1 の steps）
 if (existsSync("data/osm/surroundings.json")) {
   const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
@@ -1041,16 +1055,15 @@ if (existsSync("data/osm/surroundings.json")) {
     if (t.tunnel === "yes" || layer < 0 || Number(t.level) < 0) continue;
     if (e.type === "node" && (t.railway === "station" || (t.public_transport === "station" && t.railway))) {
       const line = t.light_rail === "yes" ? "ゆりかもめ" : "りんかい線";
-      sur.stations.push({ name: `${t.name}駅`, line, at: project(ORIGIN, e.lat!, e.lon!), y: line === "ゆりかもめ" ? 9 : 0 });
+      sur.stations.push({ name: `${t.name}駅`, line, at: project(ORIGIN, e.lat!, e.lon!), y: line === "ゆりかもめ" ? RAIL_Y : 0 });
       continue;
     }
     if (!e.geometry) continue;
     const pts = e.geometry.map((g) => project(ORIGIN, g.lat, g.lon));
     if (t.railway === "platform") {
-      sur.areas.push({ poly: pts, y: 4 + Math.max(2, layer) * 2.5 + 0.5, kind: "platform" });
+      sur.areas.push({ poly: pts, y: RAIL_Y + 0.5, kind: "platform" });
     } else if (t.railway && t.railway !== "station") {
-      // ゆりかもめの 4 層目の高架（やぐら橋の上を通る所）は、橋（2F の高さ）の白い屋根の上を通るよう 19m に
-      sur.lines.push({ pts, y: layer >= 4 ? 19 : layer > 0 ? 4 + layer * 2.5 : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
+      sur.lines.push({ pts, y: layer > 0 ? RAIL_Y : 0.1, w: layer > 0 ? 7 : 3, kind: "rail" });
     } else if (t.highway) {
       const walk = /^(pedestrian|footway|path|cycleway|steps)$/.test(t.highway);
       // 2F 以上の歩道（OSM の layer ≥ 1）は、まわりの建物をつなぐ歩行者デッキ。会場の 2F の床と同じ高さ（12m）の板にする
@@ -1415,7 +1428,15 @@ if (existsSync("data/osm/coast.json")) {
       for (let z = Math.min(...zs) + 1; z <= Math.max(...zs); z += 2) if (pointInPolygon([x, z], pl)) out.push([x, z]);
     return out;
   };
-  type SBuilding = { poly: XZ[]; h: number; name?: string; kind?: "canopy"; est?: string };
+  // kind "station"：高架の線路が上を通る建物（ゆりかもめの駅）。線路とホームが見えるよう、高架の下の低い部分（body の高さまで）と、
+  // ホームの上の屋根（h の高さ）に分けて描く
+  type SBuilding = { poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station"; est?: string; body?: number };
+  const railPts: { p: XZ; y: number }[] = [];
+  for (const l of sur.lines.filter((x) => x.kind === "rail" && x.y > 1))
+    for (let i = 0; i + 1 < l.pts.length; i++) {
+      const [a2, b2] = [l.pts[i], l.pts[i + 1]], L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
+      for (let d = 0; d < L; d += 2) railPts.push({ p: [a2[0] + ((b2[0] - a2[0]) * d) / L, a2[1] + ((b2[1] - a2[1]) * d) / L], y: l.y });
+    }
   const pBuildings = plateau
     .map((b) => ({ poly: b.poly.map(([la, lo]) => project(ORIGIN, la, lo)), h: b.h }))
     .filter((b) => b.poly.length >= 3 && !skip(b.poly));
@@ -1443,6 +1464,13 @@ if (existsSync("data/osm/coast.json")) {
     // 細長い低いもの（平均の幅 7m 未満・長さが幅の 4 倍より長い・高さ 8m 以下）は屋根
     const wMean = (2 * ringArea(b.poly)) / ringLen(b.poly);
     const thin = wMean < 7 && ringArea(b.poly) / (wMean * wMean) > 4 && b.h <= 8;
+    const onRail = railPts.filter((r) => pointInPolygon(r.p, b.poly));
+    if (onRail.length >= 10 && b.h > 12) {
+      // 屋根はホームの上 4.5m より高く（地図の高架は実物より高いので、PLATEAU の高さのままだとホームにめりこむ）
+      const ry = Math.max(...onRail.map((r) => r.y));
+      buildings.push({ poly: b.poly, h: Math.max(b.h, ry + 4.5), kind: "station", body: Math.min(...onRail.map((r) => r.y)) - 1.5 });
+      return;
+    }
     buildings.push({ poly: b.poly, h: b.h, ...(thin ? { kind: "canopy" as const } : {}) });
   });
   // 名前：OSM の名前のある大きい建物（1500m² 以上）を、いちばん重なる PLATEAU の建物に付ける（名前の札にする）

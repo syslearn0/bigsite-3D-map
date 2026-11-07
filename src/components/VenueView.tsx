@@ -31,7 +31,7 @@ type Venue = {
     stations: { name: string; line: string; at: XZ; y: number }[];
     // 周辺をくわしく：建物（PLATEAU の形と計測高さ。kind "canopy" は屋根のある歩道などの屋根）、緑地と駐車場、木、横断歩道、
     // 駅の出入口、バス停、タクシー乗り場、歩行者デッキへ上る階段
-    buildings?: { poly: XZ[]; h: number; name?: string; kind?: "canopy"; est?: string }[];
+    buildings?: { poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station"; est?: string; body?: number }[]; // station：高架の下の部分（body の高さまで）とホームの上の屋根
     greens?: { poly: XZ[]; kind: "grass" | "wood" | "pitch" | "parking" }[];
     trees?: XZ[];
     crossings?: XZ[][];
@@ -147,7 +147,7 @@ const TOUR_STEPS: TourStep[] = [
   },
   { target: '[aria-label="場所を指して歩く"]', mode: "plan", title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
   { target: '[aria-label="周辺も表示"]', mode: "plan", title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
-  { target: ".floor-switch", mode: "plan", title: "階を切りかえる", text: "1F と 4F を切りかえます。「両方」で重ねて見られます。" },
+  { target: ".floor-switch", mode: "plan", title: "階を切りかえる", text: "1・2F（1F と 2F の通路）と 4F を切りかえます。「両方」で重ねて見られます。" },
 ];
 
 // 端末の保存を読む。読めないとき（プライベートモードなど）は空から
@@ -608,7 +608,8 @@ export function VenueView() {
     const rank = (n: string) => (STATION_ORDER.includes(n) ? STATION_ORDER.indexOf(n) : STATION_ORDER.length);
     for (const st of [...sur.stations].sort((a, b) => rank(a.name) - rank(b.name))) {
       const sp = textSprite(`🚉 ${st.name}（${st.line}）`, { bg: st.line === "ゆりかもめ" ? "rgba(0,120,90,.92)" : "rgba(20,80,160,.92)", height: 6, px: 36 });
-      sp.position.set(st.at[0], st.y + 8, st.at[1]);
+      sp.position.set(st.at[0], st.y + 9, st.at[1]);
+      sp.userData.station = true;
       surroundings.add(sp);
       stationLabels.push({ s: sp, base: sp.scale.clone() });
     }
@@ -663,8 +664,28 @@ export function VenueView() {
       };
       const roofMat = new THREE.MeshLambertMaterial({ color: 0xeef0ee });
       const postMat = new THREE.MeshLambertMaterial({ color: 0xc9cdd0 });
-      const posts: [number, number, number][] = []; // x, z, 高さ
+      const posts: [number, number, number, number?][] = []; // x, z, 上の端の高さ（マイナスは太い柱）, 下の端の高さ
       (sur.buildings ?? []).forEach((b, i) => {
+        if (b.kind === "station") {
+          // ゆりかもめの駅：高架の下の部分（改札など）と、ホームの上の屋根（厚さ 0.5m）、そのあいだはふちに 8m ごとの柱
+          const body = new THREE.Mesh(new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.body ?? 6, bevelEnabled: false }), matOf(b.body ?? 6, i));
+          body.rotation.x = -Math.PI / 2;
+          const roof = new THREE.Mesh(new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: 0.5, bevelEnabled: false }), roofMat);
+          roof.rotation.x = -Math.PI / 2;
+          roof.position.y = b.h - 0.5;
+          surroundings.add(body, roof);
+          const cx = b.poly.reduce((a, q) => a + q[0], 0) / b.poly.length, cz = b.poly.reduce((a, q) => a + q[1], 0) / b.poly.length;
+          let next = 0, run = 0;
+          b.poly.forEach((q, k) => {
+            const r = b.poly[(k + 1) % b.poly.length], L = Math.hypot(r[0] - q[0], r[1] - q[1]);
+            for (; next <= run + L; next += 8) {
+              const d = next - run, x = q[0] + ((r[0] - q[0]) * d) / (L || 1), z = q[1] + ((r[1] - q[1]) * d) / (L || 1), dl = Math.hypot(cx - x, cz - z) || 1;
+              posts.push([x + ((cx - x) / dl) * 0.6, z + ((cz - z) / dl) * 0.6, b.h - 0.5, b.body ?? 6]);
+            }
+            run += L;
+          });
+          return;
+        }
         if (b.kind === "canopy") {
           // 屋根の板（厚さ 0.3m）と、ふちに 8m ごとの柱
           const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: 0.3, bevelEnabled: false });
@@ -701,19 +722,23 @@ export function VenueView() {
       // 柱（屋根の柱・デッキの柱・高架の道路の柱）はまとめて 1 つの形で
       const deckLines = sur.lines.filter((l) => l.kind === "deck");
       const roadHigh = sur.lines.filter((l) => l.kind === "road" && l.y > 1);
-      for (const l of [...deckLines, ...roadHigh])
+      // ゆりかもめの高架も（25m ごと）
+      const railHigh = sur.lines.filter((l) => l.kind === "rail" && l.y > 1);
+      for (const l of [...deckLines, ...roadHigh, ...railHigh]) {
+        const step = l.kind === "rail" ? 25 : 14;
         for (let i = 0; i + 1 < l.pts.length; i++) {
           const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
-          for (let d = 6; d < L - 2; d += 14) posts.push([ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L, -(l.y - 0.8)]); // マイナス：太い柱
+          for (let d = 6; d < L - 2; d += step) posts.push([ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L, -(l.y - (l.kind === "rail" ? 1.5 : 0.8))]); // マイナス：太い柱
         }
+      }
       {
         const thin = posts.filter((q) => q[2] > 0), thick = posts.filter((q) => q[2] < 0);
-        const mk = (list: [number, number, number][], r: number, mat: THREE.Material) => {
+        const mk = (list: [number, number, number, number?][], r: number, mat: THREE.Material) => {
           const im = new THREE.InstancedMesh(new THREE.CylinderGeometry(r, r, 1, 8), mat, Math.max(1, list.length));
           const o = new THREE.Object3D();
-          list.forEach(([x, z, h], i) => {
-            const hh = Math.abs(h);
-            o.position.set(x, hh / 2, z);
+          list.forEach(([x, z, h, base = 0], i) => {
+            const hh = Math.abs(h) - base;
+            o.position.set(x, base + hh / 2, z);
             o.scale.set(1, hh, 1);
             o.updateMatrix();
             im.setMatrixAt(i, o.matrix);
@@ -1161,8 +1186,9 @@ export function VenueView() {
       }
       const n = Math.max(3, Math.round((y1 - y0) / 0.2));
       const geo = new THREE.BoxGeometry(st.width, 1, run / n + 0.02);
-      // 上の階の床（その階の床とホール）。段のまん中がこの中なら、その段は床の上（床と床のふちの帯より上）まで上げて、
-      // 床をつき抜けて見えるようにする（ユーザーの確認：つながっている所の上まで階段の色に）
+      // 上の階の床（その階の床とホール）。階段の上の端が、この床の中や床のふちの帯（幅 0.35m）にかかっている所は、
+      // 床の上に敷いた薄い踊り場（床と帯より少し上）にし、そこまでの段で床の面の少し上まで上がりきる。
+      // 床に隠れずに、つながっている所の上まで階段の色に見える（ユーザーの確認。床の下まで厚い段を上げると箱のように見えた）
       const upper = [
         ...venue.areas.filter((a) => a.level === st.fromLevel && !a.see).map((a) => ({ poly: a.poly, holes: a.holes ?? [] })),
         ...venue.halls.filter((h) => h.level === st.fromLevel).map((h) => ({ poly: h.poly, holes: [] as XZ[][] })),
@@ -1172,12 +1198,20 @@ export function VenueView() {
       // 屋外の階段（屋上展示場からエントランスプラザへ）は、目立つマゼンタ
       const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: esc ? 0x6f8fb3 : st.outdoor ? OUTDOOR_STAIR_COLOR : LINK_COLOR }), n);
       const t = new THREE.Object3D();
+      const center = (i: number): XZ => [st.to[0] + dx * ((i + 0.5) / n), st.to[1] + dz * ((i + 0.5) / n)];
+      // 上の端から続けて床の中（か、0.4m 先が床の中）にある段は踊り場。m0：踊り場の最初の段
+      let m0 = n;
+      while (m0 > 1) {
+        const [cx, cz] = center(m0 - 1);
+        if (!(underFloor([cx, cz]) || underFloor([cx + (dx / run) * 0.4, cz + (dz / run) * 0.4]))) break;
+        m0--;
+      }
+      const yTop = y1 + 0.08;
       for (let i = 0; i < n; i++) {
         // 段は 1 段ずつ、厚さ 2m の板（下まで埋めた塊にすると、下の階から壁のように見える。薄いと横から線にしか見えない：ユーザーの確認）
-        const f = (i + 0.5) / n, cx = st.to[0] + dx * f, cz = st.to[1] + dz * f;
-        // 床のふちの帯（幅 0.35m）にかかる、ふちのすぐ手前の段も上げる
-        const inFloor = underFloor([cx, cz]) || underFloor([cx + (dx / run) * 0.4, cz + (dz / run) * 0.4]);
-        const top = inFloor ? y1 + 0.1 : y0 + ((y1 - y0) * (i + 1)) / n, th = Math.min(2, top - y0);
+        const [cx, cz] = center(i);
+        const landing = i >= m0;
+        const top = landing ? yTop : y0 + ((yTop - y0) * (i + 1)) / m0, th = landing ? 0.15 : Math.min(2, top - y0);
         t.position.set(cx, top - th / 2, cz);
         t.rotation.set(0, Math.atan2(dx, dz), 0);
         t.scale.set(1, th, 1);
@@ -2036,7 +2070,8 @@ export function VenueView() {
       for (const { s, base } of stationLabels) {
         s.scale.copy(base);
         if (!walk) s.scale.multiplyScalar(18 / (base.y * pxPerM(s.position)));
-        s.material.depthTest = current !== "top";
+        // 駅の名前は建物や駅の屋根に隠さない（ほかの札と重なる所は下の重なりの処理で隠す）
+        s.material.depthTest = current !== "top" && !s.userData.station;
       }
       for (const { s, level, base } of pins) {
         s.visible = shown(floorOf(level));
@@ -2767,16 +2802,19 @@ export function VenueView() {
               {([4, 1] as Floor[]).map((f) => (
                 <button
                   key={f}
+                  // 「1F」の表示は 2F の通路（コンコース・ガレリアなど）もいっしょに出すので「1・2F」（ユーザーの指示）
+                  aria-label={f === 1 ? "1F・2F" : "4F"}
+                  style={f === 1 ? { fontSize: ".72rem" } : undefined}
                   aria-pressed={!both && floor === f}
                   onClick={() => {
                     setBoth(false);
                     setFloor(f);
                   }}
                 >
-                  {f}F
+                  {f === 1 ? "1・2F" : "4F"}
                 </button>
               ))}
-              <button aria-pressed={both} aria-label="1F と 4F の両方" onClick={() => setBoth(true)} style={{ fontSize: ".72rem" }}>
+              <button aria-pressed={both} aria-label="1・2F と 4F の両方" onClick={() => setBoth(true)} style={{ fontSize: ".72rem" }}>
                 両方
               </button>
             </div>
