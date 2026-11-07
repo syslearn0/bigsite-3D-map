@@ -89,10 +89,13 @@ const MARK: Record<Mark, { label: string; icon: string; color: number }> = {
   want: { label: "行きたい", icon: "★", color: 0xff2d87 },
   maybe: { label: "候補", icon: "◆", color: 0x0a84ff },
 };
-const MARKS_KEY = "comiket3d:marks";
+// 印とメモは日ごと（同じ配置番号でも日が違えば別のサークル）。日 → 配置番号 → 印・メモ
+const MARKS_KEY = "comiket3d:marks-by-day";
+const NOTES_KEY = "comiket3d:notes-by-day";
+const OLD_MARKS_KEY = "comiket3d:marks"; // 日を分けていなかったころの保存（読んだら 1 日目へ移す）
+const OLD_NOTES_KEY = "comiket3d:notes";
 const OLD_WISH_KEY = "comiket3d:wish"; // 「行きたい」だけだったころの保存
 const PINS_KEY = "comiket3d:pins";
-const NOTES_KEY = "comiket3d:notes"; // 印をつけた机のメモ（任意）。配置番号 → メモ
 const TOUR_KEY = "comiket3d:tour"; // 使い方の案内を見終えたか
 
 // 初めて開いた人向けの使い方の案内（Tour.tsx）。target は画面の部品（ないときは真ん中に吹き出しだけ）。
@@ -132,7 +135,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     mode: "register",
     title: "机に印とメモ",
-    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけると、その下にメモの欄が出ます（任意・この端末の中だけに保存）。メモは一覧と印刷にも出ます。",
+    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。印をつけると、その下にメモの欄が出ます（任意・この端末の中だけに保存）。メモは一覧と印刷にも出ます。印とメモは日ごとに別です（同じ番号でも日が違えば別のサークル）。",
   },
   {
     target: '[aria-label="3D にする"], [aria-label="2D にする"]',
@@ -153,22 +156,34 @@ const TOUR_STEPS: TourStep[] = [
 ];
 
 // 端末の保存を読む。読めないとき（プライベートモードなど）は空から
-function loadMarks(): Record<string, Mark> {
+type ByDay<T> = Record<Day, Record<string, T>>;
+const emptyByDay = <T,>(): ByDay<T> => ({ 1: {}, 2: {}, 3: {} });
+function readByDay<T>(key: string, oldDay1: () => Record<string, T>): ByDay<T> {
+  const out = emptyByDay<T>();
   try {
-    const saved = JSON.parse(localStorage.getItem(MARKS_KEY) ?? "null");
+    const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+    if (saved && typeof saved === "object") {
+      for (const d of DAYS) if (saved[d] && typeof saved[d] === "object") out[d] = saved[d];
+      return out;
+    }
+    // 日を分けていなかったころの印・メモは、何日目のつもりか分からないので 1 日目へ（ユーザーの確認）
+    out[1] = oldDay1();
+  } catch {}
+  return out;
+}
+function loadMarks(): ByDay<Mark> {
+  return readByDay<Mark>(MARKS_KEY, () => {
+    const saved = JSON.parse(localStorage.getItem(OLD_MARKS_KEY) ?? "null");
     if (saved && typeof saved === "object") return saved;
     const old = JSON.parse(localStorage.getItem(OLD_WISH_KEY) ?? "[]");
     return Object.fromEntries((Array.isArray(old) ? old : []).map((c: string) => [c, "want" as Mark]));
-  } catch {
-    return {};
-  }
+  });
 }
-function loadNotes(): Record<string, string> {
-  try {
-    const saved = JSON.parse(localStorage.getItem(NOTES_KEY) ?? "null");
-    if (saved && typeof saved === "object") return saved;
-  } catch {}
-  return {};
+function loadNotes(): ByDay<string> {
+  return readByDay<string>(NOTES_KEY, () => {
+    const saved = JSON.parse(localStorage.getItem(OLD_NOTES_KEY) ?? "null");
+    return saved && typeof saved === "object" ? saved : {};
+  });
 }
 function tourDone(): boolean {
   try {
@@ -458,7 +473,7 @@ export function VenueView() {
   const dayWorks = useMemo(() => worksOf(tags, day), [tags, day]);
   const [surround, setSurround] = useState(true); // 周辺の建物も立体で出す（開いた最初は出す）
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
-  const [print, setPrint] = useState<{ made: string; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string; note: string }[] }[] } | null>(null);
+  const [print, setPrint] = useState<{ made: string; day: Day; sections: { title: string; img: string; codes: { code: string; mark: Mark; hall: string; note: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
@@ -493,9 +508,14 @@ export function VenueView() {
   const [pickNum, setPickNum] = useState<number | null>(null);
   const [pickHalf, setPickHalf] = useState<"a" | "b">("a");
   // この画面はブラウザでだけ描く（page.tsx で ssr: false）ので、最初から端末の保存を読める
-  const [marks, setMarks] = useState<Record<string, Mark>>(loadMarks);
+  // 印とメモは日ごとに持ち、地図・一覧・印刷にはいま選んでいる日のものだけを出す
+  const [marksByDay, setMarksByDay] = useState<ByDay<Mark>>(loadMarks);
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
-  const [notes, setNotes] = useState<Record<string, string>>(loadNotes);
+  const [notesByDay, setNotesByDay] = useState<ByDay<string>>(loadNotes);
+  const marks = marksByDay[day];
+  const notes = notesByDay[day];
+  const setMarks = (f: (m: Record<string, Mark>) => Record<string, Mark>) => setMarksByDay((all) => ({ ...all, [day]: f(all[day]) }));
+  const setNotes = (f: (n: Record<string, string>) => Record<string, string>) => setNotesByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
   const tourFrom = useRef<Mode>("plan"); // 案内を始めたときのモード（閉じたら戻す）
   const endTour = () => {
@@ -511,15 +531,17 @@ export function VenueView() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(MARKS_KEY, JSON.stringify(marks));
+      localStorage.setItem(MARKS_KEY, JSON.stringify(marksByDay));
+      localStorage.removeItem(OLD_MARKS_KEY);
       localStorage.removeItem(OLD_WISH_KEY);
     } catch {}
-  }, [marks]);
+  }, [marksByDay]);
   useEffect(() => {
     try {
-      localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+      localStorage.setItem(NOTES_KEY, JSON.stringify(notesByDay));
+      localStorage.removeItem(OLD_NOTES_KEY);
     } catch {}
-  }, [notes]);
+  }, [notesByDay]);
   useEffect(() => {
     try {
       localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
@@ -2787,7 +2809,7 @@ export function VenueView() {
         };
       });
     setListOpen(false);
-    setPrint({ made: new Date().toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" }), sections });
+    setPrint({ made: new Date().toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" }), day, sections });
   };
   useEffect(() => {
     if (!print) return;
@@ -2891,7 +2913,7 @@ export function VenueView() {
         {listOpen && (
           <div style={{ ...SHEET, top: 8, bottom: "auto", maxHeight: "60%", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong>印をつけたサークル</strong>
+              <strong>印をつけたサークル（{day}日目）</strong>
               <span style={{ display: "flex", gap: 6 }}>
                 <button className="chip small" onClick={startPrint}>
                   配置図を印刷
@@ -2902,7 +2924,7 @@ export function VenueView() {
               </span>
             </div>
             {lists.want.length + lists.maybe.length === 0 && (
-              <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>机を押して「★ 行きたい」か「◆ 候補」をつけられます。この端末の中だけに保存します。</p>
+              <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末の中だけに保存します。</p>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
               <section key={m} style={{ marginTop: 8 }}>
@@ -3120,7 +3142,7 @@ export function VenueView() {
               setMenu(false);
             }}
           >
-            ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
+            {day}日目 ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
           </button>
           <button className="chip" onClick={startPrint}>
             配置図を印刷
@@ -3205,7 +3227,7 @@ export function VenueView() {
           <section key={sec.title} className="print-hall">
             {i === 0 && (
               <p className="print-note">
-                配置図　{print.made} 作成。コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。○の文字が列の名前、島の端の数字がその列の端の机の番号。緑が出入口、灰が搬入口（シャッター）、青がトイレ、赤が救護室（図面を参考にした目安の位置で、数m ずれることがあります。当日の出入口は運営の案内に従ってください）。地図：
+                配置図（{print.day}日目の印）　{print.made} 作成。コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。○の文字が列の名前、島の端の数字がその列の端の机の番号。緑が出入口、灰が搬入口（シャッター）、青がトイレ、赤が救護室（図面を参考にした目安の位置で、数m ずれることがあります。当日の出入口は運営の案内に従ってください）。地図：
                 {venue.attribution}
               </p>
             )}
