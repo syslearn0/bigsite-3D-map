@@ -2113,13 +2113,15 @@ export function VenueView() {
       // ジャンル・作品（とキャラ）を選んでいるとき、その机か
       const hit = (b: Booth) => {
         if (dayTags && genre && dayTags[b.code]?.genre !== genre) return false;
-        if (!work) return true;
+        if (!work && !char) return true;
         if (dayTags) {
           const t = dayTags[b.code];
-          if (!t?.works?.includes(work)) return false;
-          return !char || !!t.chars?.[work]?.includes(char);
+          if (work && !t?.works?.includes(work)) return false;
+          if (!char) return true;
+          // キャラ・グループだけを選んだとき（作品を選ばずに）は、どの作品のキャラでもよい
+          return work ? !!t?.chars?.[work]?.includes(char) : Object.values(t?.chars ?? {}).some((l) => l.includes(char));
         }
-        return lines[b.line].genre === work;
+        return !work || lines[b.line].genre === work;
       };
       for (const { mesh, index } of deskMeshes.values()) {
         index.forEach((bi, k) => {
@@ -2982,15 +2984,34 @@ export function VenueView() {
   // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
   // ジャンルの一覧と、選んだジャンルの作品の一覧
   const genreList = [...new Set(Object.values(dayTags ?? {}).map((t) => t.genre).filter((g): g is string => !!g))].sort((a, b) => a.localeCompare(b, "ja"));
+  // ジャンルには「ブルーアーカイブ」のような作品そのものの名前もある。そのジャンルの中の作品の一覧からは、ジャンルと同じ名前の作品は除く
+  // （2 つめの選び方は、そのジャンルの中の作品・キャラ・グループ。ユーザーの指示）
   const workList = dayTags
-    ? dayWorks.map((w) => w.work).filter((w) => !genre || Object.values(dayTags).some((t) => t.genre === genre && t.works?.includes(w)))
+    ? dayWorks.map((w) => w.work).filter((w) => w !== genre && (!genre || Object.values(dayTags).some((t) => t.genre === genre && t.works?.includes(w))))
     : SAMPLE_GENRES;
+  // キャラ・グループ：作品を選んだときはその作品の分、選んでいないときはそのジャンル（なければその日）の机に入っているもの全部
   const charList = (() => {
-    if (!work || !dayTags) return [];
+    if (!dayTags) return [];
     const set = new Set<string>();
-    for (const t of Object.values(dayTags)) for (const c of t.chars?.[work] ?? []) set.add(c);
+    for (const t of Object.values(dayTags)) {
+      if (genre && t.genre !== genre) continue;
+      for (const [w, list] of Object.entries(t.chars ?? {})) if (!work || w === work) for (const c of list) if (c) set.add(c);
+    }
     return [...set].sort((a, b) => a.localeCompare(b, "ja"));
   })();
+  // 日を変えるとき、前の日に選んだジャンル・作品・キャラがその日にないなら、選びなおし（すべて）にする。
+  // そのままだと、選べないものを選んだままになり、机がどれも薄くなっていた（3 日目に選んでから 1 日目を見たとき：ユーザーの指摘）
+  const switchDay = (d: Day) => {
+    const t = Object.values(tags[d] ?? {});
+    const g = genre && t.some((x) => x.genre === genre) ? genre : null;
+    const inG = t.filter((x) => !g || x.genre === g);
+    const w = work && g === genre && inG.some((x) => x.works?.includes(work)) ? work : null;
+    const c = char && w === work && inG.some((x) => Object.entries(x.chars ?? {}).some(([k, l]) => (!w || k === w) && l.includes(char))) ? char : null;
+    setGenre(g);
+    setWork(w);
+    setChar(c);
+    setDay(d);
+  };
   const chooseMode = (m: Mode) => {
     setMode(m);
     cancelWalk();
@@ -3378,13 +3399,13 @@ export function VenueView() {
             <h3>日</h3>
             <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
               {DAYS.map((d) => (
-                <button key={d} style={{ flex: 1 }} aria-pressed={day === d} onClick={() => setDay(d)}>
+                <button key={d} style={{ flex: 1 }} aria-pressed={day === d} onClick={() => switchDay(d)}>
                   {d}日目
                 </button>
               ))}
             </div>
         </>
-        <h3>ジャンル・作品</h3>
+        <h3>ジャンル・作品・キャラ</h3>
         {genreList.length > 0 && (
           <select
             aria-label="ジャンル"
@@ -3406,23 +3427,36 @@ export function VenueView() {
           </select>
         )}
         <select
-          aria-label="作品"
-          value={!byGenre ? "__off" : (work ?? "__all")}
+          aria-label="作品・キャラ・グループ"
+          value={!byGenre ? "__off" : work ? `w:${work}` : char ? `c:${char}` : "__all"}
           onChange={(e) => {
             const v = e.target.value;
             setByGenre(v !== "__off");
-            setWork(v === "__all" || v === "__off" ? null : v);
-            setChar(null);
+            setWork(v.startsWith("w:") ? v.slice(2) : null);
+            setChar(v.startsWith("c:") ? v.slice(2) : null);
           }}
           style={{ width: "100%" }}
         >
-          <option value="__all">{genre ? `${genre}の作品すべて` : "すべての作品（作品ごとに色分け）"}</option>
+          <option value="__all">{genre ? `${genre}：すべて` : "すべて（作品ごとに色分け）"}</option>
           <option value="__off">色分けしない</option>
-          {workList.map((w) => (
-            <option key={w} value={w}>
-              {w}
-            </option>
-          ))}
+          {workList.length > 0 && (
+            <optgroup label="作品">
+              {workList.map((w) => (
+                <option key={w} value={`w:${w}`}>
+                  {w}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {!work && charList.length > 0 && (
+            <optgroup label="キャラ・グループ">
+              {charList.map((c) => (
+                <option key={c} value={`c:${c}`}>
+                  {c}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         {work && charList.length > 0 && (
           <select aria-label="キャラ・グループ" value={char ?? ""} onChange={(e) => setChar(e.target.value || null)} style={{ width: "100%", marginTop: 6 }}>
@@ -3434,7 +3468,7 @@ export function VenueView() {
             ))}
           </select>
         )}
-        {byGenre && !work && (
+        {byGenre && !work && !char && (
           <div style={{ fontSize: ".75rem", display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
             {dayTags && !dayWorks.length && <span>{day}日目の作品はまだ入っていません</span>}
             {dayTags
