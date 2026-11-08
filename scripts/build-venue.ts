@@ -371,11 +371,14 @@ const areas: Area[] = [
     const bridgePoly = fromUV([[-80, -176], [-74, -185.5], [-32, -255], [-2, -250.5], [-53.5, -165], [-59.5, -155]]);
     areas.push({ name: "北コンコース", level: 2, poly: ncPoly });
     areas.push({ name: "連絡ブリッジ", level: 2, poly: bridgePoly });
-    // 東ガレリアの 2F（東展示棟 2F）は、ブリッジの端と同じ v -250 あたりから。その手前（v -250〜-221）は屋外（下の外のデッキの一部）
+    // 東ガレリアの 2F（東展示棟 2F）は、ブリッジの端と同じ v -250 あたりから。その手前の、ガレリアの入口の三角（v -265〜-221）も
+    // ガレリアの 2F の屋内の床にする（公式フロアマップでは、ガレリアの 2F の西の端は北コンコースへ続く白い屋内の床で、いちばん西の
+    // 吹き抜けと階段もこの中にある。前は屋外のデッキにしていて、デッキに穴があいて階段が下りているように見えた：ユーザーの指摘）
     const gal = areas.find((a) => a.level === 2 && a.name === "東展示棟 2F");
     if (gal) {
       const cutGal = fromUV([[-60, -200], [40, -200], [40, -250], [16, -250], [-2, -250.5], [-32, -255], [-60, -255]]);
-      const mp = polygonClipping.difference([[ring(gal.poly), ...(gal.holes ?? []).map(ring)]], [ring(cutGal)]);
+      const entry = fromUV([[-35.5, -249], [8.5, -221], [16, -221], [15, -265.5], [-24, -267]]);
+      const mp = polygonClipping.union(polygonClipping.difference([[ring(gal.poly), ...(gal.holes ?? []).map(ring)]], [ring(cutGal)]), [[ring(entry)]]);
       const big = mp.map((pg) => ({ poly: unring(pg[0]), holes: pg.slice(1).map(unring) })).sort((a, b) => size(b.poly) - size(a.poly))[0];
       gal.poly = big.poly;
       gal.holes = big.holes;
