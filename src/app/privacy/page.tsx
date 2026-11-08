@@ -40,6 +40,15 @@ export default function Page() {
       <p>ログアウトすると、その端末ではログインしていない状態に戻ります（端末の中の印などは残ります）。アカウントごと消すときは、ログインして下のボタンを押してください。印・メモ・サークルの登録（画像も）を消します。</p>
       <DeleteAccount />
 
+      <h2>お問い合わせ</h2>
+      <p>
+        作者への連絡は、メール（<a href="mailto:syslearn0@gmail.com">syslearn0@gmail.com</a>）か X（
+        <a href="https://x.com/riku819979" target="_blank" rel="noopener noreferrer">
+          @riku819979
+        </a>
+        ）へお願いします。
+      </p>
+
       <h2>変えるとき</h2>
       <p>このページの内容を変えたときは、このページでお知らせします。</p>
       <p style={{ color: "var(--muted)", fontSize: ".85rem" }}>2026 年 11 月 9 日</p>

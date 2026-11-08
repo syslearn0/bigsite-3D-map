@@ -307,7 +307,11 @@ export function CircleForm() {
       <h2>よくある質問</h2>
       <p style={{ fontSize: ".9rem" }}>
         <b>すぐに地図に出ますか？</b> 作者が内容を確かめてから出します。<br />
-        <b>同じ配置番号を、ほかの人がもう登録していると出ます。</b> なりすましのおそれがあるので、作者に知らせてください（作者への連絡先は、地図を公開するときにこのページに載せます）。<br />
+        <b>同じ配置番号を、ほかの人がもう登録していると出ます。</b> なりすましのおそれがあるので、作者に知らせてください（メール：<a href="mailto:syslearn0@gmail.com">syslearn0@gmail.com</a>・X：
+        <a href="https://x.com/riku819979" target="_blank" rel="noopener noreferrer">
+          @riku819979
+        </a>
+        ）。<br />
         <b>消したいときは？</b> この画面の「登録を取り消す」で消せます。地図からは、次に作者が公開しなおしたときに消えます。
       </p>
       <p style={{ fontSize: ".85rem" }}>
