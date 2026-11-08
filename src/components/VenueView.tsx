@@ -161,7 +161,7 @@ const TOUR_STEPS: TourStep[] = [
     menu: true,
     mode: "plan",
     title: "当日・計画のモード",
-    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D です。このモードでは新しく印はつけず、机（ピン）を押して「✓ 行った」を押すと、その机とピンが灰色になります。一覧からも 1 回で「行った」にできます。",
+    text: "当日に使う・回る順を考えるモードに戻しました。最初は立体の 3D です。このモードでは新しく印はつけず、★ 行きたい・◆ 候補の机（ピン）を押して「✓ 行った」を押すと、その机とピンが灰色になります。一覧からも 1 回で「行った」にできます。",
   },
   { target: '[aria-label="場所を指して歩く"]', mode: "plan", title: "歩いて見る", text: "押してから地図の場所を指すと、そこに立って歩くように見られます。" },
   { target: '[aria-label="周辺も表示"]', mode: "plan", title: "まわりも見る", text: "駅や道、海など、会場のまわりも出します。" },
@@ -546,14 +546,19 @@ export function VenueView() {
   const [visitedByDay, setVisitedByDay] = useState<ByDay<number>>(loadVisited);
   const marks = marksByDay[day];
   const notes = notesByDay[day];
-  const visited = visitedByDay[day];
-  const toggleVisited = (code: string) =>
+  // 「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ（ユーザーの指示）。印を外した机の「行った」は出さない
+  // （保存はそのまま残すので、同じ日にまた印をつけると戻る）
+  const visitedAll = visitedByDay[day];
+  const visited = useMemo(() => Object.fromEntries(Object.entries(visitedAll).filter(([c]) => marks[c])), [visitedAll, marks]);
+  const toggleVisited = (code: string) => {
+    if (!marks[code]) return;
     setVisitedByDay((all) => {
       const n = { ...all[day] };
       if (n[code]) delete n[code];
       else n[code] = Date.now();
       return { ...all, [day]: n };
     });
+  };
   const setMarks = (f: (m: Record<string, Mark>) => Record<string, Mark>) => setMarksByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const setNotes = (f: (n: Record<string, string>) => Record<string, string>) => setNotesByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
@@ -2844,15 +2849,10 @@ export function VenueView() {
   }, [surround]);
   useEffect(() => api.current?.recolor(byGenre, marks, visited, selected, dayTags, genre, work, char), [byGenre, marks, visited, selected, dayTags, genre, work, char]);
   useEffect(() => {
-    // 印の机（ピンを立てる印だけ）と、印なしで「行った」をつけた机
-    const list = [
-      ...Object.entries(marks)
-        .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
-        .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark: mark as Mark | null, done: !!visited[code] })),
-      ...Object.keys(visited)
-        .filter((code) => !marks[code] && codeIndex.has(code))
-        .map((code) => ({ booth: codeIndex.get(code)!, mark: null, done: true })),
-    ];
+    // 印の机（ピンを立てる印だけ）。「行った」の机は灰色の ✓
+    const list = Object.entries(marks)
+      .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
+      .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark: mark as Mark | null, done: !!visited[code] }));
     api.current?.setPins(list);
   }, [marks, visited, pinsOn, codeIndex]);
 
@@ -2910,10 +2910,6 @@ export function VenueView() {
       .filter((c) => marks[c] === mark && codeIndex.has(c))
       .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const lists = { want: listOf("want"), maybe: listOf("maybe") };
-  // 印なしで「行った」をつけた机（当日に寄った所）
-  const visitedOnly = Object.keys(visited)
-    .filter((c) => !marks[c] && codeIndex.has(c))
-    .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
   const marked = lists.want.length + lists.maybe.length;
   const markedDone = [...lists.want, ...lists.maybe].filter((c) => visited[c]).length;
   // 印はつけずにメモだけ書いた机（「行った」の机は上に出すので除く）
@@ -3127,7 +3123,7 @@ export function VenueView() {
                 </button>
               </span>
             </div>
-            {marked + visitedOnly.length + memoOnly.length === 0 && (
+            {marked + memoOnly.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末の中だけに保存します。</p>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
@@ -3174,24 +3170,6 @@ export function VenueView() {
                 </ul>
               </section>
             ))}
-            {visitedOnly.length > 0 && (
-              <section style={{ marginTop: 8 }}>
-                <strong style={{ color: hexCss(VISITED_COLOR) }}>✓ 行った（印なし） {visitedOnly.length}</strong>
-                <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
-                  {visitedOnly.map((c) => (
-                    <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
-                      <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
-                        {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
-                        {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
-                      </button>
-                      <button className="chip small" aria-label={`${c} の「行った」を取り消す`} onClick={() => toggleVisited(c)}>
-                        取り消す
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
             {memoOnly.length > 0 && (
               <section style={{ marginTop: 8 }}>
                 <strong>📝 メモだけ {memoOnly.length}</strong>
@@ -3234,8 +3212,13 @@ export function VenueView() {
               　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              {/* 当日・計画のモードでは新しく印をつけず、「行った」を 1 回押すだけにする（ユーザーの指示） */}
-              {mode === "plan" ? (
+              {/* 当日・計画のモードでは新しく印をつけず、「行った」を 1 回押すだけにする（ユーザーの指示）。
+                  「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ */}
+              {mode === "plan" && !selMark ? (
+                <span style={{ flex: "1 1 100%", color: "var(--muted)", fontSize: ".9rem" }}>
+                  印のない机です。「✓ 行った」は、★ 行きたい・◆ 候補の印をつけた机だけにつけられます（印は「登録」のモードでつけます）。
+                </span>
+              ) : mode === "plan" ? (
                 <>
                   {/* 押しやすいように 1 行まるごと使う（スマホで折り返さない） */}
                   <button
@@ -3308,7 +3291,7 @@ export function VenueView() {
           </button>
         </div>
         <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "4px 0 0" }}>
-          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）。机を押して「✓ 行った」で、行った所が灰色になります"}
+          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）。★・◆ の机を押して「✓ 行った」で、行った所が灰色になります"}
         </p>
         <>
             <h3>日</h3>
