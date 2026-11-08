@@ -59,6 +59,8 @@ type Venue = {
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean; sur?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number; kind?: "room"; base?: number }[];
+  wallGaps?: { hall: string; a: XZ; b: XZ }[]; // 配置図を読みこまなくても開けておく壁の切れ目（東1・東2 のトラックヤード側）
+  yardWalls?: XZ[][]; // 1F の、トラックヤードと屋内の床の境目の壁（東3 の端）。点を結んだ線
   canopies?: { level: number; pts: XZ[]; ys: number[]; w: number }[]; // 屋外の白い屋根（やぐら橋など）：中心の線、点ごとの屋根の下の高さ、幅 // kind "room"：ホールの外の部屋の帯の、来場者の入れない部屋（その階だけ・黒）
 };
 const venue = venueJson as unknown as Venue;
@@ -1323,7 +1325,13 @@ export function VenueView() {
     };
     const openDoors = venue.doors.filter((d) => d.kind === "出入口" && freePart(d.hall, ...doorSpan(d.hall, d.at, d.width ?? DOOR_W)));
     // 配置図の切れ目は、通れる所だけに縮める（看板はその真ん中に）
-    const openGaps = (features?.openings ?? []).flatMap((o) => {
+    // 壁の切れ目：会場データに入れてあるもの（外壁の線の上に置いてある）と、配置図のもの（それと 8m より近いものは除く）
+    const dataGaps = venue.wallGaps ?? [];
+    const allGaps = [
+      ...dataGaps,
+      ...(features?.openings ?? []).filter((o) => !dataGaps.some((g) => Math.hypot((o.a[0] + o.b[0] - g.a[0] - g.b[0]) / 2, (o.a[1] + o.b[1] - g.a[1] - g.b[1]) / 2) < 8)),
+    ];
+    const openGaps = allGaps.flatMap((o) => {
       const f = freePart(o.hall, o.a, o.b);
       return f ? [{ ...o, a: f[0], b: f[1] }] : [];
     });
@@ -1366,7 +1374,7 @@ export function VenueView() {
         // 図面の出入口（建物の扉）と、配置図から写した壁の切れ目（当日開いている所）の両方を開ける
         // 穴は、壁サークルがふさいでいる出入口も開ける（看板だけ出さない）
         venue.doors.filter((d) => d.hall === h.id && d.kind === "出入口"),
-        (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
+        allGaps.filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
         // 搬入口（大きなシャッター）も穴にする。西・南に加えて東も（ユーザーの指示）。配置図を読みこんでいなくても開ける
@@ -1399,6 +1407,23 @@ export function VenueView() {
       scene.add(label);
       partsOf(h.level).solid.push(label);
       addLabel(label, "hall");
+    }
+    // 東3 の端の、トラックヤードと屋内の床の境目の壁（ガレリアの北の端の建物の壁）。ホールの壁と同じ高さ
+    {
+      const g = new THREE.Group();
+      for (const line of venue.yardWalls ?? [])
+        for (let i = 0; i + 1 < line.length; i++) {
+          const [a, b] = [line[i], line[i + 1]];
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          if (len < 0.05) continue;
+          const m = new THREE.Mesh(new THREE.BoxGeometry(len + 0.4, WALL_H, 0.4), wallMat);
+          m.position.set((a[0] + b[0]) / 2, floorY(1) + WALL_H / 2, (a[1] + b[1]) / 2);
+          m.rotation.y = -Math.atan2(b[1] - a[1], b[0] - a[0]);
+          g.add(m);
+        }
+      scene.add(g);
+      occluders.push(g);
+      partsOf(1).solid.push(g);
     }
     // 階段（屋上展示場からエントランスプラザへ）。段は 0.2m ほどの高さで、どの階を見ていても出す
     for (const st of venue.stairs ?? []) {
@@ -1648,7 +1673,9 @@ export function VenueView() {
     // 配置図の切れ目のうち、図面の出入口と重ならないもの（8m より離れている）を足す
     const fromLayout: Entrance[] = openGaps
       .map((o) => ({ hall: o.hall, level: hallById.get(o.hall)?.level ?? 1, at: [(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2] as XZ, width: Math.hypot(o.b[0] - o.a[0], o.b[1] - o.a[1]) }))
-      .filter((e) => !fromPlan.some((d) => Math.hypot(d.at[0] - e.at[0], d.at[1] - e.at[1]) < 8));
+      .filter((e) => !fromPlan.some((d) => Math.hypot(d.at[0] - e.at[0], d.at[1] - e.at[1]) < 8))
+      // 2 つのホールのつなぎ目の切れ目は両方のホールに入れてあるので、看板は 1 つだけ
+      .filter((e, i, all) => !all.slice(0, i).some((o) => Math.hypot(o.at[0] - e.at[0], o.at[1] - e.at[1]) < 8));
     const entrances: Entrance[] = [...fromPlan, ...fromLayout];
     const signPx = textSprite("⇄ 出入口", { bg: "rgba(20,120,60,.95)", height: 1, px: 128 });
     const signAspect = signPx.scale.x / signPx.scale.y;

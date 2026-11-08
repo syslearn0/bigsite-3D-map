@@ -907,7 +907,9 @@ for (const h of halls) {
       out.push([u0, v1]);
       return out;
     };
-    outside("トラックヤード", 1, [roundRect(8, -528, 138, -172, 14, [true, true])]);
+    // 東3 の端の先（v -528 より先）の、ガレリアの北の端の建物と東8 の西の壁のあいだの舗装（航空写真で、トラックヤードから
+    // 続くアスファルトの道。灰色の地面のままだった：ユーザーの指摘）。u 18〜77.2 の四角（もとの形と 1m 重ねてひとつの形にする）から、建物（東ガレリア）と東8 を引いた三角
+    outside("トラックヤード", 1, [roundRect(8, -528, 138, -172, 14, [true, true]), [[18, -552], [77.2, -552], [77.2, -527], [18, -527]]]);
   }
   // 東7・東8 の北東の大きな駐車場（公式フロアマップの「東棟屋外臨時駐車場」。コミケでは一般参加者の待機列に使う所）。
   // 航空写真で測った形：北東は海ぞいの縁（(-255,-945) から (81,-741)、そこから (175,-560)）、南西は東7・東8 の斜めの辺の
@@ -1031,6 +1033,40 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
     const d = doors.find((o) => o.hall === hall && o.kind === "搬入口" && Math.hypot(o.at[0] - at[0], o.at[1] - at[1]) < 3);
     if (!d) throw new Error(`${hall} の搬入口が ${at} の近くにない`);
     Object.assign(d, { width, height });
+  }
+}
+// 東1 と東2、東2 と東3 のつなぎ目の、トラックヤード側の外壁の開口（コミケの配置図（C108）で、つなぎ目の黒い塊（階段・EV の区画）の
+// 外側の壁が開いて描かれている所。搬入口ではない）。配置図を読みこんでいなくても開ける（ユーザーの指示で公開版にも入れる）。
+// 配置図から読んだ切れ目（a〜b）はホールの床のふち（部屋の帯の内側、外壁から 5m ほど内）の線で、つなぎ目の塊の幅まで含む。
+// 外壁の線（配置図の上のふち）の切れ目は、そのうち t0〜t1 の所（約 7m）なので、そこだけを両どなりのホールの外壁の線の上に移す
+const wallGaps: { hall: string; a: XZ; b: XZ }[] = [];
+for (const [ids, a0, b0, t0, t1] of [
+  [["E1", "E2"], [332.18, -75.23], [322.3, -68.81], 0.202, 0.807],
+  [["E2", "E3"], [407.63, -124.38], [397.33, -117.69], 0.204, 0.805],
+] as [string[], XZ, XZ, number, number][]) {
+  const a: XZ = [a0[0] + (b0[0] - a0[0]) * t0, a0[1] + (b0[1] - a0[1]) * t0];
+  const b: XZ = [a0[0] + (b0[0] - a0[0]) * t1, a0[1] + (b0[1] - a0[1]) * t1];
+  const m: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const gl = Math.hypot(b[0] - a[0], b[1] - a[1]), gx = (b[0] - a[0]) / gl, gz = (b[1] - a[1]) / gl;
+  for (const hall of ids) {
+    const poly = halls.find((h) => h.id === hall && h.level === 1)!.poly;
+    // 切れ目と平行な辺のうち、切れ目の線からの距離がいちばん近いもの（外壁）
+    let best = { d: Infinity, p: poly[0], q: poly[1] };
+    poly.forEach((p, i) => {
+      const q = poly[(i + 1) % poly.length];
+      const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (L < 3 || Math.abs(((q[0] - p[0]) / L) * gz - ((q[1] - p[1]) / L) * gx) > 0.05) return;
+      const d = Math.abs(-(m[0] - p[0]) * gz + (m[1] - p[1]) * gx);
+      if (d < best.d) best = { d, p, q };
+    });
+    if (best.d > 8) throw new Error(`${hall} の壁の切れ目の近くに外壁がない（${best.d.toFixed(1)}m）`);
+    const { p, q } = best;
+    const dx = q[0] - p[0], dz = q[1] - p[1], L2 = dx * dx + dz * dz;
+    const on = (x: XZ): XZ => {
+      const t = ((x[0] - p[0]) * dx + (x[1] - p[1]) * dz) / L2;
+      return [Math.round((p[0] + t * dx) * 10) / 10, Math.round((p[1] + t * dz) * 10) / 10];
+    };
+    wallGaps.push({ hall, a: on(a), b: on(b) });
   }
 }
 // 東1〜3 のホールとガレリアのあいだの部屋の帯の部屋（主催者事務室・商談室・東VIPルーム・多目的室・給湯室・階段・EV）。
@@ -2109,8 +2145,33 @@ const exits = [
 ];
 
 mkdirSync("src/data", { recursive: true });
+// 東3 の端の、トラックヤードと屋内の床（ホール前・東ガレリア）の境目の壁（航空写真：ガレリアの北の端の白い建物の、
+// トラックヤードに面した壁。ユーザーの指示）。東1 の端は、ガレリアが西の広場へ開いた入口なので立てない（v -480 より先だけ）
+const yardWalls: XZ[][] = [];
+for (const y of areas.filter((a) => a.name === "トラックヤード" && a.level === 1)) {
+  const indoor = areas.filter((a) => a.level === 1 && !a.outdoor);
+  let cur: XZ[] = [];
+  const flush = () => {
+    if (cur.length >= 2) yardWalls.push(cur);
+    cur = [];
+  };
+  y.poly.forEach((a, i) => {
+    const b = y.poly[(i + 1) % y.poly.length];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const m: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const n: XZ = [-(b[1] - a[1]) / (L || 1), (b[0] - a[0]) / (L || 1)];
+    const p1: XZ = [m[0] + n[0], m[1] + n[1]], p2: XZ = [m[0] - n[0], m[1] - n[1]];
+    const out = pointInPolygon(p1, y.poly) ? p2 : p1;
+    const ok = L >= 0.5 && toUV(m)[1] < -480 && indoor.some((ar) => pointInPolygon(out, ar.poly));
+    if (!ok) return flush();
+    if (!cur.length) cur.push(a);
+    cur.push(b);
+  });
+  flush();
+}
+console.log(`東3 の端の壁：${yardWalls.map((w) => w.length - 1).join("・")} 辺、壁の切れ目 ${wallGaps.length}`);
 writeFileSync(
   "src/data/venue.json",
-  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)・周辺の建物：国土交通省 PLATEAU（CC BY 4.0）を加工", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks, canopies }),
+  JSON.stringify({ origin: ORIGIN, floorY: FLOOR_Y, attribution: "© OpenStreetMap contributors (ODbL 1.0)・周辺の建物：国土交通省 PLATEAU（CC BY 4.0）を加工", osmFetchedAt: osm.fetchedAt, halls, areas, context, parts3d, surroundings: sur, toilets, toiletRooms, firstAid, doors, exits, stairs, blocks, canopies, wallGaps, yardWalls }),
 );
 console.log(`ホール ${halls.length}・通路 ${areas.length}・建物 ${context.length}（立体 ${parts3d.length}）・トイレ ${toilets.length}（図面 ${plan.toilets.length}）・救護室 ${firstAid.length}・出入口と搬入口 ${doors.length}・周辺の道と線路 ${sur.lines.length}・駅 ${sur.stations.length} を src/data/venue.json に`);
