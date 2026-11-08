@@ -1369,8 +1369,8 @@ export function VenueView() {
         (features?.openings ?? []).filter((o) => o.hall === h.id).map((o) => [o.a, o.b] as [XZ, XZ]),
         venue.halls.filter((o) => o.id !== h.id && o.level === h.level).map((o) => o.poly),
         (i) => (lowEdge(h, i) ? floorY(2) - floorY(1) : WALL_H),
-        // 西・南のホールは、搬入口（大きなシャッター）も穴にする（ユーザーの確認）
-        h.building === "南" || h.building === "西" ? venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口") : [],
+        // 搬入口（大きなシャッター）も穴にする。西・南に加えて東も（ユーザーの指示）。配置図を読みこんでいなくても開ける
+        venue.doors.filter((d) => d.hall === h.id && d.kind === "搬入口"),
       );
       scene.add(w);
       occluders.push(w);
