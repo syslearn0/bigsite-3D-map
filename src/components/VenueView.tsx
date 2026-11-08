@@ -59,7 +59,7 @@ type Venue = {
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean; sur?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number; kind?: "room"; base?: number }[];
-  wallGaps?: { hall: string; a: XZ; b: XZ; full?: boolean }[]; // 配置図を読みこまなくても開けておく壁の切れ目（東1〜3 のトラックヤード側のつなぎ目・ガレリア側の区画のあいだ）。full：壁の高さいっぱい（看板なし）
+  wallGaps?: { hall: string; a: XZ; b: XZ; full?: boolean; sign?: false }[]; // 配置図を読みこまなくても開けておく壁の切れ目（東1〜3 のトラックヤード側のつなぎ目・ガレリア側の区画のあいだ）。full：壁の高さいっぱい（看板なし）
   yardWalls?: XZ[][]; // 1F の、トラックヤードと屋内の床の境目の壁（東3 の端）。点を結んだ線
   canopies?: { level: number; pts: XZ[]; ys: number[]; w: number }[]; // 屋外の白い屋根（やぐら橋など）：中心の線、点ごとの屋根の下の高さ、幅 // kind "room"：ホールの外の部屋の帯の、来場者の入れない部屋（その階だけ・黒）
 };
@@ -1331,7 +1331,8 @@ export function VenueView() {
       ...dataGaps,
       ...(features?.openings ?? []).filter((o) => !dataGaps.some((g) => Math.hypot((o.a[0] + o.b[0] - g.a[0] - g.b[0]) / 2, (o.a[1] + o.b[1] - g.a[1] - g.b[1]) / 2) < 8)),
     ];
-    const openGaps = allGaps.filter((o) => !("full" in o && o.full)).flatMap((o) => {
+    // 看板を出さない切れ目（壁の高さいっぱいの開口・西のトイレのあいだの扉）は除く
+    const openGaps = allGaps.filter((o) => !("full" in o && o.full) && !("sign" in o && o.sign === false)).flatMap((o) => {
       const f = freePart(o.hall, o.a, o.b);
       return f ? [{ ...o, a: f[0], b: f[1] }] : [];
     });

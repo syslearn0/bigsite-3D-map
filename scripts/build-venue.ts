@@ -739,6 +739,28 @@ const plan = existsSync("data/plan-toilets.json")
 // 東1 の図面から読んだもの（トイレ・トイレの囲み・出入口・搬入口）は、東2・東3 にくらべて東1 の端の側へ 5.5m ずれていた。
 // コミケの配置図（C108）と比べると、トラックヤード側の搬入口の両わきの柱（v -282.7・-257.4）、トラックヤード側のトイレ、
 // ホールの真ん中の階段の区画が、どれも同じ向きに 5〜6m ずれている（東2・東3 では 1m 以内で合う）。v を 5.5m 東2 の側へ戻す
+// 西1・西2 の図面から読んだもの（トラックヤード側の帯のトイレ・トイレの囲み・搬入口）は、壁ごとに位置合わせがずれていた
+// （図面の西2 は 90° 回して戻したもの。西1 もアトリウムの側から遠い壁ほどずれる）。コミケの配置図（C108）の、トイレの区画・
+// トイレのあいだの切れ目・搬入口の通路の位置と比べて、壁ごとにそろえる（区画の大きさと並びは図面のまま）：
+// 西1 の東の壁 v −1.9m、西2 の東の壁 v +7.2m、西1 の北の壁 u −4.0m、西2 の南の壁 u −9.3m（配置図の 4〜5 か所の平均。残りのずれは 2m ほど）
+const W_SHIFT = { W1E: -1.9, W2E: 7.2, W1N: -4.0, W2S: -9.3 };
+const wShift = (hall: string | undefined, p: XZ): XZ => {
+  const [u, v] = toUV(p);
+  if (hall === "W1" && u > 195) return fromUV([[u, v + W_SHIFT.W1E]])[0];
+  if (hall === "W2" && u > 195) return fromUV([[u, v + W_SHIFT.W2E]])[0];
+  if (hall === "W1" && v < -65) return fromUV([[u + W_SHIFT.W1N, v]])[0];
+  if (hall === "W2" && v > 95) return fromUV([[u + W_SHIFT.W2S, v]])[0];
+  return p;
+};
+{
+  const pl = plan as { toilets: { at: XZ; hall?: string }[]; doors?: { at: XZ; hall: string }[]; toiletRooms?: { hall: string; poly: XZ[] }[] };
+  for (const t of pl.toilets) t.at = wShift(t.hall, t.at);
+  for (const d of pl.doors ?? []) d.at = wShift(d.hall, d.at);
+  for (const r of pl.toiletRooms ?? []) {
+    const c = centroid(r.poly), c2 = wShift(r.hall, c);
+    r.poly = r.poly.map((q) => [q[0] + c2[0] - c[0], q[1] + c2[1] - c[1]] as XZ);
+  }
+}
 const E1_SHIFT = -5.5;
 {
   const sh = (p: XZ): XZ => {
@@ -849,16 +871,17 @@ for (const r of toiletRooms) if (r.hall === "E2") r.poly = fromUV(r.poly.map((p)
 // 西1 の北（トラックヤード側、搬入口 A・B のあいだ）のトイレの囲みは、図面の壁から小さな部屋（多機能トイレなど）だけが取れていて、
 // 男子・女子トイレの区画の大きさになっていなかった。図面（西1 の白図。搬入口 B の文字 y 1058 → u 140.5、1pt = 0.0707m で u が減る）で
 // 測った区画にする：男子 u 126.4〜137.8、女子 u 100.9〜111.1（奥行きは今の囲みと同じ v -83〜-79）。西2 は西1 をアトリウムの
-// 真ん中（v 11.5）で折り返した所（v 102〜106）
+// 真ん中（v 11.5）で折り返した所（v 102〜106）。どちらも上の W_SHIFT で壁ごとにずらす
 {
   for (let i = toiletRooms.length - 1; i >= 0; i--) {
     const r = toiletRooms[i];
     const [u, v] = toUV(centroid(r.poly));
-    if ((r.hall === "W1" && u > 95 && u < 140 && v < -75) || (r.hall === "W2" && u > 95 && u < 140 && v > 100)) toiletRooms.splice(i, 1);
+    if ((r.hall === "W1" && u > 85 && u < 140 && v < -75) || (r.hall === "W2" && u > 80 && u < 140 && v > 100)) toiletRooms.splice(i, 1);
   }
   for (const [u0, u1] of [[126.4, 137.8], [100.9, 111.1]]) {
-    toiletRooms.push({ hall: "W1", level: 1, poly: fromUV([[u0, -83], [u1, -83], [u1, -79], [u0, -79]]) });
-    toiletRooms.push({ hall: "W2", level: 1, poly: fromUV([[u0, 102], [u1, 102], [u1, 106], [u0, 106]]) });
+    const a = W_SHIFT.W1N, b = W_SHIFT.W2S;
+    toiletRooms.push({ hall: "W1", level: 1, poly: fromUV([[u0 + a, -83], [u1 + a, -83], [u1 + a, -79], [u0 + a, -79]]) });
+    toiletRooms.push({ hall: "W2", level: 1, poly: fromUV([[u0 + b, 102], [u1 + b, 102], [u1 + b, 106], [u0 + b, 106]]) });
   }
 }
 // ホールの外壁：会場データのホールの形（OSM）は展示場の床だけで、トイレ・事務室などの部屋の帯はその外に出ている。
@@ -934,6 +957,19 @@ for (const h of halls) {
   }
 }
 
+// 西2 の東の外壁（u 211.4）は、OSM の形のまま v 82.4 で内側（u 202）へ曲がっていて、東の 2 つめの搬入口（v 84.6、幅 8m）が
+// 壁の角にかかっていた。コミケの配置図では、外壁はまっすぐ続き、搬入口の通路（v 77〜87）の先にも部屋の塊（v 86〜97）がある
+// （西1 の東の外壁も、帯の端までまっすぐ）。曲がる所を v 97 まで延ばす
+{
+  const h = halls.find((x) => x.id === "W2")!;
+  const P = h.poly.map(toUV);
+  const i = P.findIndex(([u, v]) => Math.abs(u - 211.5) < 0.3 && Math.abs(v - 82.4) < 0.3);
+  if (i < 0 || Math.abs(P[i + 1][0] - 202) > 0.3) throw new Error("西2 の東の外壁の曲がり角がない");
+  const keep = P.filter((q, k) => k <= i + 1 || !(q[0] > 201.5 && q[0] < 202.5 && q[1] > 82 && q[1] < 97));
+  keep[i] = [211.5, 97];
+  keep[i + 1] = [202, 97];
+  h.poly = keep.map((q) => fromUV([q])[0]);
+}
 // ホールの外の屋外の床：航空写真（Esri World Imagery を西展示棟の向き u・v に回して測ったもの）で、トラックや車の止まっている
 // 舗装の所。u・v の四角から、同じ階のホールとほかの床を引いたもの（ホールの壁をトイレを囲むために広げたあとで引く）。
 // carve の床（南展示棟（4F）のような、建物の形をそのまま敷いた下じきの床）からは、この屋外の所を切りとる
@@ -1171,22 +1207,28 @@ for (const d of doors) if (d.hall === "W3" && d.kind === "出入口" && Math.hyp
   // 西1・西2 の搬入口（シャッター）は、図面ではどれも W 8.0m × H 6.0m（有効 7.4m）
   for (const d of doors) if ((d.hall === "W1" || d.hall === "W2") && d.kind === "搬入口") Object.assign(d, { width: 8, height: 6 });
 }
-// 西1・西2 のトラックヤード側の帯：トイレとトイレのあいだは、図面ではコインロッカー・給湯室・階段の区画で、帯の奥まで閉じている
-// （搬入口の通路は、その外側）。黒い低い箱（kind "room"）で描く。西1 の白図で測った位置、西2 は西1 をアトリウムの真ん中（v 11.5）で
-// 折り返した所。帯の奥行きは、外壁から図面の帯の深さ（10.2m）まで。ただし西2 の南は会場データの帯（v 103.3〜107.5）の中だけ
-// （そのすぐ内側に、配置図の壁ぞいの机がある）
-for (const [name, u0, u1, v0, v1] of [
-  ["階段・ロッカー（西1）", 201.9, 211.4, -37.3, -26.5],
-  ["階段・ロッカー（西2）", 201.9, 211.4, 49.5, 60.3],
-  ["階段・給湯室（西1）", 114.9, 122.5, -84.6, -74.4],
-  ["階段・給湯室（西2）", 114.9, 122.5, 103.3, 107.5],
-] as [string, number, number, number, number][])
+// 西1・西2 のトラックヤード側の帯：トイレとトイレのあいだは、図面ではコインロッカー・給湯室・階段の区画。外壁のすぐ内側は小さな
+// 前室で、外壁には扉がある（コミケの配置図でも、トイレのあいだの外壁は開いていて、区画は内側へ引っこんで描かれている）。
+// 区画は外壁から 2.5m 内側から帯の奥まで、黒い低い箱（kind "room"）で描き、トイレのあいだの外壁を開ける（看板は出さない）。
+// 西1 の白図で測った位置（西2 は折り返し）に、上の W_SHIFT を足したもの
+const wallGapsW: { hall: string; a: XZ; b: XZ; sign: false }[] = [];
+for (const [name, hall, u0, u1, v0, v1, gap] of [
+  ["階段・ロッカー（西1）", "W1", 201.9, 208.9, -37.3 + W_SHIFT.W1E, -26.5 + W_SHIFT.W1E, [211.4, -37.3 + W_SHIFT.W1E, 211.4, -26.5 + W_SHIFT.W1E]],
+  ["階段・ロッカー（西2）", "W2", 201.9, 208.9, 49.5 + W_SHIFT.W2E, 60.3 + W_SHIFT.W2E, [211.4, 49.5 + W_SHIFT.W2E, 211.4, 60.3 + W_SHIFT.W2E]],
+  ["階段・給湯室（西1）", "W1", 114.9 + W_SHIFT.W1N, 122.5 + W_SHIFT.W1N, -82.1, -74.4, [111.1 + W_SHIFT.W1N, -84.6, 126.4 + W_SHIFT.W1N, -84.6]],
+  ["階段・給湯室（西2）", "W2", 114.9 + W_SHIFT.W2S, 122.5 + W_SHIFT.W2S, 103.3, 105.0, [111.1 + W_SHIFT.W2S, 107.5, 126.4 + W_SHIFT.W2S, 107.5]],
+] as [string, string, number, number, number, number, number[]][]) {
   blocks.push({ name, level: 1, kind: "room", height: 3.5, poly: fromUV([[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) });
+  // 切れ目は両端のトイレの区画から 0.5m ずつ離す
+  const [ga, gb] = fromUV([[gap[0], gap[1]], [gap[2], gap[3]]]);
+  const L = Math.hypot(gb[0] - ga[0], gb[1] - ga[1]), dx = (gb[0] - ga[0]) / L, dz = (gb[1] - ga[1]) / L;
+  wallGapsW.push({ hall, a: [ga[0] + dx * 0.5, ga[1] + dz * 0.5], b: [gb[0] - dx * 0.5, gb[1] - dz * 0.5], sign: false });
+}
 // 東1 と東2、東2 と東3 のつなぎ目の、トラックヤード側の外壁の開口（コミケの配置図（C108）で、つなぎ目の黒い塊（階段・EV の区画）の
 // 外側の壁が開いて描かれている所。搬入口ではない）。配置図を読みこんでいなくても開ける（ユーザーの指示で公開版にも入れる）。
 // 配置図から読んだ切れ目（a〜b）はホールの床のふち（部屋の帯の内側、外壁から 5m ほど内）の線で、つなぎ目の塊の幅まで含む。
 // 外壁の線（配置図の上のふち）の切れ目は、そのうち t0〜t1 の所（約 7m）なので、そこだけを両どなりのホールの外壁の線の上に移す
-const wallGaps: { hall: string; a: XZ; b: XZ; full?: boolean }[] = []; // full：壁の高さいっぱいに開ける（看板は出さない）
+const wallGaps: { hall: string; a: XZ; b: XZ; full?: boolean; sign?: false }[] = [...wallGapsW]; // full：壁の高さいっぱいに開ける（看板は出さない）。sign false：看板を出さない
 for (const [ids, a0, b0, t0, t1] of [
   [["E1", "E2"], [332.18, -75.23], [322.3, -68.81], 0.202, 0.807],
   [["E2", "E3"], [407.63, -124.38], [397.33, -117.69], 0.204, 0.805],
