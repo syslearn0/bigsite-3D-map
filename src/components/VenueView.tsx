@@ -89,6 +89,24 @@ const PARKING_COLOR = 0x9ccc8a; // 東棟屋外臨時駐車場（緑）
 const OUTDOOR_STAIR_COLOR = 0xe0358f; // 屋外の階段（目立つマゼンタ）
 const RAMP_COLOR = 0xe8a33d; // 車のスロープ（目立つ山吹色）
 const LINK_AREAS = new Set(["連絡ブリッジ", "北コンコース"]);
+// 2D（真上から）の画面の上の向き（会場の x・z）。机の列が画面の上下と平行になるように（ユーザーの指示）。
+// 会場の机の列は、格子の u の向き（x 軸から 56.5°）か、それと直角（146.5°）のどちらか。ホールによって違い、配置によっても違う
+// （見本の配置は東1・東3・東7 が直角の向き、C109 の配置は南だけが直角の向き）ので、読みこんだ配置で机の多いほうの向きを
+// 画面の上下にする（もう一方の向きの列は画面の横）。上は、北がなるべく上になる側
+const TOP_UP: XZ = (() => {
+  const U: XZ = [0.5518669, 0.8339322], V: XZ = [-0.8339322, 0.5518669];
+  let nu = 0, nv = 0;
+  for (const l of lines) {
+    const n = l.desks?.length ?? l.segments.reduce((a, b) => a + b, 0);
+    const c = Math.abs(Math.cos(l.angle) * U[0] + Math.sin(l.angle) * U[1]); // 列の向きと u の向きのなす角の cos
+    if (c >= Math.SQRT1_2) nu += n;
+    else nv += n;
+  }
+  const d = nu >= nv ? U : V;
+  return d[1] > 0 ? [-d[0], -d[1]] : d;
+})();
+const TOP_RIGHT: XZ = [-TOP_UP[1], TOP_UP[0]]; // 画面の右の向き
+const NORTH_DEG = (Math.atan2(-TOP_RIGHT[1], -TOP_UP[1]) * 180) / Math.PI; // 2D の画面の上で、北が上から右回りに何度か
 const SELECT_COLOR = 0xffb000;
 const WALL_H = 12; // ホールの壁の高さ（見やすさの目安。7.5m の 1.6 倍）
 
@@ -1832,11 +1850,11 @@ export function VenueView() {
     // ---- カメラと操作 ----
     // 最初は会場全体（ホールの外側の枠）が入るように
     const all = venue.halls.flatMap((h) => h.poly);
-    const bounds = {
-      minX: Math.min(...all.map((p) => p[0])), maxX: Math.max(...all.map((p) => p[0])),
-      minZ: Math.min(...all.map((p) => p[1])), maxZ: Math.max(...all.map((p) => p[1])),
-    };
-    const focus = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, 0, (bounds.minZ + bounds.maxZ) / 2);
+    // 2D の画面の向き（右 = TOP_RIGHT、上 = TOP_UP）で測った広がり
+    const rs = all.map((p) => p[0] * TOP_RIGHT[0] + p[1] * TOP_RIGHT[1]), us = all.map((p) => p[0] * TOP_UP[0] + p[1] * TOP_UP[1]);
+    const bounds = { minR: Math.min(...rs), maxR: Math.max(...rs), minU: Math.min(...us), maxU: Math.max(...us) };
+    const midR = (bounds.minR + bounds.maxR) / 2, midU = (bounds.minU + bounds.maxU) / 2;
+    const focus = new THREE.Vector3(midR * TOP_RIGHT[0] + midU * TOP_UP[0], 0, midR * TOP_RIGHT[1] + midU * TOP_UP[1]);
     // 上からの見方では、文字は壁や床に隠れない方が読みやすい。3D・歩くでは、壁の向こうの文字は隠す
     const sprites: THREE.Sprite[] = [];
     scene.traverse((o) => {
@@ -1882,6 +1900,7 @@ export function VenueView() {
     const setView = (v: View) => {
       controls?.dispose();
       controls = null;
+      const prev = current;
       current = v;
       // 2D（真上から）では、会議棟は下の 2F のプラザを隠すので出さない
       for (const m of towerMeshes) m.visible = v !== "top";
@@ -1892,7 +1911,8 @@ export function VenueView() {
       persp.updateProjectionMatrix();
       if (v === "top") {
         camera = ortho;
-        ortho.position.set(focus.x, 600, focus.z + 0.01);
+        // 真上から少しだけ下の向きへずらして置くと、画面の上が TOP_UP の向きになる
+        ortho.position.set(focus.x - TOP_UP[0] * 0.01, 600, focus.z - TOP_UP[1] * 0.01);
         ortho.updateProjectionMatrix();
         const c = new MapControls(ortho, renderer.domElement);
         c.enableRotate = false;
@@ -1933,6 +1953,8 @@ export function VenueView() {
         camera = persp;
         persp.position.set(focus.x, eyeY(), focus.z);
         pitch = 0;
+        // 2D から歩くに入ったときは、2D の画面の上の向き（机の列の向き）を向いて立つ
+        if (prev === "top") yaw = Math.atan2(-TOP_UP[0], -TOP_UP[1]);
       }
       placeDesks(v === "top");
       applyVisibility();
@@ -1981,7 +2003,7 @@ export function VenueView() {
     const focusPoint = (p: THREE.Vector3, close: boolean) => {
       focus.copy(p);
       if (current === "top") {
-        startFly(p.clone(), new THREE.Vector3(p.x, 600, p.z + 0.01));
+        startFly(p.clone(), new THREE.Vector3(p.x - TOP_UP[0] * 0.01, 600, p.z - TOP_UP[1] * 0.01));
         if (close) {
           // 机を探したときは、1スペース（0.9m）が指で押せる 20px ほどになるまで寄る
           ortho.zoom = Math.max(ortho.zoom, (20 / 0.9) * (2 * 160) / el.clientHeight);
@@ -2022,7 +2044,7 @@ export function VenueView() {
       applyVisibility();
       focus.copy(p);
       if (current === "top") {
-        startFly(p.clone(), new THREE.Vector3(p.x, 600, p.z + 0.01));
+        startFly(p.clone(), new THREE.Vector3(p.x - TOP_UP[0] * 0.01, 600, p.z - TOP_UP[1] * 0.01));
         // 列の広がりが、画面の短い辺の 8 割に入る倍率
         const ppm = (0.8 * Math.min(el.clientWidth, el.clientHeight)) / span;
         ortho.zoom = (ppm * 2 * 160) / el.clientHeight;
@@ -2034,7 +2056,7 @@ export function VenueView() {
         persp.position.set(cx, floorY(lv) + EYE, cz);
       }
     };
-    // 歩く：(x, z) に立つ。向きは、それまで見ていた向き（真上から見ていたときは北）
+    // 歩く：(x, z) に立つ。向きは、それまで見ていた向き（真上から見ていたときは、2D の画面の上の向き）
     const standAt = (x: number, z: number) => {
       persp.position.set(x, eyeY(), z);
       pitch = -0.1;
@@ -2366,7 +2388,7 @@ export function VenueView() {
     };
 
     // 拡大して1スペースが 16px 以上になったら、机の上に配置番号を書く（上からの見方だけ）。
-    // 上からの見方は真上から北を上に見ているので、画面の位置は (x, z) をそのまま拡大して足せばよい
+    // 上からの見方は真上から TOP_UP の向きを上に見ているので、画面の位置は (x, z) を TOP_RIGHT・TOP_UP の向きに分けて拡大する
     let codesShown = false;
     const ends = islandEnds(lines);
     // 3D（見下ろす見方）：机ごとに画面の上での大きさ（遠近で変わる）を見て、2D と同じ決まりで書く。
@@ -2490,7 +2512,13 @@ export function VenueView() {
       codesShown = true;
       codeCtx.clearRect(0, 0, w, h);
       const cx = controls ? controls.target.x : focus.x, cz = controls ? controls.target.z : focus.z;
-      const halfW = w / 2 / ppm + 2, halfH = h / 2 / ppm + 2;
+      // 画面の位置（画面の外 2m より先は null）と、会場の向きを画面の向きに
+      const toScr = (x: number, z: number): [number, number] | null => {
+        const dx = x - cx, dz = z - cz;
+        const sx = (dx * TOP_RIGHT[0] + dz * TOP_RIGHT[1]) * ppm + w / 2, sy = h / 2 - (dx * TOP_UP[0] + dz * TOP_UP[1]) * ppm;
+        return sx < -2 * ppm || sx > w + 2 * ppm || sy < -2 * ppm || sy > h + 2 * ppm ? null : [sx, sy];
+      };
+      const scrDir = (dx: number, dz: number): [number, number] => [dx * TOP_RIGHT[0] + dz * TOP_RIGHT[1], -(dx * TOP_UP[0] + dz * TOP_UP[1])];
       if (perDesk) {
         // 机の真ん中（a と b のあいだ）に、机の番号だけ
         codeCtx.font = `600 ${Math.round(Math.max(9, Math.min(13, ppm * DESK_L * 0.45)))}px system-ui, sans-serif`;
@@ -2507,10 +2535,11 @@ export function VenueView() {
             if (a.half !== "a" || !b || b.line !== a.line || b.num !== a.num) continue;
             const x = (a.at[0] + b.at[0]) / 2 - Math.sin(a.angle) * a.side * out;
             const z = (a.at[1] + b.at[1]) / 2 + Math.cos(a.angle) * a.side * out;
-            if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+            const at = toScr(x, z);
+            if (!at) continue;
             if (covered(x, floorY(lv), z)) continue;
             const label = String(a.num).padStart(2, "0");
-            const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
+            const [sx, sy] = at;
             codeCtx.strokeText(label, sx, sy);
             codeCtx.fillText(label, sx, sy);
           }
@@ -2530,12 +2559,15 @@ export function VenueView() {
           if (!shown(floorOf(hallById.get(l.hall)!.level))) continue;
           const c = Math.cos(l.angle), sn = Math.sin(l.angle);
           const x = l.start[0] + e.u * c, z = l.start[1] + e.u * sn;
-          if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          const at = toScr(x, z);
+          if (!at) continue;
           if (covered(x, floorY(hallById.get(l.hall)!.level), z)) continue;
           const sideOff = e.side * Math.max(7, (TOP_DESK_D / 2) * ppm);
           const inward = -e.out * Math.max(7, (DESK_L / 2) * ppm);
-          const sx = (x - cx) * ppm + w / 2 + c * inward - sn * sideOff;
-          const sy = (z - cz) * ppm + h / 2 + sn * inward + c * sideOff;
+          // 列の向き（c, sn）と、それに直角な向き（-sn, c）を画面の向きにして、px でずらす
+          const [ax, ay] = scrDir(c, sn), [bx, by] = scrDir(-sn, c);
+          const sx = at[0] + ax * inward + bx * sideOff;
+          const sy = at[1] + ay * inward + by * sideOff;
           const label = String(e.num).padStart(2, "0");
           codeCtx.strokeText(label, sx, sy);
           codeCtx.fillText(label, sx, sy);
@@ -2559,10 +2591,11 @@ export function VenueView() {
           // 上から描いている机の真ん中（サークルの座る側へのばした分だけずらす）
           const x = b.at[0] - Math.sin(b.angle) * b.side * out;
           const z = b.at[1] + Math.cos(b.angle) * b.side * out;
-          if (Math.abs(x - cx) > halfW || Math.abs(z - cz) > halfH) continue;
+          const at = toScr(x, z);
+          if (!at) continue;
           if (covered(x, floorY(lv), z)) continue;
           const label = full ? `${b.block}-${String(b.num).padStart(2, "0")}${b.half}` : `${String(b.num).padStart(2, "0")}${b.half}`;
-          const sx = (x - cx) * ppm + w / 2, sy = (z - cz) * ppm + h / 2;
+          const [sx, sy] = at;
           codeCtx.strokeText(label, sx, sy);
           codeCtx.fillText(label, sx, sy);
         }
@@ -2618,7 +2651,7 @@ export function VenueView() {
 
     // 上からの見方の縦の半分は 160m（size()）。会場の縦横が入る倍率に
     const aspect = el.clientWidth / Math.max(1, el.clientHeight);
-    ortho.zoom = Math.min((160 * 2) / ((bounds.maxZ - bounds.minZ) * 1.08), (160 * 2 * aspect) / ((bounds.maxX - bounds.minX) * 1.08));
+    ortho.zoom = Math.min((160 * 2) / ((bounds.maxU - bounds.minU) * 1.08), (160 * 2 * aspect) / ((bounds.maxR - bounds.minR) * 1.08));
     ortho.updateProjectionMatrix();
     setView("top");
     setFloor(1);
@@ -3065,6 +3098,24 @@ export function VenueView() {
                 両方
               </button>
             </div>
+            {/* 2D は机の列を画面の上下にそろえて回しているので、北の向きを矢印で出す */}
+            {view === "top" && (
+              <div
+                role="img"
+                aria-label={`北は画面の上から右へ ${Math.round(NORTH_DEG)} 度`}
+                style={{ alignSelf: "center", width: 44, height: 44, borderRadius: "50%", background: "var(--card)", border: "1px solid var(--line)", boxShadow: "0 1px 6px rgba(0,0,0,.12)", display: "grid", placeItems: "center", pointerEvents: "none" }}
+              >
+                {/* 赤い矢印の先が北。「北」の字は矢印の先の側に、まっすぐ立てて書く */}
+                <svg width="36" height="36" viewBox="-18 -18 36 36" aria-hidden>
+                  <g transform={`rotate(${NORTH_DEG})`}>
+                    <path d="M0 -3 L4 8 L0 6 L-4 8 Z" fill="#d23c3c" />
+                    <text x="0" y="-8" textAnchor="middle" dominantBaseline="middle" fontSize="10" fontWeight="800" fill="#1d1d1b" transform={`rotate(${-NORTH_DEG} 0 -8)`}>
+                      北
+                    </text>
+                  </g>
+                </svg>
+              </div>
+            )}
           </div>
         </div>
         {!online && (
