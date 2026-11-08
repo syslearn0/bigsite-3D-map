@@ -1,3 +1,6 @@
+// 書き出し（output: "export"）でファイルとして作るため
+export const dynamic = "force-static";
+
 import type { MetadataRoute } from "next";
 
 // ホーム画面に追加したアプリとしての設定
