@@ -978,7 +978,7 @@ const firstAid = plan.firstAid.map((a) => ({ at: a.at, level: a.level }));
 const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)).map((d) => {
   // ホールの壁から 15m より離れた出入口（東1 の西の端の、地上からのエントランスなど）は、ホールの扉ではないので寄せない
   const w = toWall(d.hall, d.at, 0);
-  return { at: Math.hypot(w[0] - d.at[0], w[1] - d.at[1]) > 15 ? d.at : w, level: d.level, kind: d.kind, hall: d.hall } as { at: XZ; level: number; kind: string; hall: string; width?: number };
+  return { at: Math.hypot(w[0] - d.at[0], w[1] - d.at[1]) > 15 ? d.at : w, level: d.level, kind: d.kind, hall: d.hall } as { at: XZ; level: number; kind: string; hall: string; width?: number; height?: number };
 });
 // 東7・東8 とリンクスペースのあいだのシャッター開口（図面：東7 は W 6.0m・12.0m・12.0m、東8 は W 12.0m × 2。高さ 7.9m）。
 // 当日はリンクスペースとひと続きに使うので、開けて出入口にする。位置は図面の、リンクスペースの道（ガレリア）の側の端から
@@ -995,10 +995,10 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
     let [a, b] = [poly[i], poly[(i + 1) % poly.length]];
     if (nearGal(b) < nearGal(a)) [a, b] = [b, a]; // a：ガレリアの側の端
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    for (const [t, w] of list) doors.push({ at: [Math.round((a[0] + ((b[0] - a[0]) * t) / L) * 10) / 10, Math.round((a[1] + ((b[1] - a[1]) * t) / L) * 10) / 10], level: 1, kind: "出入口", hall: hid, width: w });
+    for (const [t, w] of list) doors.push({ at: [Math.round((a[0] + ((b[0] - a[0]) * t) / L) * 10) / 10, Math.round((a[1] + ((b[1] - a[1]) * t) / L) * 10) / 10], level: 1, kind: "出入口", hall: hid, width: w, height: 7.9 });
   }
 }
-// 東7 の外側の搬入口（図面：道の側に W 8.0m × 2、北西の斜めの壁に W 6.0m、トイレの側の壁に W 8.0m）。
+// 東7 の外側の搬入口（図面：道の側に W 8.0m × 2、北西の斜めの壁に W 6.0m、トイレの側の壁に W 8.0m。高さはどれも 5.9m）。
 // 会場データの東7 は図面より長いので、図面の角からは測らず、ホールの中の机の列との位置関係で置いた目安の位置：
 // 道の側の 2 つは机の列の 8 本目と 4 本目（トイレの側から数えて）の正面、斜めの壁とトイレの側の壁のものは、
 // 道の側の半分と、リンクスペースの側の半分のあいだの横の通路の高さ。図面から読んだ道の側の 2 つは、これに置きかえる
@@ -1010,7 +1010,28 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
     [[509.5, -431.2], 6],
     [[430.2, -375.8], 8],
   ] as [XZ, number][])
-    doors.push({ at, level: 1, kind: "搬入口", hall: "E7", width });
+    doors.push({ at, level: 1, kind: "搬入口", hall: "E7", width, height: 5.9 });
+}
+// 東1〜3 の外側の搬入口の大きさ（図面のシャッター開口）。トラックヤードの側の 2 つは、東の端に近いほうが B（W 7.9m × H 5.8m）、
+// 西の端に近いほうが A（W 7.2m × H 4.9m）。ホールの端の壁の C・D は W 10.0m × H 8.0m。位置は図面から読んだ札の位置のまま
+{
+  const sizes: [string, XZ, number, number][] = [
+    ["E1", [282.3, -36.3], 7.2, 4.9], // 東1-A
+    ["E1", [297.4, -46.3], 7.9, 5.8], // 東1-B
+    ["E1", [236.7, -46], 10, 8], // 東1-C・D
+    ["E1", [212.2, -83.2], 10, 8],
+    ["E2", [361.1, -87.6], 7.2, 4.9], // 東2-A
+    ["E2", [376.2, -97.5], 7.9, 5.8], // 東2-B
+    ["E3", [433.5, -140.4], 7.2, 4.9], // 東3-A
+    ["E3", [449, -150.6], 7.9, 5.8], // 東3-B
+    ["E3", [463.9, -195.3], 10, 8], // 東3-C・D
+    ["E3", [440.1, -231.3], 10, 8],
+  ];
+  for (const [hall, at, width, height] of sizes) {
+    const d = doors.find((o) => o.hall === hall && o.kind === "搬入口" && Math.hypot(o.at[0] - at[0], o.at[1] - at[1]) < 3);
+    if (!d) throw new Error(`${hall} の搬入口が ${at} の近くにない`);
+    Object.assign(d, { width, height });
+  }
 }
 // 東1〜3 のホールとガレリアのあいだの部屋の帯の部屋（主催者事務室・商談室・東VIPルーム・多目的室・給湯室・階段・EV）。
 // 来場者の入れない所なので、黒い低い箱（kind "room"）で描く。トイレは別に描いている。

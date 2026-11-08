@@ -55,7 +55,7 @@ type Venue = {
   toilets: { at: XZ; level: number | null; kinds?: string[]; outside?: boolean }[];
   toiletRooms?: { hall: string; level: number; poly: XZ[] }[];
   firstAid: { at: XZ; level: number }[];
-  doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string; width?: number }[]; // width：開口の幅（シャッターなど。ないときは DOOR_W）
+  doors: { at: XZ; level: number; kind: "出入口" | "搬入口"; hall: string; width?: number; height?: number }[]; // width・height：開口の幅と高さ（図面のシャッターの大きさ。ないときは DOOR_W と、出入口は DOOR_H・搬入口はその 2 倍）
   exits?: { at: XZ; level: number; name: string; width: number }[]; // 屋内と屋外の境目の仕切りにあける出口
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; width: number; kind?: "escalator" | "ramp"; outdoor?: boolean; sur?: boolean }[];
   blocks?: { name: string; level: number; poly: XZ[]; height: number; kind?: "room"; base?: number }[];
@@ -383,7 +383,7 @@ function ribbons(list: { pts: XZ[]; y: number; w: number; ys?: number[] }[], ski
 const DOOR_W = 4.5;
 const DOOR_H = 3.6;
 // others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
-type Opening = { at: XZ; width?: number };
+type Opening = { at: XZ; width?: number; height?: number };
 function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: Opening[] = [], spans: [XZ, XZ][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number, shutters: Opening[] = []) {
   const g = new THREE.Group();
   let open: [number, number][] = [];
@@ -416,12 +416,12 @@ function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, door
       [doors, DOOR_H],
       [shutters, DOOR_H * 2], // 搬入口のシャッターは出入口の 2 倍の高さ
     ] as [Opening[], number][])
-      for (const { at: [dx, dz], width } of list) {
+      for (const { at: [dx, dz], width, height: oh } of list) {
         const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
         // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い。幅のある開口は壁の上に置いてあるので、その辺だけ
         if (Math.abs(v) > (width ? 1 : 15) || u < 0 || u > len) continue;
         const w = width ?? DOOR_W;
-        gaps.push([Math.max(0.3, u - w / 2), Math.min(len - 0.3, u + w / 2), w > DOOR_W ? Math.max(h, DOOR_H * 2) : h]);
+        gaps.push([Math.max(0.3, u - w / 2), Math.min(len - 0.3, u + w / 2), oh ?? (w > DOOR_W ? Math.max(h, DOOR_H * 2) : h)]);
       }
     // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
     for (const [p, q] of spans) {
