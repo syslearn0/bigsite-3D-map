@@ -446,3 +446,107 @@ table.admin td {
   text-align: left;
   vertical-align: top;
 }
+
+/* 名前で探すの結果の 1 行 */
+.find-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  padding: 9px 4px;
+  min-height: 40px;
+}
+.find-row small {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--muted);
+  width: 4.5em;
+}
+.find-row b {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.find-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* いまいる所（D-2）の札 */
+.loc-badge {
+  max-width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* トイレ・救護室までの道（D-3） */
+.route-menu {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 11em;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+.route-menu button {
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  min-height: 44px;
+  padding: 0 14px;
+  background: none;
+}
+.route-menu button:last-child {
+  border-bottom: 0;
+}
+.route-card {
+  max-width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--card);
+  border: 2px solid #ff7a00;
+  border-radius: 12px;
+  padding: 6px 8px 6px 14px;
+  font-size: 0.85rem;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* 上の真ん中に、いまいる所と道の札を縦に並べる */
+.status-stack {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(64px + env(safe-area-inset-top));
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100vw - 120px);
+  pointer-events: none;
+}
+.status-stack > * {
+  pointer-events: auto;
+}

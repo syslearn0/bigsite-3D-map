@@ -6,7 +6,7 @@ import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
-import { centroid, minAreaRect, pointInPolygon, type XZ } from "@/lib/geo";
+import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "@/lib/geo";
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { sampleTags } from "@/lib/sample-tags";
@@ -14,6 +14,10 @@ import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
 import { buildRails, moveOnRails, nearestOnRails, railPath, railPoint, type RailPos } from "@/lib/rails";
+import { search, type Hit } from "@/lib/search";
+import { hallAt, makeSteady, type Where } from "@/lib/locate";
+import { buildGrid, findPath, type Grid, type NavVenue } from "@/lib/nav";
+import { planTour, type Stop } from "@/lib/tour";
 import { loadCircles, PUB_KEYS, refreshPublishedAndReload, type Circle } from "@/lib/published";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
@@ -23,6 +27,7 @@ import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_
 
 type Hall = { id: string; name: string; building: "東" | "西" | "南"; level: number; poly: XZ[]; closed?: string; rough?: boolean; inner?: XZ[] };
 type Venue = {
+  origin: { lat: number; lon: number };
   floorY: Record<string, number>;
   attribution: string;
   halls: Hall[];
@@ -516,8 +521,12 @@ type Api = {
   setFloor: (f: Floor) => void;
   setBoth: (on: boolean) => void;
   redrawCards: () => void;
+  showMe: (p: XZ | null, acc: number, fly: boolean) => void; // いまいる所の青い点（null で消す）
+  showRoute: (pts: XZ[] | null, level: number) => void; // トイレ・救護室までの道（null で消す）
+  showTour: (parts: { pts: XZ[]; level: number }[] | null) => void; // 回る順の道（null で消す）
+  walkPos: () => XZ | null; // 歩いているときの、いまの位置
   recolor: (colorByGenre: boolean, marks: Record<string, Mark>, visited: Record<string, number>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
-  setPins: (list: { booth: number; mark: Mark | null; done: boolean }[]) => void;
+  setPins: (list: { booth: number; mark: Mark | null; done: boolean; order?: number }[]) => void;
   focusBooth: (i: number) => void;
   focusLine: (line: number) => void;
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
@@ -666,6 +675,110 @@ export function VenueView() {
     } catch {}
   };
   const [listOpen, setListOpen] = useState(false);
+  // いまどのホールにいるか（D-2）。押したときだけ位置を使う（端末の外へは送らない）
+  const [locOn, setLocOn] = useState(false);
+  const [loc, setLoc] = useState<{ where: Where; acc: number } | null>(null);
+  const [locErr, setLocErr] = useState("");
+  const floorRef = useRef<{ floor: Floor; both: boolean }>({ floor: 1, both: false });
+  // トイレ・救護室までの道（D-3）。いまいる所（位置）・歩いている所・選んだ机のどれかから
+  const [route, setRoute] = useState<{ to: "toilet" | "aid"; length: number; from: string } | { error: string } | null>(null);
+  const [routeMenu, setRouteMenu] = useState(false);
+  const navGrids = useRef(new Map<number, Grid>());
+  const lastMe = useRef<XZ | null>(null);
+  const findRoute = (to: "toilet" | "aid") => {
+    setRouteMenu(false);
+    let from: XZ | null = null, level = 1, fromName = "";
+    const walkAt = api.current?.walkPos() ?? null;
+    if (locOn && lastMe.current && loc?.where.hall) {
+      from = lastMe.current;
+      level = floor === 4 ? 4 : 1;
+      fromName = "いまいる所";
+    } else if (walkAt) {
+      from = walkAt;
+      level = floor === 4 ? 4 : 1;
+      fromName = "歩いている所";
+    } else if (selected !== null) {
+      const b = booths[selected];
+      from = b.at;
+      level = hallById.get(b.hall)!.level;
+      fromName = b.code;
+    }
+    if (!from) {
+      setRoute({ error: "机を選ぶか、「いまいる所」をオンにしてから押してください" });
+      return;
+    }
+    if (!navGrids.current.has(level))
+      navGrids.current.set(
+        level,
+        buildGrid(venue as unknown as NavVenue, level, booths.filter((b) => hallById.get(b.hall)!.level === level).map((b) => b.at)),
+      );
+    const goals = to === "toilet" ? venue.toilets.filter((t) => (t.level ?? 1) === level).map((t) => t.at) : venue.firstAid.filter((a) => a.level === level).map((a) => a.at);
+    const r = goals.length ? findPath(navGrids.current.get(level)!, from, goals) : null;
+    if (!r) {
+      api.current?.showRoute(null, level);
+      setRoute({ error: to === "toilet" ? "この階では、トイレまでの道が見つかりませんでした" : "この階では、救護室までの道が見つかりませんでした（救護室は南展示棟の 1F と 4F）" });
+      return;
+    }
+    if (floor !== (level >= 4 ? 4 : 1) && !both) setFloor(level >= 4 ? 4 : 1);
+    api.current?.showRoute(r.path, level);
+    setRoute({ to, length: r.length, from: fromName });
+  };
+  const clearRoute = () => {
+    api.current?.showRoute(null, 1);
+    setRoute(null);
+  };
+  const navGrid = (level: number) => {
+    if (!navGrids.current.has(level))
+      navGrids.current.set(level, buildGrid(venue as unknown as NavVenue, level, booths.filter((b) => hallById.get(b.hall)!.level === level).map((b) => b.at)));
+    return navGrids.current.get(level)!;
+  };
+  // 回る順（D-1）。★ 行きたい（と、えらべば ◆ 候補）の、まだ行っていない机を、道のりが短い順に
+  const [trip, setTrip] = useState<{ day: Day; codes: string[]; length: number; withMaybe: boolean; from: string } | null>(null);
+  const tripOrder = useMemo(() => new Map(trip && trip.day === day ? trip.codes.map((c, i) => [c, i + 1] as const) : []), [trip, day]);
+  const stopOf = (code: string): Stop => {
+    const b = booths[codeIndex.get(code)!];
+    const h = hallById.get(b.hall)!;
+    return { id: code, p: b.at, level: h.level, building: h.building };
+  };
+  const makeTrip = (withMaybe: boolean) => {
+    const codes = Object.entries(marks)
+      .filter(([c, m]) => (m === "want" || (withMaybe && m === "maybe")) && !visited[c] && codeIndex.has(c))
+      .map(([c]) => c);
+    if (!codes.length) {
+      setTrip(null);
+      api.current?.showTour(null);
+      return;
+    }
+    // いまいる所が分かっていれば、そこから
+    const meHall = locOn && lastMe.current ? loc?.where.hall : null;
+    const start = meHall && lastMe.current ? { p: lastMe.current, level: meHall.level, building: hallById.get(meHall.id)!.building } : undefined;
+    const r = planTour(codes.map(stopOf), start);
+    // 同じ階どうしは、通路を通る道で結ぶ（遠すぎる所・道が見つからない所は、まっすぐ）
+    const parts: { pts: XZ[]; level: number }[] = [];
+    const seq = start ? [{ id: "", ...start } as Stop, ...r.order] : r.order;
+    let walk = 0;
+    for (let k = 1; k < seq.length; k++) {
+      const a = seq[k - 1], b = seq[k];
+      if (a.level !== b.level || a.building !== b.building) {
+        walk += Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]);
+        continue;
+      }
+      const path = findPath(navGrid(a.level), a.p, [b.p]);
+      if (path) {
+        parts.push({ pts: path.path, level: a.level });
+        walk += path.length;
+      } else {
+        parts.push({ pts: [a.p, b.p], level: a.level });
+        walk += Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]);
+      }
+    }
+    api.current?.showTour(parts);
+    setTrip({ day, codes: r.order.map((x) => x.id), length: walk, withMaybe, from: start ? "いまいる所" : "" });
+  };
+  const clearTrip = () => {
+    setTrip(null);
+    api.current?.showTour(null);
+  };
   const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
   const onHere = useRef(setHere);
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
@@ -697,6 +810,38 @@ export function VenueView() {
   useEffect(() => {
     refreshPublishedAndReload();
   }, []);
+  useEffect(() => {
+    floorRef.current = { floor, both };
+  }, [floor, both]);
+  useEffect(() => {
+    if (!locOn) {
+      api.current?.showMe(null, 0, false);
+      return;
+    }
+    const steady = makeSteady(2);
+    let first = true;
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        const p = project(venue.origin, pos.coords.latitude, pos.coords.longitude);
+        const { floor: f, both: b } = floorRef.current;
+        const levels = b ? [1, 2, 4] : f === 4 ? [4] : [1, 2];
+        const where = steady(hallAt(p, venue.halls, levels));
+        setLoc({ where, acc: pos.coords.accuracy });
+        setLocErr("");
+        // 会場から遠い（1km より先）ときは、地図を動かさない
+        const far = Math.hypot(p[0], p[1]) > 1000;
+        api.current?.showMe(far ? null : p, pos.coords.accuracy, first && !far);
+        lastMe.current = far ? null : p;
+        first = false;
+      },
+      (e) => {
+        setLocErr(e.code === e.PERMISSION_DENIED ? "位置を使うのが許可されていません（ブラウザの設定で許可できます）" : "位置が分かりませんでした");
+        if (e.code === e.PERMISSION_DENIED) setLocOn(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [locOn]);
 
   // ---- 3D の準備（1回だけ） ----
   useEffect(() => {
@@ -1948,6 +2093,96 @@ export function VenueView() {
         addLabel(s, "block");
       }
     }
+    // いまいる所（D-2）：青い点と、位置のあいまいさの円。見ている階の床の上に
+    const meDot = new THREE.Group();
+    {
+      const ring = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.MeshBasicMaterial({ color: 0x1a73e8, transparent: true, opacity: 0.16, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.name = "acc";
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(1, 32), new THREE.MeshBasicMaterial({ color: 0x1a73e8 }));
+      dot.rotation.x = -Math.PI / 2;
+      dot.position.y = 0.05;
+      dot.name = "dot";
+      const rim = new THREE.Mesh(new THREE.CircleGeometry(1.35, 32), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.y = 0.04;
+      rim.name = "rim";
+      meDot.add(ring, rim, dot);
+      meDot.visible = false;
+      meDot.renderOrder = 2;
+      scene.add(meDot);
+    }
+    let meAcc = 0;
+    // トイレ・救護室までの道（D-3）：床の上のオレンジの帯と、着く所の丸
+    let routeMesh: THREE.Mesh | null = null;
+    let tourMesh: THREE.Mesh | null = null;
+    const showTour = (parts: { pts: XZ[]; level: number }[] | null) => {
+      if (tourMesh) {
+        scene.remove(tourMesh);
+        tourMesh.geometry.dispose();
+        (tourMesh.material as THREE.Material).dispose();
+        tourMesh = null;
+      }
+      if (!parts?.length) return;
+      const W = 0.4, arr: number[] = [];
+      for (const { pts, level } of parts) {
+        const y = floorY(level) + 0.12;
+        for (let k = 1; k < pts.length; k++) {
+          const A = pts[k - 1], B = pts[k], L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+          const nx = (-(B[1] - A[1]) / L) * W, nz = ((B[0] - A[0]) / L) * W;
+          arr.push(A[0] + nx, y, A[1] + nz, B[0] + nx, y, B[1] + nz, B[0] - nx, y, B[1] - nz, A[0] + nx, y, A[1] + nz, B[0] - nx, y, B[1] - nz, A[0] - nx, y, A[1] - nz);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      tourMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x8a4fc7, side: THREE.DoubleSide, transparent: true, opacity: 0.85, depthWrite: false }));
+      tourMesh.renderOrder = 3;
+      scene.add(tourMesh);
+    };
+    const showRoute = (pts: XZ[] | null, level: number) => {
+      if (routeMesh) {
+        scene.remove(routeMesh);
+        routeMesh.geometry.dispose();
+        (routeMesh.material as THREE.Material).dispose();
+        routeMesh = null;
+      }
+      if (!pts || pts.length < 2) return;
+      const W = 0.7, y = floorY(level) + 0.14, arr: number[] = [];
+      for (let k = 1; k < pts.length; k++) {
+        const A = pts[k - 1], B = pts[k], L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+        const nx = (-(B[1] - A[1]) / L) * W, nz = ((B[0] - A[0]) / L) * W;
+        arr.push(A[0] + nx, y, A[1] + nz, B[0] + nx, y, B[1] + nz, B[0] - nx, y, B[1] - nz, A[0] + nx, y, A[1] + nz, B[0] - nx, y, B[1] - nz, A[0] - nx, y, A[1] - nz);
+      }
+      // 着く所の丸
+      const [ex, ez] = pts[pts.length - 1];
+      for (let k = 0; k < 24; k++) {
+        const a0 = (k / 24) * Math.PI * 2, a1 = ((k + 1) / 24) * Math.PI * 2;
+        arr.push(ex, y, ez, ex + Math.cos(a1) * 1.6, y, ez + Math.sin(a1) * 1.6, ex + Math.cos(a0) * 1.6, y, ez + Math.sin(a0) * 1.6);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      routeMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xff7a00, side: THREE.DoubleSide, transparent: true, opacity: 0.9, depthWrite: false }));
+      routeMesh.renderOrder = 3;
+      scene.add(routeMesh);
+      // 道が全部見える所へ（歩いているときは動かさない）
+      if (current !== "walk") {
+        const xs = pts.map((q) => q[0]), zs = pts.map((q) => q[1]);
+        focusPoint(new THREE.Vector3((Math.min(...xs) + Math.max(...xs)) / 2, floorY(level), (Math.min(...zs) + Math.max(...zs)) / 2), false);
+      }
+    };
+    // 遠くから見ても見えるように、点の大きさは画面の上で 14px ほどに
+    const sizeMe = () => {
+      if (!meDot.visible) return;
+      const ppm = (() => {
+        const h = el.clientHeight;
+        if (current === "top") return (h * ortho.zoom) / (2 * 160);
+        return h / (2 * Math.max(0.1, camera.position.distanceTo(meDot.position)) * Math.tan((persp.fov * Math.PI) / 360));
+      })();
+      const r = Math.max(0.6, 7 / ppm);
+      meDot.getObjectByName("dot")!.scale.setScalar(r);
+      meDot.getObjectByName("rim")!.scale.setScalar(r);
+      meDot.getObjectByName("acc")!.scale.setScalar(Math.max(meAcc, r * 1.5));
+    };
     // 選んだ机の印
     const pin = new THREE.Group();
     const cone = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3, 16), new THREE.MeshLambertMaterial({ color: SELECT_COLOR }));
@@ -2503,18 +2738,18 @@ export function VenueView() {
 
     // 印をつけた机のピン。数は少ないので、変わるたびに作り直す
     const pins: { s: THREE.Sprite; level: number; base: THREE.Vector3; booth: number }[] = [];
-    const setPins = (list: { booth: number; mark: Mark | null; done: boolean }[]) => {
+    const setPins = (list: { booth: number; mark: Mark | null; done: boolean; order?: number }[]) => {
       for (const p of pins) {
         scene.remove(p.s);
         p.s.material.map?.dispose();
         p.s.material.dispose();
       }
       pins.length = 0;
-      for (const { booth, mark, done } of list) {
+      for (const { booth, mark, done, order } of list) {
         const b = booths[booth];
         const lv = hallById.get(b.hall)!.level;
-        // 行った机は灰色に ✓（ユーザーの指示：行った所はピンの色を変える）
-        const s = done || !mark ? pinSprite(VISITED_COLOR, "✓") : pinSprite(MARK[mark].color, MARK[mark].icon);
+        // 行った机は灰色に ✓（ユーザーの指示：行った所はピンの色を変える）。回る順を出しているときは、印の代わりに順番の数
+        const s = done || !mark ? pinSprite(VISITED_COLOR, "✓") : pinSprite(MARK[mark].color, order ? String(order) : MARK[mark].icon);
         s.position.set(b.at[0], floorY(lv) + 0.75, b.at[1]);
         scene.add(s);
         pins.push({ s, level: lv, base: s.scale.clone(), booth });
@@ -3102,6 +3337,7 @@ export function VenueView() {
       if (controls) focus.set(controls.target.x, focus.y, controls.target.z);
       else if (current === "walk") focus.set(persp.position.x, focus.y, persp.position.z);
       placeLabels();
+      sizeMe();
       drawCodes();
       renderer.render(scene, camera);
       raf = requestAnimationFrame(loop);
@@ -3303,7 +3539,19 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { redrawCards: () => (lastKeyWalk = ""), setView, setFloor, setBoth: (on) => {
+    api.current = { redrawCards: () => (lastKeyWalk = ""), showRoute, showTour, walkPos: () => (current === "walk" ? [persp.position.x, persp.position.z] : null), showMe: (p, acc, fly) => {
+      if (!p) {
+        meDot.visible = false;
+        return;
+      }
+      meAcc = Math.min(acc, 150);
+      meDot.position.set(p[0], floorY(currentFloor) + 0.15, p[1]);
+      meDot.visible = true;
+      if (fly) {
+        if (current === "walk") standAt(p[0], p[1]);
+        else focusPoint(new THREE.Vector3(p[0], floorY(currentFloor), p[1]), false);
+      }
+    }, setView, setFloor, setBoth: (on) => {
       bothFloors = on;
       applyVisibility();
     }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
@@ -3352,10 +3600,10 @@ export function VenueView() {
   useEffect(() => {
     // 印の机（ピンを立てる印だけ）。「行った」の机は灰色の ✓
     const list = Object.entries(marks)
-      .filter(([code, m]) => pinsOn[m] && codeIndex.has(code))
-      .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark: mark as Mark | null, done: !!visited[code] }));
+      .filter(([code, m]) => (pinsOn[m] || tripOrder.has(code)) && codeIndex.has(code))
+      .map(([code, mark]) => ({ booth: codeIndex.get(code)!, mark: mark as Mark | null, done: !!visited[code], order: tripOrder.get(code) }));
     api.current?.setPins(list);
-  }, [marks, visited, pinsOn, codeIndex]);
+  }, [marks, visited, pinsOn, codeIndex, tripOrder]);
 
   const select = useCallback(
     (i: number) => {
@@ -3377,6 +3625,24 @@ export function VenueView() {
     if (i !== undefined) select(i);
   };
   const pickNums = pickLine === null ? [] : lineNums(lines[pickLine]);
+  // 名前で探す（D-4）：サークル名・作品・キャラ・ジャンル・配置番号。作品などは、その机の一覧から選んで飛ぶ
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQ, setFindQ] = useState("");
+  const [findGroup, setFindGroup] = useState<Hit | null>(null);
+  const allCodes = useMemo(() => booths.map((b) => b.code), [booths]);
+  const findHits = useMemo(() => (findOpen ? search(findQ, allCodes, dayTags ?? {}, circles[day]) : []), [findOpen, findQ, allCodes, dayTags, day]);
+  const goCode = (code: string) => {
+    const i = codeIndex.get(code);
+    if (i === undefined) return;
+    setFindOpen(false);
+    select(i);
+  };
+  const filterBy = (h: Hit) => {
+    setByGenre(true);
+    setGenre(h.kind === "genre" ? h.label : null);
+    setWork(h.kind === "work" ? h.label : null);
+    setChar(h.kind === "char" ? h.label : null);
+  };
   // 列を選んだとき：番号はまだ選ばず、その列の机が全部見える所へ
   const chooseLine = (line: number) => {
     setPickLine(line);
@@ -3500,6 +3766,80 @@ export function VenueView() {
           </button>
         ))}
       </div>
+      <button className="icon-btn small" aria-label="名前で探す" aria-pressed={findOpen} onClick={() => setFindOpen((o) => !o)} style={{ flex: "none" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="M15.5 15.5 21 21" />
+        </svg>
+      </button>
+    </div>
+  );
+  const KIND_LABEL = { circle: "サークル", code: "配置番号", work: "作品", char: "キャラ", genre: "ジャンル" } as const;
+  const findPanel = findOpen && (
+    <div
+      role="dialog"
+      aria-label="名前で探す"
+      style={{ marginTop: 6, background: "var(--card)", border: "1px solid var(--line)", borderRadius: 10, padding: 8, boxShadow: "0 2px 10px rgba(0,0,0,.18)", maxHeight: "min(60vh, 460px)", display: "flex", flexDirection: "column" }}
+    >
+      <input
+        type="search"
+        autoFocus
+        value={findQ}
+        onChange={(e) => {
+          setFindQ(e.target.value);
+          setFindGroup(null);
+        }}
+        onKeyDown={(e) => e.key === "Escape" && setFindOpen(false)}
+        placeholder="サークル名・作品・キャラ・配置番号"
+        aria-label="探す言葉"
+        style={{ width: "100%", minHeight: 40, boxSizing: "border-box", font: "inherit" }}
+      />
+      <div style={{ overflowY: "auto", marginTop: 6 }}>
+        {findGroup ? (
+          <>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "2px 0 6px" }}>
+              <button className="chip small" onClick={() => setFindGroup(null)}>
+                ← 戻る
+              </button>
+              <strong style={{ fontSize: ".9rem" }}>
+                {KIND_LABEL[findGroup.kind]}：{findGroup.label}（{findGroup.codes.length}）
+              </strong>
+              <button
+                className="chip small"
+                style={{ marginLeft: "auto" }}
+                onClick={() => {
+                  filterBy(findGroup);
+                  setFindOpen(false);
+                }}
+              >
+                地図をこれで色分け
+              </button>
+            </div>
+            {findGroup.codes.slice(0, 200).map((c) => (
+              <button key={c} className="find-row" onClick={() => goCode(c)}>
+                <b>{c}</b>
+                <span>{[circles[day][c]?.name, dayTags?.[c]?.works?.join("・")].filter(Boolean).join("　")}</span>
+              </button>
+            ))}
+          </>
+        ) : (
+          <>
+            {findQ.trim() && !findHits.length && <p style={{ color: "var(--muted)", fontSize: ".85rem", margin: "6px 2px" }}>{day}日目には見つかりませんでした</p>}
+            {!findQ.trim() && <p style={{ color: "var(--muted)", fontSize: ".8rem", margin: "4px 2px" }}>{day}日目の机から探します（サークル名は、サークルの方が登録したものだけ）</p>}
+            {findHits.map((h, k) => (
+              <button
+                key={k}
+                className="find-row"
+                onClick={() => (h.codes.length === 1 && (h.kind === "code" || h.kind === "circle") ? goCode(h.codes[0]) : h.kind === "circle" ? goCode(h.codes[0]) : setFindGroup(h))}
+              >
+                <small>{KIND_LABEL[h.kind]}</small>
+                <b>{h.label}</b>
+                <span>{h.sub}</span>
+              </button>
+            ))}
+          </>
+        )}
+      </div>
     </div>
   );
 
@@ -3553,6 +3893,7 @@ export function VenueView() {
           {/* 配置番号の欄はモードによらずいつも地図の上に（ユーザーの指示） */}
           <div data-tour="picker" style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>
             {codePicker}
+            {findPanel}
           </div>
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
             <button className="icon-btn" aria-label={view === "top" ? "3D にする" : "2D にする"} onClick={toggle3d}>
@@ -3565,6 +3906,46 @@ export function VenueView() {
             <button className="icon-btn" aria-label="周辺も表示" aria-pressed={surround} onClick={() => setSurround((x) => !x)}>
               <Icon name="city" />
             </button>
+            <button
+              className="icon-btn"
+              aria-label="いまいる所"
+              aria-pressed={locOn}
+              onClick={() => {
+                setLoc(null);
+                if (!locOn && !("geolocation" in navigator)) {
+                  setLocErr("この端末では位置を使えません");
+                  return;
+                }
+                setLocErr("");
+                setLocOn((x) => !x);
+              }}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" fill="currentColor" />
+                <circle cx="12" cy="12" r="8" />
+                <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" />
+              </svg>
+            </button>
+            <div style={{ position: "relative" }}>
+              <button className="icon-btn" aria-label="トイレ・救護室までの道" aria-pressed={routeMenu || (!!route && !("error" in route))} onClick={() => setRouteMenu((x) => !x)}>
+                <span style={{ fontWeight: 800, fontSize: ".8rem" }}>WC</span>
+              </button>
+              {routeMenu && (
+                <div className="route-menu" role="menu">
+                  <button role="menuitem" onClick={() => findRoute("toilet")}>
+                    いちばん近いトイレへ
+                  </button>
+                  <button role="menuitem" onClick={() => findRoute("aid")}>
+                    救護室へ
+                  </button>
+                  {route && (
+                    <button role="menuitem" onClick={() => (clearRoute(), setRouteMenu(false))}>
+                      道を消す
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="floor-switch" role="group" aria-label="階">
               {([4, 1] as Floor[]).map((f) => (
                 <button
@@ -3663,6 +4044,44 @@ export function VenueView() {
             </div>
             {marked + memoOnly.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末に保存します（ログインすると、ほかの端末とも合わせます）。</p>
+            )}
+            {marked > 0 && (
+              <section style={{ marginTop: 8, padding: 8, borderRadius: 8 }} className="soft">
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <strong>回る順</strong>
+                  <button className="chip small" onClick={() => makeTrip(false)}>
+                    ★ を回る順を考える
+                  </button>
+                  {lists.maybe.length > 0 && (
+                    <button className="chip small" onClick={() => makeTrip(true)}>
+                      ★ と ◆ で考える
+                    </button>
+                  )}
+                  {trip && trip.day === day && (
+                    <button className="chip small" onClick={clearTrip}>
+                      消す
+                    </button>
+                  )}
+                </div>
+                {trip && trip.day === day && (
+                  <>
+                    <p style={{ fontSize: ".8rem", color: "var(--muted)", margin: "4px 0" }}>
+                      {trip.from ? `${trip.from}から、` : ""}
+                      {trip.codes.length} か所・歩く道のり 約 {Math.round(trip.length / 10) * 10}m（混んでいると歩くだけで約 {Math.max(1, Math.ceil(trip.length / 50))} 分。列に並ぶ時間は入っていません）。地図のピンの数が順番です。まだ「行った」にしていない机だけで考えます
+                    </p>
+                    <ol style={{ margin: 0, paddingLeft: "1.6em" }}>
+                      {trip.codes.map((c) => (
+                        <li key={c} style={{ padding: "2px 0" }}>
+                          <button className="chip small" style={visited[c] ? { color: "var(--muted)", textDecoration: "line-through" } : undefined} onClick={() => select(codeIndex.get(c)!)}>
+                            {c}
+                            {circles[day][c] ? `　${circles[day][c].name}` : ""}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name.replace("ホール", "")}
+                          </button>
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+              </section>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
               <section key={m} style={{ marginTop: 8 }}>
@@ -3811,6 +4230,41 @@ export function VenueView() {
         )}
       </div>
 
+      <div className="status-stack">
+      {route && (
+        <div className="route-card" role="status">
+          {"error" in route ? (
+            <span>{route.error}</span>
+          ) : (
+            <span>
+              {route.from}から{route.to === "toilet" ? "いちばん近いトイレ" : "救護室"}まで 約 <b>{Math.round(route.length / 10) * 10 || 10}m</b>（混んでいると歩いて約 {Math.max(1, Math.ceil(route.length / 50))} 分）
+            </span>
+          )}
+          <button className="chip small" onClick={clearRoute} aria-label="道を消す">
+            ✕
+          </button>
+        </div>
+      )}
+      {(locOn || locErr) && (
+        <div className="loc-badge" role="status" onClick={() => !locOn && setLocErr("")}>
+          {locErr ? (
+            locErr
+          ) : !loc ? (
+            "位置を調べています…"
+          ) : !loc.where.hall ? (
+            "会場の外にいます"
+          ) : (
+            <>
+              いま：<b>{loc.where.hall.name}</b>
+              {loc.where.inside ? "" : "の近く"}
+              <span style={{ color: "var(--muted)", marginLeft: 6, fontSize: ".75rem" }}>
+                （±{Math.round(loc.acc)}m{loc.acc > 40 ? "・建物の中ではずれることがあります" : ""}）
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      </div>
       {/* サイドバー：モード・日・作品とキャラ・ホールへ移動・印の一覧と印刷・エディタ（階は右の切りかえで） */}
       {menu && <div className="side-scrim" onClick={() => setMenu(false)} />}
       <aside className={"side" + (menu ? " open" : "")} aria-hidden={!menu}>
