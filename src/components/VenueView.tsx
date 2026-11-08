@@ -3242,7 +3242,8 @@ export function VenueView() {
                   </button>
                 ))
               )}
-              {view !== "walk" && (
+              {/* 当日・計画のモードでは、印のない机に「机の前に立つ」も出さない（ユーザーの指示） */}
+              {view !== "walk" && !(mode === "plan" && !selMark) && (
                 <button
                   style={{ minHeight: 44 }}
                   onClick={() => startWalkAt(selected!)}
@@ -3250,7 +3251,7 @@ export function VenueView() {
                   机の前に立つ
                 </button>
               )}
-              <button style={{ minHeight: 44 }} onClick={() => setSelected(null)} aria-label="閉じる">
+              <button style={{ minHeight: 44, marginLeft: "auto" }} onClick={() => setSelected(null)} aria-label="閉じる">
                 ✕
               </button>
             </div>
