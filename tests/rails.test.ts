@@ -61,3 +61,33 @@ test("線は列の向きか直角だけ（ななめのつなぎがない）", ()
       assert.ok(dx < 0.05 || dz < 0.05, `${A} → ${B}`);
     }
 });
+
+test("見本の配置：どのホールも線が 1 つにつながり、行き止まりがない", async () => {
+  const layout = (await import("../src/data/layout-sample.json")).default as unknown as { lines: Line[] };
+  const venue = (await import("../src/data/venue.json")).default as unknown as { halls: HallLike[] };
+  const bs = expandBooths(layout.lines, venue.halls);
+  const r = buildRails(layout.lines, bs, venue.halls);
+  const comp = new Map<number, number>();
+  let c = 0;
+  r.adj.forEach((ns, s) => {
+    if (comp.has(s) || !ns.length) return;
+    const st = [s];
+    comp.set(s, c);
+    while (st.length)
+      for (const w of r.adj[st.pop()!])
+        if (!comp.has(w)) {
+          comp.set(w, c);
+          st.push(w);
+        }
+    c++;
+  });
+  const perHall = new Map<string, Set<number>>();
+  comp.forEach((ci, n) => {
+    const h = r.nodes[n].hall;
+    if (!perHall.has(h)) perHall.set(h, new Set());
+    perHall.get(h)!.add(ci);
+  });
+  for (const [h, set] of perHall) assert.equal(set.size, 1, `${h} の線が ${set.size} つに分かれている`);
+  const dead = r.adj.filter((ns) => ns.length === 1).length;
+  assert.equal(dead, 0);
+});
