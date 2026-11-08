@@ -13,7 +13,7 @@ import { sampleTags } from "@/lib/sample-tags";
 import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
-import { buildRails, moveOnRails, nearestOnRails, railPath, railPoint, type RailPos } from "@/lib/rails";
+import { buildRails, moveOnRails, nearestOnRails, railPoint, type RailPos } from "@/lib/rails";
 import { search, type Hit } from "@/lib/search";
 import { hallAt, makeSteady, type Where } from "@/lib/locate";
 import { buildGrid, findPath, type Grid, type NavVenue } from "@/lib/nav";
@@ -523,6 +523,7 @@ type Api = {
   setFloor: (f: Floor) => void;
   setBoth: (on: boolean) => void;
   redrawCards: () => void;
+  showRailsPick: (on: boolean) => void; // 歩き始める場所を選ぶあいだ、線路を出す
   showMe: (p: XZ | null, acc: number, fly: boolean) => void; // いまいる所の青い点（null で消す）
   showRoute: (pts: XZ[] | null, level: number) => void; // トイレ・救護室までの道（null で消す）
   showTour: (parts: { pts: XZ[]; level: number }[] | null) => void; // 回る順の道（null で消す）
@@ -598,6 +599,8 @@ export function VenueView() {
   const [selected, setSelected] = useState<number | null>(null);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
+  // 歩き始める場所を選ぶあいだは、上から・3D の地図に線路（青い線）を出す（ユーザーの指示）
+  useEffect(() => api.current?.showRailsPick(walkPending), [walkPending]);
   // 「歩く」を待っている間は、地図を押した所にピンを立てて、そこから歩き始める（机の上でなくてよい）
   const standPick = useRef<((x: number, z: number) => void) | null>(null);
   const startWalkAt = useCallback((i: number) => {
@@ -2229,13 +2232,11 @@ export function VenueView() {
     // 歩くときは、机の前の通路の線（線路）の上だけを進む。線から遠い所（机のない広場など）に立ったときは、自由に歩く
     const walkRails = buildRails(lines, booths, venue.halls);
     let railPos: RailPos | null = null;
-    let railPathAnim: { pts: XZ[]; len: number; s: number; to: RailPos } | null = null; // ダブルタップした所まで、線に沿って歩く
     const RAIL_SNAP = 14; // 立った所からこの距離に線があれば、線に乗る
     const snapToRails = () => {
       const p: XZ = [persp.position.x, persp.position.z];
       const hall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon(p, h.poly));
       const q = hall ? nearestOnRails(walkRails, p, hall.id) : null;
-      railPathAnim = null;
       if (q && q.d < RAIL_SNAP) {
         railPos = { a: q.a, b: q.b, t: q.t };
         persp.position.x = q.at[0];
@@ -2254,6 +2255,8 @@ export function VenueView() {
       });
     // 線路の絵（床の上の細い帯）。歩くときだけ、見ている階のものを出す
     const railMeshes: { mesh: THREE.Mesh; level: number }[] = [];
+    const railLines: { line: THREE.LineSegments; level: number }[] = [];
+    let railsPick = false; // 歩き始める場所を選んでいるあいだ
     {
       const byLv = new Map<number, number[]>();
       const W = 0.14;
@@ -2278,6 +2281,27 @@ export function VenueView() {
         mesh.renderOrder = 1;
         scene.add(mesh);
         railMeshes.push({ mesh, level: lv });
+      }
+      // 上から・3D で歩き始める場所を選ぶあいだは、遠くからでも見える細い線（画面の上で 1px）で出す
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9, depthTest: false });
+      const segs = new Map<number, number[]>();
+      walkRails.adj.forEach((ns, a) => {
+        const lv = hallById.get(walkRails.nodes[a].hall)!.level;
+        for (const b of ns) {
+          if (b < a) continue;
+          const A = walkRails.nodes[a].p, B = walkRails.nodes[b].p, y = floorY(lv) + 0.2;
+          if (!segs.has(lv)) segs.set(lv, []);
+          segs.get(lv)!.push(A[0], y, A[1], B[0], y, B[1]);
+        }
+      });
+      for (const [lv, arr] of segs) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+        const line = new THREE.LineSegments(g, lineMat);
+        line.visible = false;
+        line.renderOrder = 4;
+        scene.add(line);
+        railLines.push({ line, level: lv });
       }
     }
 
@@ -2393,6 +2417,7 @@ export function VenueView() {
       }
       for (const { mesh, level } of numMeshes) mesh.visible = current === "walk" && shown(floorOf(level));
       for (const { mesh, level } of railMeshes) mesh.visible = current === "walk" && floorOf(level) === currentFloor;
+      for (const { line, level } of railLines) line.visible = railsPick && current !== "walk" && shown(floorOf(level));
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
@@ -2442,7 +2467,6 @@ export function VenueView() {
         const q = nearestOnRails(walkRails, b.at, b.hall);
         if (q && q.d < RAIL_SNAP) {
           railPos = { a: q.a, b: q.b, t: q.t };
-          railPathAnim = null;
           persp.position.x = q.at[0];
           persp.position.z = q.at[1];
         } else railPos = null;
@@ -2634,26 +2658,22 @@ export function VenueView() {
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
       return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY(currentFloor)), new THREE.Vector3());
     };
+    // 青い線（線路）をダブルタップしたら、その線の上へすぐ移る（ユーザーの指示）。向きは変えない
+    const JUMP_NEAR = 2.5;
     const walkTo = (p: THREE.Vector3) => {
-      // 線に乗っているときは、押した所にいちばん近い線の上まで、線に沿って歩く
-      if (railPos) {
-        const here = nearestOnRails(walkRails, [persp.position.x, persp.position.z])!;
-        const q = nearestOnRails(walkRails, [p.x, p.z], walkRails.nodes[railPos.a].hall);
-        const pts = q && q.d <= 8 ? railPath(walkRails, railPos, q) : null;
-        if (!q || !pts) {
-          // 押した所の近くに線がない（ホールの外・広場など）：線をはなれて、まっすぐ歩いていく
-          railPos = null;
-          railPathAnim = null;
-          lastKeyWalk = "";
-          walkTo(p);
-          return;
-        }
-        let len = 0;
-        for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-        if (len < 0.3 || here.d > 1) return;
-        railPathAnim = { pts, len, s: 0, to: { a: q.a, b: q.b, t: q.t } };
+      const tapHall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon([p.x, p.z], h.poly));
+      const q = tapHall ? nearestOnRails(walkRails, [p.x, p.z], tapHall.id) : null;
+      if (q && q.d <= JUMP_NEAR) {
+        walkAnim = null;
+        railPos = { a: q.a, b: q.b, t: q.t };
+        persp.position.x = q.at[0];
+        persp.position.z = q.at[1];
+        lastKeyWalk = "";
         return;
       }
+      // 線から遠い所（ホールの外・広場など）：線をはなれて、まっすぐ歩いていく
+      railPos = null;
+      lastKeyWalk = "";
       const from = persp.position.clone();
       const dx = p.x - from.x, dz = p.z - from.z;
       const dist = Math.hypot(dx, dz);
@@ -3288,37 +3308,8 @@ export function VenueView() {
         const fwd = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + hold;
         const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0) + holdSide;
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-        if (fwd || side) {
-          walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
-          railPathAnim = null;
-        }
-        const turnTo = (dx: number, dz: number, k: number) => {
-          // 進む向きへ、ゆっくり向きを変える（線路のように曲がる）
-          const target = Math.atan2(-dx, -dz);
-          let dy = target - yaw;
-          dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-          yaw += dy * Math.min(1, k);
-        };
-        if (railPos && railPathAnim) {
-          const a = railPathAnim;
-          a.s = Math.min(a.len, a.s + WALK_SPEED * 1.4 * dt);
-          let s0 = a.s;
-          for (let i = 1; i < a.pts.length; i++) {
-            const P = a.pts[i - 1], Q = a.pts[i], L = Math.hypot(Q[0] - P[0], Q[1] - P[1]);
-            if (s0 <= L || i === a.pts.length - 1) {
-              const k = L ? Math.min(1, s0 / L) : 1;
-              persp.position.x = P[0] + (Q[0] - P[0]) * k;
-              persp.position.z = P[1] + (Q[1] - P[1]) * k;
-              if (L > 0.05) turnTo(Q[0] - P[0], Q[1] - P[1], dt * 4);
-              break;
-            }
-            s0 -= L;
-          }
-          if (a.s >= a.len) {
-            railPos = a.to;
-            railPathAnim = null;
-          }
-        } else if (railPos && (fwd || side)) {
+        if (fwd || side) walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
+        if (railPos && (fwd || side)) {
           // 行きたい向き：前後は見ている向き、左右は見ている向きの横（横を向いたまま、机を見ながら歩ける）
           let wx = fx * fwd - fz * side, wz = fz * fwd + fx * side;
           const wl = Math.hypot(wx, wz) || 1;
@@ -3334,8 +3325,7 @@ export function VenueView() {
           const at = railPoint(walkRails, railPos);
           persp.position.x = at[0];
           persp.position.z = at[1];
-          // 進む向きとほぼ同じ向きを見て「前へ」のときだけ、線の曲がりに合わせて向きを変える（横を向いているときは変えない）
-          if (fwd > 0 && !side && m.dir[0] * fx + m.dir[1] * fz > 0.7) turnTo(m.dir[0], m.dir[1], dt * 3);
+          // 向きは変えない（進むときに勝手に向きを変えられると見にくい。ユーザーの指示）
         }
         if (walkAnim) {
           walkAnim.t = Math.min(1, walkAnim.t + dt / walkAnim.secs);
@@ -3570,7 +3560,10 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { redrawCards: () => (lastKeyWalk = ""), showRoute, showTour, walkPos: () => (current === "walk" ? [persp.position.x, persp.position.z] : null), showMe: (p, acc, fly) => {
+    api.current = { redrawCards: () => (lastKeyWalk = ""), showRailsPick: (on) => {
+      railsPick = on;
+      applyVisibility();
+    }, showRoute, showTour, walkPos: () => (current === "walk" ? [persp.position.x, persp.position.z] : null), showMe: (p, acc, fly) => {
       if (!p) {
         meDot.visible = false;
         return;
@@ -4029,7 +4022,7 @@ export function VenueView() {
         {walkPending && (
           // 配置番号の欄（いつも上にある）と、電波がないときの札の下に出す
           <div role="status" style={{ position: "absolute", left: "50%", top: online ? 64 : 116, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
-            <span>歩き始める場所を、地図の上で押してください。そこにピンを立てて、その場所から歩きます</span>
+            <span>歩き始める場所を、地図の上で押してください。青い線（通路の線路）の近くを押すと、その線の上に立ちます</span>
             <button className="chip small" onClick={cancelWalk}>やめる</button>
           </div>
         )}
