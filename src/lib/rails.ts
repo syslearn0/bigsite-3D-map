@@ -755,6 +755,31 @@ export function addCorridors(
     }
   }
   for (const s of c.stairs) addEdge(corridorNode(s.a, s.la), corridorNode(s.b, s.lb));
+  // 通路の線の途中に、ほかの線の端（や点）が乗っている所（T 字）は、そこで線を分けてつなぐ
+  {
+    const cor = [...edges].map((e) => e.split(",").map(Number) as [number, number]).filter(([a2, b2]) => nodes[a2].hall === "" && nodes[b2].hall === "" && nodes[a2].level === nodes[b2].level);
+    const onto = new Map<string, { t: number; n: number }[]>();
+    nodes.forEach((nd, n) => {
+      if (nd.hall !== "") return;
+      for (const [a2, b2] of cor) {
+        if (a2 === n || b2 === n || nodes[a2].level !== nd.level) continue;
+        const A = nodes[a2].p, B = nodes[b2].p;
+        if (nd.p[0] < Math.min(A[0], B[0]) - 0.6 || nd.p[0] > Math.max(A[0], B[0]) + 0.6 || nd.p[1] < Math.min(A[1], B[1]) - 0.6 || nd.p[1] > Math.max(A[1], B[1]) + 0.6) continue;
+        const dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+        const t = ((nd.p[0] - A[0]) * dx + (nd.p[1] - A[1]) * dz) / L2;
+        if (t <= 0.01 || t >= 0.99) continue;
+        if (Math.hypot(nd.p[0] - A[0] - dx * t, nd.p[1] - A[1] - dz * t) > 0.6) continue;
+        const k = `${a2},${b2}`;
+        (onto.get(k) ?? onto.set(k, []).get(k)!).push({ t, n });
+      }
+    });
+    for (const [k, list] of onto) {
+      const [a2, b2] = k.split(",").map(Number);
+      edges.delete(a2 < b2 ? `${a2},${b2}` : `${b2},${a2}`);
+      const seq = [a2, ...list.sort((x, y) => x.t - y.t).map((x) => x.n), b2];
+      for (let i = 1; i < seq.length; i++) addEdge(seq[i - 1], seq[i]);
+    }
+  }
   // 出入口・出口：通路の線の近い点と、ホールの中の線の近い点を、出入口の所を通って結ぶ
   const clearOfDesks = (a: XZ, b: XZ, hall: string) => {
     const list = desks.get(hall) ?? [];

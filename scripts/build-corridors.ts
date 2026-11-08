@@ -6,7 +6,8 @@
 // 書き出し：src/data/corridors.json（npm run build:corridors）
 import { readFileSync, writeFileSync } from "node:fs";
 import { buildGrid, centerWeights, simplify, type Grid, type NavVenue } from "../src/lib/nav";
-import type { XZ } from "../src/lib/geo";
+import { pointInPolygon, type XZ } from "../src/lib/geo";
+import { MANUAL } from "./corridors-manual";
 
 type V = NavVenue & {
   stairs?: { name: string; from: XZ; fromLevel: number; to: XZ; toLevel: number; kind?: string; sur?: boolean }[];
@@ -110,6 +111,8 @@ function paths(g: Grid, w: Float32Array, from: number, goals: Map<number, number
 const out: { level: number; pts: XZ[] }[] = [];
 const keysOut: { level: number; at: XZ; kind: string }[] = [];
 for (const L of LEVELS) {
+  // 手で引いた階（corridors-manual.ts の replace）は、自動の線を作らない
+  if (MANUAL.replace.includes(L)) continue;
   const g = buildGrid(venue, L, [], true);
   if (!g.w) continue;
   const w = centerWeights(g);
@@ -244,6 +247,43 @@ for (const L of LEVELS) {
       out.push({ level: L, pts: pts.map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ) });
     }
   }
+  // 手で引き直す所（MANUAL.remove）の中の自動の線を消す（形の中か、ふちから 2m 以内の点だけでできた線）
+  for (const r of MANUAL.remove.filter((x) => x.level === L)) {
+    const inside = (p: XZ) => pointInPolygon(p, r.poly) || r.poly.some((a2, i) => {
+      const b2 = r.poly[(i + 1) % r.poly.length];
+      const dx = b2[0] - a2[0], dz = b2[1] - a2[1], L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((p[0] - a2[0]) * dx + (p[1] - a2[1]) * dz) / L2));
+      return Math.hypot(p[0] - a2[0] - dx * t, p[1] - a2[1] - dz * t) < 2;
+    });
+    for (let i = out.length - 1; i >= 0; i--) if (out[i].level === L && out[i].pts.every(inside)) out.splice(i, 1);
+  }
+  // 線から離れたままの出入口・出口（骨格まで道が引けなかったもの）は、いちばん近い線の点へまっすぐつなぐ
+  // （30m まで。あいだが歩ける所のときだけ。つなぐ点は、その線の頂点にする）
+  const mine = out.filter((o) => o.level === L);
+  for (const k of keys) {
+    if (k.kind !== "door" && k.kind !== "exit") continue;
+    let best: { ln: (typeof mine)[number]; k: number; q: XZ; d: number } | null = null;
+    for (const ln of mine)
+      for (let j = 1; j < ln.pts.length; j++) {
+        const A = ln.pts[j - 1], B = ln.pts[j];
+        const dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((k.at[0] - A[0]) * dx + (k.at[1] - A[1]) * dz) / L2));
+        const q: XZ = [A[0] + dx * t, A[1] + dz * t];
+        const d = Math.hypot(q[0] - k.at[0], q[1] - k.at[1]);
+        if (!best || d < best.d) best = { ln, k: j, q, d };
+      }
+    if (!best || best.d <= 1.5 || best.d > 30) continue;
+    const n = Math.ceil(best.d);
+    let clear = true;
+    for (let i = 1; i < n; i++) {
+      const c = cellOf(g, [k.at[0] + ((best.q[0] - k.at[0]) * i) / n, k.at[1] + ((best.q[1] - k.at[1]) * i) / n]);
+      if (c < 0 || g.region[c] < 0) clear = false;
+    }
+    if (!clear) continue;
+    const q: XZ = [Math.round(best.q[0] * 10) / 10, Math.round(best.q[1] * 10) / 10];
+    best.ln.pts.splice(best.k, 0, q);
+    out.push({ level: L, pts: [k.at, q] });
+  }
   console.log(`${L}F: 行き先 ${keys.length}、線 ${out.filter((o) => o.level === L).length}`);
 }
 // 階段：上と下の端を結ぶ（端は、その階の網の行き先の升目に合わせる）
@@ -258,5 +298,6 @@ const snap = (p: XZ, L: number) => {
 const stairs = (venue.stairs ?? [])
   .filter((s) => s.kind !== "ramp" && !s.sur)
   .map((s) => ({ a: snap(s.from, s.fromLevel), la: s.fromLevel, b: snap(s.to, s.toLevel), lb: s.toLevel, kind: s.kind ?? "stairs" }));
+for (const m of MANUAL.lines) out.push(m);
 writeFileSync("src/data/corridors.json", JSON.stringify({ lines: out, stairs, keys: keysOut }));
 console.log(`線 ${out.length} 本・階段 ${stairs.length}`);
