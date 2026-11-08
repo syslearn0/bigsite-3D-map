@@ -763,8 +763,8 @@ export function VenueView() {
     type LevelParts = { floors: THREE.Mesh[]; solid: THREE.Object3D[] };
     // 文字の札。上から・3D では、ズームしても画面の上で同じ大きさ（px）にする。近づいて机が見えてきたら、
     // ホールの名前のような大きな札は机を隠すので消し、列の名前のような細かい札は近いときだけ出す。歩くときは実物の大きさ
-    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block" | "sur"; // sur：周辺の札（建物の名前・駅の出入口・バス停）
-    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15, sur: 14 };
+    type LabelKind = "hall" | "area" | "wc" | "aid" | "door" | "shutter" | "block" | "sur" | "genre"; // sur：周辺の札（建物の名前・駅の出入口・バス停）。genre：色分けの名前
+    const LABEL_PX: Record<LabelKind, number> = { hall: 22, area: 13, wc: 16, aid: 16, door: 15, shutter: 13, block: 15, sur: 14, genre: 15 };
     const labels: { s: THREE.Sprite; kind: LabelKind; base: THREE.Vector3 }[] = [];
     const addLabel = (s: THREE.Sprite, kind: LabelKind) => labels.push({ s, kind, base: s.scale.clone() });
     // ---- 周辺をくわしく（ユーザーの指示：駅までの道など、まわりをくわしく、リアルに）
@@ -2108,6 +2108,7 @@ export function VenueView() {
       }
     };
 
+    const genreSprites: THREE.Sprite[] = [];
     const recolor = (colorByGenre: boolean, marks: Record<string, Mark>, visited: Record<string, number>, sel: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => {
       const col = new THREE.Color();
       // ジャンル・作品（とキャラ）を選んでいるとき、その机か
@@ -2123,6 +2124,21 @@ export function VenueView() {
         }
         return !work || lines[b.line].genre === work;
       };
+      // 色分けの名前：絞りこんでいないときは、机の作品（なければジャンル）。ジャンル・作品・キャラで絞りこんだときは、
+      // キャラ・グループごと（キャラが入っていなければ作品、それもなければジャンル）。色もこの名前で決める（ユーザーの指示）
+      const narrowed = !!(genre || work || char);
+      const keyOf = (b: Booth): string | null => {
+        const t = dayTags?.[b.code];
+        if (!t) return null;
+        if (!narrowed) return t.works?.[0] ?? t.genre ?? null;
+        if (char) return char;
+        const ws = work ? [work] : (t.works ?? []);
+        for (const w of ws) {
+          const c = t.chars?.[w]?.find((x) => x);
+          if (c) return c;
+        }
+        return ws.find((w) => w !== genre) ?? t.genre ?? null;
+      };
       for (const { mesh, index } of deskMeshes.values()) {
         index.forEach((bi, k) => {
           const b = booths[bi];
@@ -2132,7 +2148,7 @@ export function VenueView() {
           else if (colorByGenre && !hit(b)) col.setHex(0xe6e5de); // 選んだ作品でない机は薄く
           else if (colorByGenre && dayTags) {
             // 入れた作品の色（選んだ作品があればその色。なければ 1 つ目の作品の色。作品が入っていない机はジャンルの色、どちらもなければ白）
-            const w = work ?? dayTags[b.code]?.works?.[0] ?? dayTags[b.code]?.genre;
+            const w = keyOf(b);
             if (w) col.setStyle(workColor(w)).lerp(new THREE.Color(0xffffff), 0.2);
             else col.setHex(DESK_COLOR);
           } else if (colorByGenre) {
@@ -2147,6 +2163,63 @@ export function VenueView() {
         pinOn = false;
         pin.visible = false;
       }
+      // 色分けの名前の札：同じ名前で、となり合う机（9m 以内。となりの島まで）のまとまりごとに 1 枚、まとまりの真ん中に（4 スペース以上のまとまりだけ）
+      for (const s of genreSprites) {
+        scene.remove(s);
+        s.material.map?.dispose();
+        s.material.dispose();
+      }
+      genreSprites.length = 0;
+      for (let i = labels.length - 1; i >= 0; i--) if (labels[i].kind === "genre") labels.splice(i, 1);
+      if (!colorByGenre || !dayTags) return;
+      const groups = new Map<string, { bi: number; x: number; z: number; lv: number }[]>();
+      booths.forEach((b, bi) => {
+        if (!hit(b)) return;
+        const key = keyOf(b);
+        if (!key) return;
+        const lv = hallById.get(b.hall)?.level ?? 1;
+        const g = `${lv}|${key}`;
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g)!.push({ bi, x: b.at[0], z: b.at[1], lv });
+      });
+      const R = 9; // となりの島（7m おき）までは同じまとまり
+      for (const [g, list] of groups) {
+        const key = g.slice(g.indexOf("|") + 1);
+        const cell = new Map<string, number[]>();
+        list.forEach((q, i) => {
+          const c = `${Math.floor(q.x / R)},${Math.floor(q.z / R)}`;
+          if (!cell.has(c)) cell.set(c, []);
+          cell.get(c)!.push(i);
+        });
+        const seen = new Array(list.length).fill(false);
+        for (let i0 = 0; i0 < list.length; i0++) {
+          if (seen[i0]) continue;
+          const stack = [i0], comp: number[] = [];
+          seen[i0] = true;
+          while (stack.length) {
+            const i = stack.pop()!;
+            comp.push(i);
+            const cx = Math.floor(list[i].x / R), cz = Math.floor(list[i].z / R);
+            for (let dx = -1; dx <= 1; dx++)
+              for (let dz = -1; dz <= 1; dz++)
+                for (const j of cell.get(`${cx + dx},${cz + dz}`) ?? []) {
+                  if (seen[j] || Math.hypot(list[j].x - list[i].x, list[j].z - list[i].z) > R) continue;
+                  seen[j] = true;
+                  stack.push(j);
+                }
+          }
+          if (comp.length < 4) continue;
+          const mx = comp.reduce((a, i) => a + list[i].x, 0) / comp.length, mz = comp.reduce((a, i) => a + list[i].z, 0) / comp.length;
+          const s = textSprite(key, { bg: workColor(key), fg: "#16181d", height: 2.6, px: 32 });
+          s.position.set(mx, floorY(list[comp[0]].lv) + 2.8, mz);
+          s.userData.level = list[comp[0]].lv;
+          s.renderOrder = 11;
+          scene.add(s);
+          genreSprites.push(s);
+          addLabel(s, "genre");
+        }
+      }
+      placeLabels();
     };
 
     // ---- タップで机を選ぶ（ドラッグとは分ける） ----
@@ -2348,10 +2421,10 @@ export function VenueView() {
     const placeLabels = () => {
       const walk = current === "walk";
       for (const { s, kind, base } of labels) {
-        let show = s.userData.levelOn !== false && !(s.userData.topOnly && current !== "top");
+        let show = (kind === "genre" ? shown(floorOf(s.userData.level as number)) : s.userData.levelOn !== false) && !(s.userData.topOnly && current !== "top");
         if (walk) {
           s.scale.copy(base);
-          if (kind === "hall") show = false;
+          if (kind === "hall" || kind === "genre") show = false;
         } else {
           const ppm = pxPerM(s.position);
           s.scale.copy(base).multiplyScalar(LABEL_PX[kind] / (base.y * ppm));
@@ -2399,7 +2472,7 @@ export function VenueView() {
             s.visible = !b || !hits(b);
             if (b && s.visible) placed.push(b);
           }
-        for (const k of ["aid", "door", "wc", "shutter", "sur"] as const)
+        for (const k of ["aid", "genre", "door", "wc", "shutter", "sur"] as const)
           for (const { s, kind } of labels) {
             if (kind !== k || !s.visible) continue;
             const b = box(s, LABEL_PX[k], false);
@@ -3313,27 +3386,26 @@ export function VenueView() {
               　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              {/* 当日・計画のモードでは新しく印をつけず、「行った」を 1 回押すだけにする（ユーザーの指示）。
-                  「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ */}
-              {mode === "plan" && !selMark ? (
-                <span style={{ flex: "1 1 100%", color: "var(--muted)", fontSize: ".9rem" }}>
-                  印のない机です。「✓ 行った」は、★ 行きたい・◆ 候補の印をつけた机だけにつけられます（印は「登録」のモードでつけます）。
-                </span>
-              ) : mode === "plan" ? (
+              {/* 当日・計画のモードでも ★ 行きたい・◆ 候補の印をつけられる（ユーザーの指示）。
+                  「✓ 行った」にできるのは、印がある机だけ */}
+              {mode === "plan" ? (
                 <>
                   {/* 押しやすいように 1 行まるごと使う（スマホで折り返さない） */}
-                  <button
-                    style={{ flex: "1 1 100%", minHeight: 52, fontWeight: 700, fontSize: "1.1rem" }}
-                    aria-pressed={!!visited[sel.code]}
-                    onClick={() => toggleVisited(sel.code)}
-                  >
-                    {visited[sel.code] ? "✓ 行った（取り消す）" : "✓ 行った"}
-                  </button>
                   {selMark && (
-                    <span style={{ alignSelf: "center", fontWeight: 700, marginRight: "auto", color: hexCss(MARK[selMark].color) }}>
-                      {MARK[selMark].icon} {MARK[selMark].label}
-                    </span>
+                    <button
+                      style={{ flex: "1 1 100%", minHeight: 52, fontWeight: 700, fontSize: "1.1rem" }}
+                      aria-pressed={!!visited[sel.code]}
+                      onClick={() => toggleVisited(sel.code)}
+                    >
+                      {visited[sel.code] ? "✓ 行った（取り消す）" : "✓ 行った"}
+                    </button>
                   )}
+                  {MARKS.map((m) => (
+                    <button key={m} style={{ flex: 1, minHeight: 44, fontWeight: 700 }} aria-pressed={selMark === m} onClick={() => toggleMark(sel.code, m)}>
+                      {MARK[m].icon} {MARK[m].label}
+                      {selMark === m ? "（外す）" : ""}
+                    </button>
+                  ))}
                 </>
               ) : (
                 MARKS.map((m) => (
