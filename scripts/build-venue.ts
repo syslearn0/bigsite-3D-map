@@ -1039,7 +1039,7 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 外側の壁が開いて描かれている所。搬入口ではない）。配置図を読みこんでいなくても開ける（ユーザーの指示で公開版にも入れる）。
 // 配置図から読んだ切れ目（a〜b）はホールの床のふち（部屋の帯の内側、外壁から 5m ほど内）の線で、つなぎ目の塊の幅まで含む。
 // 外壁の線（配置図の上のふち）の切れ目は、そのうち t0〜t1 の所（約 7m）なので、そこだけを両どなりのホールの外壁の線の上に移す
-const wallGaps: { hall: string; a: XZ; b: XZ }[] = [];
+const wallGaps: { hall: string; a: XZ; b: XZ; full?: boolean }[] = []; // full：壁の高さいっぱいに開ける（看板は出さない）
 for (const [ids, a0, b0, t0, t1] of [
   [["E1", "E2"], [332.18, -75.23], [322.3, -68.81], 0.202, 0.807],
   [["E2", "E3"], [407.63, -124.38], [397.33, -117.69], 0.204, 0.805],
@@ -1097,6 +1097,39 @@ for (const [ids, a0, b0, t0, t1] of [
       const U = (y: number) => sh.u0 - (y - sh.y0) * sh.s, V = (x: number) => sh.v0 + (x - sh.x0) * sh.s;
       blocks.push({ name, level: 1, kind: "room", height: 3.5, poly: fromUV([[U(y0), V(x0)], [U(y0), V(x1)], [U(y1), V(x1)], [U(y1), V(x0)]]) });
     }
+}
+// 東1〜3 のガレリア側の外壁：部屋の帯の部屋・トイレの区画のあいだは、当日はシャッターが開いていて柱だけ（ユーザーの指摘。
+// 公式の配置図でも、区画のあいだは柱の印だけ。ビッグサイトの図面でも、区画のあいだの「出入口 SH」は区画から区画までの幅いっぱい）。
+// 外壁の線に、部屋やトイレの区画（外壁から 2m 以内まで来ているもの）がかからない所のうち 10m 以上のものを、帯の低い壁の高さ
+// いっぱいに開ける（10m より短い所は、トイレの区画の中の通路やホールのさかいの塊なので閉じたまま）。
+// 東3 のホールのさかいのトイレの区画（図面：EV とトイレ、u 14.0〜27.2・v -425.8〜-408.2）は会場データにないので、ここでだけ使う
+{
+  const e3Toilets: XZ[] = fromUV([[14.0, -425.8], [27.2, -425.8], [27.2, -408.2], [14.0, -408.2]]);
+  const shapes = [...blocks.filter((b) => b.level === 1 && b.kind === "room").map((b) => b.poly), ...toiletRooms.filter((r) => r.level === 1).map((r) => r.poly), e3Toilets];
+  const said: string[] = [];
+  for (const id of ["E1", "E2", "E3"]) {
+    const uvs = halls.find((x) => x.id === id && x.level === 1)!.poly.map(toUV);
+    const eu = Math.min(...uvs.map((p) => p[0]));
+    const vs = uvs.filter((p) => p[0] < eu + 0.5).map((p) => p[1]);
+    const v0 = Math.min(...vs), v1 = Math.max(...vs);
+    const cover: [number, number][] = [];
+    for (const s of shapes) {
+      const q = s.map(toUV);
+      if (Math.min(...q.map((p) => p[0])) > eu + 2) continue;
+      const a = Math.min(...q.map((p) => p[1])), b = Math.max(...q.map((p) => p[1]));
+      if (b > v0 && a < v1) cover.push([a, b]);
+    }
+    cover.sort((p, q) => p[0] - q[0]);
+    let at = v0;
+    for (const [a, b] of [...cover, [v1, v1] as [number, number]]) {
+      if (a - at >= 10) {
+        wallGaps.push({ hall: id, a: fromUV([[eu, at]])[0], b: fromUV([[eu, a]])[0], full: true });
+        said.push(`${id} ${(a - at).toFixed(1)}m`);
+      }
+      at = Math.max(at, b);
+    }
+  }
+  console.log(`東1〜3 のガレリア側の開口：${said.join("・")}`);
 }
 
 // 周辺の道・線路・駅（data/osm/surroundings.json、npm run fetch:surroundings が作る）。「周辺も表示」で使う。
