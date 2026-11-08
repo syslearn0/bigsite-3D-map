@@ -215,6 +215,15 @@ export function AdminView() {
                           承認
                         </button>
                       )}
+                      <button
+                        className="chip small"
+                        onClick={() =>
+                          confirm(`${c.name}（${c.codes.join("・")}）の登録を消しますか？消すと、同じ配置番号をほかの人が登録できるようになります（もとに戻せません）`) &&
+                          post({ action: "delete_circle", id: c.id }, `${c.name} の登録を消しました`)
+                        }
+                      >
+                        消す
+                      </button>
                       {c.status !== "rejected" && (
                         <button
                           className="chip small"

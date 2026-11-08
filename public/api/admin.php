@@ -84,6 +84,20 @@ if ($action === 'circle') {
   $status = $b['status'] ?? '';
   if (!in_array($status, ['pending', 'approved', 'rejected'], true)) fail('status');
   $pdo->prepare('UPDATE circles SET status = ?, note = ? WHERE id = ?')->execute([$status, mb_substr((string)($b['note'] ?? ''), 0, 300), (int)($b['id'] ?? 0)]);
+  // 承認を取り消したものは、公開中の一覧からすぐ外す（新しく承認したものは「公開」を押したときに出す）
+  if ($status !== 'approved') write_circles_json($pdo);
+  out(['ok' => true]);
+}
+
+if ($action === 'delete_circle') {
+  // サークル登録を消す（いたずらの登録など。消すと、同じ配置番号をほかの人が登録できる）
+  $st = $pdo->prepare('SELECT image FROM circles WHERE id = ?');
+  $st->execute([(int)($b['id'] ?? 0)]);
+  if ($r = $st->fetch()) {
+    remove_circle_image($r['image']);
+    $pdo->prepare('DELETE FROM circles WHERE id = ?')->execute([(int)$b['id']]);
+    write_circles_json($pdo);
+  }
   out(['ok' => true]);
 }
 
@@ -111,33 +125,17 @@ if ($action === 'publish') {
     } else @unlink("$dataDir/tags.json");
   }
   if (array_key_exists('circles', $parts)) {
-    $imgDir = "$dataDir/circles";
-    if ($parts['circles']) {
-      if (!is_dir($imgDir)) mkdir($imgDir, 0755, true);
-      $keep = [];
-      $list = [];
-      foreach ($pdo->query("SELECT * FROM circles WHERE status = 'approved' ORDER BY day, id") as $r) {
-        $img = '';
-        if ($r['image'] !== '' && is_file(private_dir() . '/circles/' . $r['image'])) {
-          $img = $r['image'];
-          if (!is_file("$imgDir/$img")) copy(private_dir() . '/circles/' . $r['image'], "$imgDir/$img");
-          $keep[] = $img;
-        }
-        $list[] = ['day' => (int)$r['day'], 'codes' => json_decode($r['codes'], true), 'name' => $r['name'], 'works' => json_decode($r['works'], true),
-          'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $img ? "/data/circles/$img" : ''];
-      }
-      foreach (glob("$imgDir/*") ?: [] as $f) if (!in_array(basename($f), $keep, true)) @unlink($f);
-      $write('circles', ['format' => 'comiket3d-circles', 'updated' => gmdate('c'), 'circles' => $list]);
-    } else {
+    if ($parts['circles']) write_circles_json($pdo, true);
+    else {
       @unlink("$dataDir/circles.json");
-      foreach (glob("$imgDir/*") ?: [] as $f) @unlink($f);
+      foreach (glob("$dataDir/circles/*") ?: [] as $f) @unlink($f);
     }
   }
   if (array_key_exists('layout', $parts)) {
     if ($parts['layout']) {
       $v = $pdo->query("SELECT v FROM kv WHERE k = 'layout'")->fetchColumn();
       if (!$v) fail('配置がまだ置かれていません');
-      file_put_contents("$dataDir/layout.json", $v);
+      $write('layout', json_decode($v, true)); // 書きかけを地図が読まないよう、別の名前で書いてから入れかえる
     } else @unlink("$dataDir/layout.json");
   }
   out(['published' => published($dataDir)]);

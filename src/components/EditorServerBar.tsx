@@ -58,8 +58,17 @@ export function EditorServerBar({
     try {
       const r = await api<{ days: unknown }>("tags.php");
       const server = fromServer(r.days);
-      // 手元でまだ送っていない変更は残して、ほかは サーバーのものにする
-      const b = readBase() ?? {};
+      // 手元でまだ送っていない変更は残して、ほかは サーバーのものにする。
+      // サーバーから初めて読むとき（前に読んだ記録がない）は、手元の作品・キャラを残すかを聞く（残さないなら、サーバーの内容だけに）
+      const base0 = readBase();
+      const localN = DAYS.reduce((a, d) => a + Object.keys(tags[d] ?? {}).length, 0);
+      if (!base0 && localN && !confirm(`この端末に、サーバーに送っていない作品・キャラが ${localN} スペースあります。\nサーバーの内容に重ねて残し、あとで送りますか？\n（キャンセル：手元の分は捨てて、サーバーの内容だけにします）`)) {
+        writeBase(server);
+        setTags(server);
+        setBusy(false);
+        return;
+      }
+      const b = base0 ?? {};
       const merged: Tags = {};
       for (const d of DAYS) {
         merged[d] = { ...(server[d] ?? {}) };
@@ -84,6 +93,17 @@ export function EditorServerBar({
     try {
       const latest = fromServer((await api<{ days: unknown }>("tags.php")).days);
       const b = readBase() ?? {};
+      // ほかの協力者も同じ机を変えていたら、上書きしてよいか先に聞く
+      const clashes: string[] = [];
+      for (const d of DAYS)
+        for (const code of new Set([...Object.keys(tags[d] ?? {}), ...Object.keys(b[d] ?? {})])) {
+          const mine = norm(tags[d]?.[code]);
+          if (mine !== norm(b[d]?.[code]) && norm(latest[d]?.[code]) !== norm(b[d]?.[code]) && norm(latest[d]?.[code]) !== mine) clashes.push(`${d}日目 ${code}`);
+        }
+      if (clashes.length && !confirm(`ほかの協力者も、同じ ${clashes.length} スペースを変えています（${clashes.slice(0, 8).join("・")}${clashes.length > 8 ? " など" : ""}）。\nこちらの内容で上書きしますか？\n（キャンセル：保存しません。「サーバーから読み込む」で相手の内容を見られます）`)) {
+        setBusy(false);
+        return;
+      }
       let saved = 0, clash = 0;
       const next: Tags = {};
       for (const d of DAYS) {

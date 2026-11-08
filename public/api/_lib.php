@@ -128,7 +128,43 @@ function require_write(): void {
   if ($_SERVER['REQUEST_METHOD'] === 'GET') return;
   if (($_SERVER['HTTP_X_S3D'] ?? '') !== '1') fail('bad request', 403);
   $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-  if ($origin !== '' && !in_array($origin, ['https://sokubai3d.textetc.net', 'http://localhost:3200'], true)) fail('bad origin', 403);
+  // 開発用の localhost は、設定で allow_dev を true にしたときだけ
+  $ok = ['https://sokubai3d.textetc.net'];
+  if (!empty(cfg()['allow_dev'])) $ok[] = 'http://localhost:3200';
+  if ($origin !== '' && !in_array($origin, $ok, true)) fail('bad origin', 403);
+}
+
+// 地図が読むサークルの一覧（data/circles.json）と、その画像を書き出す（承認したものだけ）。
+// 公開をやめていた（circles.json がない）ときは、$force でなければ何もしない
+function write_circles_json(PDO $pdo, bool $force = false): void {
+  $dataDir = site_dir() . '/data';
+  $imgDir = "$dataDir/circles";
+  if (!$force && !is_file("$dataDir/circles.json")) return;
+  if (!is_dir($imgDir)) mkdir($imgDir, 0755, true);
+  $keep = [];
+  $list = [];
+  foreach ($pdo->query("SELECT * FROM circles WHERE status = 'approved' ORDER BY day, id") as $r) {
+    $img = '';
+    $src = private_dir() . '/circles/' . basename($r['image']);
+    if ($r['image'] !== '' && is_file($src)) {
+      $img = basename($r['image']);
+      if (!is_file("$imgDir/$img")) copy($src, "$imgDir/$img");
+      $keep[] = $img;
+    }
+    $list[] = ['day' => (int)$r['day'], 'codes' => json_decode($r['codes'], true), 'name' => $r['name'], 'works' => json_decode($r['works'], true),
+      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $img ? "/data/circles/$img" : ''];
+  }
+  foreach (glob("$imgDir/*") ?: [] as $f) if (!in_array(basename($f), $keep, true)) @unlink($f);
+  $tmp = "$dataDir/circles.json.tmp";
+  file_put_contents($tmp, json_encode(['format' => 'comiket3d-circles', 'updated' => gmdate('c'), 'circles' => $list], JSON_UNESCAPED_UNICODE));
+  rename($tmp, "$dataDir/circles.json");
+}
+
+// 1 件のサークル登録の画像を消す（手元の分と、公開した分）
+function remove_circle_image(string $image): void {
+  if ($image === '') return;
+  @unlink(private_dir() . '/circles/' . basename($image));
+  @unlink(site_dir() . '/data/circles/' . basename($image));
 }
 
 function is_admin_email(string $email): bool {

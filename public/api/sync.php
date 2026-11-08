@@ -17,7 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   foreach ($entries as $k => $e) {
     if (!is_string($k) || !preg_match('/^[mnv]\|[123]\|[^|]{3,40}$/u', $k) || !is_array($e)) continue;
     $t = (int)($e['t'] ?? 0);
-    if ($t <= 0 || $t > $now) continue;
+    if ($t <= 0) continue;
+    $t = min($t, $now); // 端末の時計が進んでいても捨てない（サーバーの時刻にそろえる）
     $v = $e['v'] ?? null;
     if ($v !== null) $v = mb_substr((string)$v, 0, 400);
     $up->execute([$u['id'], $k, $v, $t]);

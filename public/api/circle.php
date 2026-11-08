@@ -26,8 +26,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
   $st = $pdo->prepare('SELECT id, image FROM circles WHERE user_id = ? AND day = ?');
   $st->execute([$u['id'], $day]);
   if ($r = $st->fetch()) {
-    if ($r['image'] !== '') @unlink(private_dir() . '/circles/' . $r['image']);
+    remove_circle_image($r['image']);
     $pdo->prepare('DELETE FROM circles WHERE id = ?')->execute([$r['id']]);
+    write_circles_json($pdo); // 公開中の一覧からも、すぐに消す
   }
   out(['circles' => mine($pdo, (int)$u['id'])]);
 }
@@ -41,14 +42,15 @@ $name = trim(mb_substr((string)($b['name'] ?? ''), 0, 60));
 if ($name === '') fail('サークル名を入れてください');
 $works = clean_list($b['works'] ?? [], 10);
 $chars = [];
-if (is_array($b['chars'] ?? null)) foreach ($b['chars'] as $w => $list) if (in_array($w, $works, true) && ($l = clean_list($list, 30))) $chars[$w] = $l;
+// （作品名が数字だけのとき、PHP は配列のキーを数に変えるので、文字にして比べる）
+if (is_array($b['chars'] ?? null)) foreach ($b['chars'] as $w => $list) if (in_array((string)$w, $works, true) && ($l = clean_list($list, 30))) $chars[(string)$w] = $l;
 $x = preg_replace('/[^A-Za-z0-9_]/', '', ltrim((string)($b['x'] ?? ''), '@'));
 $x = substr($x, 0, 30);
 $url = trim((string)($b['url'] ?? ''));
 if ($url !== '' && !preg_match('#^https://[^\s<>"]{3,280}$#', $url)) fail('URL は https:// から始めてください');
 
 // 同じ日・同じ配置番号を、ほかの人がもう登録していれば断る（なりすまし防止。作者が確かめる）
-$st = $pdo->prepare('SELECT codes FROM circles WHERE day = ? AND user_id <> ?');
+$st = $pdo->prepare("SELECT codes FROM circles WHERE day = ? AND user_id <> ? AND status <> 'rejected'");
 $st->execute([$day, $u['id']]);
 foreach ($st as $r) foreach (json_decode($r['codes'], true) ?: [] as $c) if (in_array($c, $codes, true)) fail("{$c} は、ほかの人が登録しています。間違いのときは作者に連絡してください", 409);
 
@@ -62,13 +64,16 @@ if (!empty($b['image'])) {
   if ($bin === false || strlen($bin) > 400000) fail('画像が大きすぎます');
   $info = @getimagesizefromstring($bin);
   if (!$info || $info[0] > 2000 || $info[1] > 2000) fail('画像が読めません');
+  // 拡張子は、送られてきた名のりではなく、画像の中身の形から決める
+  $ext = ['image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/png' => 'png'][$info['mime'] ?? ''] ?? null;
+  if (!$ext) fail('webp・jpeg・png の画像にしてください');
   $dir = private_dir() . '/circles';
   if (!is_dir($dir)) mkdir($dir, 0700, true);
-  if ($image !== '') @unlink($dir . '/' . $image);
-  $image = $u['id'] . '-' . $day . '-' . bin2hex(random_bytes(6)) . '.' . ($m[1] === 'jpeg' ? 'jpg' : $m[1]);
+  remove_circle_image($image);
+  $image = bin2hex(random_bytes(12)) . '.' . $ext; // 名前は乱数だけ（だれの画像か分からないように）
   file_put_contents($dir . '/' . $image, $bin);
 } elseif (!empty($b['removeImage']) && $image !== '') {
-  @unlink(private_dir() . '/circles/' . $image);
+  remove_circle_image($image);
   $image = '';
 }
 $vals = [json_encode($codes, JSON_UNESCAPED_UNICODE), $name, json_encode($works, JSON_UNESCAPED_UNICODE), json_encode((object)$chars, JSON_UNESCAPED_UNICODE), $x, $url, $image, $now];
@@ -78,4 +83,5 @@ if ($old) {
 } else {
   $pdo->prepare("INSERT INTO circles (codes, name, works, chars, x_account, url, image, updated_at, user_id, day, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')")->execute([...$vals, $u['id'], $day, $now]);
 }
+if ($old) write_circles_json($pdo); // 変えたものは確認待ちに戻るので、公開中の一覧から外す
 out(['circles' => mine($pdo, (int)$u['id'])]);

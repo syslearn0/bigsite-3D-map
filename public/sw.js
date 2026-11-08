@@ -4,7 +4,7 @@
 // ・/_next/static：ファイル名が中身ごとに変わるので、持っていればそれを使う
 // ・アイコンなど：持っている版をすぐ返し、裏で新しくする
 
-const CACHE = "comiket3d-v1"; // 持つものを変えたら上げる（古い入れ物は消える）
+const CACHE = "comiket3d-v2"; // 持つものを変えたら上げる（古い入れ物は消える）
 const PAGES = ["/"];
 
 self.addEventListener("install", (e) => {
@@ -74,4 +74,6 @@ self.addEventListener("fetch", (e) => {
   if (req.mode === "navigate") return e.respondWith(networkFirst(req, url.pathname));
   if (url.pathname.startsWith("/_next/static/")) return e.respondWith(cacheFirst(req));
   if (/\.(png|ico|webmanifest)$/.test(url.pathname)) return e.respondWith(staleWhileRevalidate(e, req));
+  // サークルの画像（作者が公開したもの）：電波がなくても、歩くときの札と机の欄に出せるように
+  if (url.pathname.startsWith("/data/circles/")) return e.respondWith(staleWhileRevalidate(e, req));
 });

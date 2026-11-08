@@ -7,7 +7,8 @@ import { DAYS, type Day } from "./tags";
 
 export type Flat = Record<string, string>;
 type ByDay<T> = Record<Day, Record<string, T>>;
-type Meta = { t: Record<string, number>; last: Flat };
+// user：最後に合わせたアカウント。t：項目ごとに、この端末で最後に変えた時刻
+type Meta = { t: Record<string, number>; last: Flat; user?: number };
 const META_KEY = "comiket3d:sync";
 
 export function flatten(marks: ByDay<string>, notes: ByDay<string>, visited: ByDay<number>): Flat {
@@ -47,23 +48,39 @@ function writeMeta(m: Meta) {
   } catch {}
 }
 
-// 端末で変わった項目に、変えた時刻をつける（最初の 1 回は、いまある項目をみな「いま変えた」とする）
+// 端末で変わった項目に、変えた時刻をつける。最初の 1 回は、いまある項目を「変えた」とはしない
+// （まだ合わせていない端末の古い印が、ほかの端末で消したものを、新しい時刻で生き返らせないように）
 export function noteLocal(flat: Flat) {
-  const m = readMeta() ?? { t: {}, last: {} };
+  const old = readMeta();
+  if (!old) return writeMeta({ t: {}, last: flat });
   const now = Date.now();
   let changed = false;
-  for (const k of new Set([...Object.keys(flat), ...Object.keys(m.last)]))
-    if (flat[k] !== m.last[k]) {
-      m.t[k] = now;
+  for (const k of new Set([...Object.keys(flat), ...Object.keys(old.last)]))
+    if (flat[k] !== old.last[k]) {
+      old.t[k] = now;
       changed = true;
     }
-  if (changed || !readMeta()) writeMeta({ t: m.t, last: flat });
+  if (changed) writeMeta({ ...old, last: flat });
 }
 
+const MONTH = 30 * 86400_000;
 // サーバーと合わせる。変わったときは、合わせたあとの全部を返す
-async function syncWith(flat: Flat): Promise<Flat | null> {
+export async function syncWith(flat: Flat, user: number): Promise<Flat | null> {
   noteLocal(flat);
-  const m = readMeta()!;
+  let m = readMeta()!;
+  if (m.user === undefined) {
+    // この端末で初めて合わせる：時刻のついていない手元の項目は、いちばん古い時刻（1）で送る。サーバーにない印は足され、
+    // サーバーにある（消したものも）ほうが勝つ
+    for (const k of Object.keys(flat)) m.t[k] ??= 1;
+    m.user = user;
+  } else if (m.user !== user) {
+    // ちがうアカウントでログインした：手元の印は送らず、そのアカウントのサーバーの分を読むだけ
+    m = { t: {}, last: flat, user };
+  }
+  // 消した項目の記録は、1 か月より古ければ忘れる（送る数がふえつづけないように）
+  const now = Date.now();
+  for (const [k, t] of Object.entries(m.t)) if (flat[k] === undefined && t > 1 && now - t > MONTH) delete m.t[k];
+  writeMeta(m);
   const entries: Record<string, { v: string | null; t: number }> = {};
   for (const [k, t] of Object.entries(m.t)) entries[k] = { v: flat[k] ?? null, t };
   const r = await api<{ entries: Record<string, { v: string | null; t: number }> }>("sync.php", { body: { entries } });
@@ -74,7 +91,7 @@ async function syncWith(flat: Flat): Promise<Flat | null> {
     else next[k] = e.v;
     m.t[k] = e.t;
   }
-  writeMeta({ t: m.t, last: next });
+  writeMeta({ t: m.t, last: next, user });
   const same = Object.keys(next).length === Object.keys(flat).length && Object.entries(next).every(([k, v]) => flat[k] === v);
   return same ? null : next;
 }
@@ -125,7 +142,7 @@ export function useAccountSync(flat: Flat, apply: (f: Flat) => void) {
       busy = true;
       setStatus("syncing");
       try {
-        const next = await syncWith(flatRef.current);
+        const next = await syncWith(flatRef.current, me);
         if (!dead && next) applyRef.current(next);
         if (!dead) setStatus("ok");
       } catch {

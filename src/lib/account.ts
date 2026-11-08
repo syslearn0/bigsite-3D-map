@@ -54,9 +54,17 @@ export function initAccount(): Promise<void> {
       set({ ready: true, available: !!r.clientId, me: r.me, clientId: r.clientId });
     } catch {
       set({ ready: true, available: false, me: null });
+      // 電波がなかった（または サーバーがない）とき：あとでもう一度聞けるように
+      started = null;
     }
   })();
   return started;
+}
+// 電波がもどったとき・画面にもどったときに、まだサーバーにつながっていなければ聞きなおす
+if (typeof window !== "undefined") {
+  const retry = () => !state.available && navigator.onLine && initAccount();
+  window.addEventListener("online", retry);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && retry());
 }
 
 export async function refreshMe() {
@@ -123,7 +131,8 @@ export async function renderLoginButton(el: HTMLElement, onError?: (m: string) =
     initialized = true;
   }
   el.innerHTML = "";
-  g.accounts.id.renderButton(el, { type: "standard", theme: "outline", size: "large", text: "signin_with", shape: "pill", locale: "ja", width: 240 });
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  g.accounts.id.renderButton(el, { type: "standard", theme: dark ? "filled_black" : "outline", size: "large", text: "signin_with", shape: "pill", locale: "ja", width: 240 });
 }
 
 export async function logout() {

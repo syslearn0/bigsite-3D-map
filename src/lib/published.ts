@@ -33,9 +33,14 @@ export function loadCircles(): CirclesByDay {
   return out;
 }
 
-// 公開のデータを取り直す。端末に取ってあるものと変わっていたら true（呼んだ側で読みなおす）
-export async function refreshPublished(): Promise<boolean> {
-  let changed = false;
+// 公開のデータを取り直す。changed：端末に取ってあるものと変わった。had：前から何か取ってあった。
+// full：端末の保存がいっぱいで、入れられなかった
+export async function refreshPublishedInfo(): Promise<{ changed: boolean; had: boolean; full: boolean }> {
+  let changed = false, full = false;
+  let had = false;
+  try {
+    had = (Object.values(PUB_KEYS) as string[]).some((k) => localStorage.getItem(k) !== null);
+  } catch {}
   await Promise.all(
     (Object.keys(PUB_KEYS) as Part[]).map(async (p) => {
       let text: string | null;
@@ -55,15 +60,28 @@ export async function refreshPublished(): Promise<boolean> {
         if (text === null) localStorage.removeItem(PUB_KEYS[p]);
         else localStorage.setItem(PUB_KEYS[p], text);
         changed = true;
-      } catch {}
+      } catch {
+        full = true;
+      }
     }),
   );
-  return changed;
+  return { changed, had, full };
+}
+export async function refreshPublished(): Promise<boolean> {
+  return (await refreshPublishedInfo()).changed;
 }
 
-// 新しいデータを取ったら、1 回だけ読みなおす（続けて何度も読みなおさないよう、30 秒は空ける）
-export async function refreshPublishedAndReload() {
-  if (!(await refreshPublished())) return;
+// 新しいデータを取ったら：初めて取ったとき（まだ何も見ていない）はすぐ読みなおす。前から取ってあったときは、
+// 選んでいた机や歩いていた場所が消えないよう、読みなおすかどうかを利用者にまかせる（"ask" を返す）
+export async function refreshPublishedAndReload(): Promise<"none" | "ask" | "full"> {
+  const r = await refreshPublishedInfo();
+  if (r.full) return "full";
+  if (!r.changed) return "none";
+  if (r.had) return "ask";
+  reloadOnce();
+  return "none";
+}
+export function reloadOnce() {
   try {
     const last = Number(sessionStorage.getItem(RELOAD_KEY) ?? 0);
     if (Date.now() - last < 30_000) return;

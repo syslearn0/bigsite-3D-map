@@ -11,8 +11,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
   $id = (int)$u['id'];
   $st = $pdo->prepare('SELECT image FROM circles WHERE user_id = ?');
   $st->execute([$id]);
-  foreach ($st->fetchAll() as $r) if ($r['image'] !== '') @unlink(private_dir() . '/circles/' . basename($r['image']));
+  foreach ($st->fetchAll() as $r) remove_circle_image($r['image']);
   $pdo->prepare('DELETE FROM circles WHERE user_id = ?')->execute([$id]);
+  write_circles_json($pdo); // 公開中の一覧からも消す
   $pdo->prepare('DELETE FROM user_entries WHERE user_id = ?')->execute([$id]);
   $pdo->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);
   $pdo->prepare("UPDATE users SET sub = ?, email = '', name = '（消したアカウント）', role = 'user' WHERE id = ?")->execute(['deleted-' . $id, $id]);

@@ -42,7 +42,7 @@ foreach ($changes as $code => $t) {
     $works = clean_list($t['works'] ?? [], 10);
     if ($works) $tag['works'] = $works;
     $chars = [];
-    if (is_array($t['chars'] ?? null)) foreach ($t['chars'] as $w => $list) if (in_array($w, $works, true) && ($l = clean_list($list, 40))) $chars[$w] = $l;
+    if (is_array($t['chars'] ?? null)) foreach ($t['chars'] as $w => $list) if (in_array((string)$w, $works, true) && ($l = clean_list($list, 40))) $chars[(string)$w] = $l;
     if ($chars) $tag['chars'] = $chars;
     if ($tag) $after = json_encode($tag, JSON_UNESCAPED_UNICODE);
   }

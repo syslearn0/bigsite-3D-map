@@ -17,7 +17,7 @@ import { buildRails, moveOnRails, nearestOnRails, railPath, railPoint, type Rail
 import { search, type Hit } from "@/lib/search";
 import { hallAt, makeSteady, type Where } from "@/lib/locate";
 import { buildGrid, findPath, type Grid, type NavVenue } from "@/lib/nav";
-import { planTour, type Stop } from "@/lib/tour";
+import { planTour, stopDist, type Stop } from "@/lib/tour";
 import { loadCircles, PUB_KEYS, refreshPublishedAndReload, type Circle } from "@/lib/published";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
@@ -692,7 +692,7 @@ export function VenueView() {
     const walkAt = api.current?.walkPos() ?? null;
     if (locOn && lastMe.current && loc?.where.hall) {
       from = lastMe.current;
-      level = floor === 4 ? 4 : 1;
+      level = loc.where.hall.level; // いまいる（近い）ホールの階
       fromName = "いまいる所";
     } else if (walkAt) {
       from = walkAt;
@@ -761,7 +761,8 @@ export function VenueView() {
     for (let k = 1; k < seq.length; k++) {
       const a = seq[k - 1], b = seq[k];
       if (a.level !== b.level || a.building !== b.building) {
-        walk += Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]);
+        // 建物・階をまたぐ所は、通路を探さずに、まっすぐの長さに移る手間（回る順を決めたときと同じ）を足す
+        walk += stopDist(a, b);
         continue;
       }
       const path = findPath(navGrid(a.level), a.p, [b.p]);
@@ -808,8 +809,10 @@ export function VenueView() {
     } catch {}
   }, [pinsOn]);
   // 作者が公開したデータに新しいものがあれば取り直す（取ったら 1 回だけ読みなおす）
+  // 作者が公開しなおした新しいデータがあるとき（"ask"）・端末の保存がいっぱいのとき（"full"）の札
+  const [pubNote, setPubNote] = useState<"ask" | "full" | null>(null);
   useEffect(() => {
-    refreshPublishedAndReload();
+    refreshPublishedAndReload().then((r) => r !== "none" && setPubNote(r));
   }, []);
   useEffect(() => {
     floorRef.current = { floor, both };
@@ -2634,9 +2637,15 @@ export function VenueView() {
       if (railPos) {
         const here = nearestOnRails(walkRails, [persp.position.x, persp.position.z])!;
         const q = nearestOnRails(walkRails, [p.x, p.z], walkRails.nodes[railPos.a].hall);
-        if (!q || q.d > 8) return;
-        const pts = railPath(walkRails, railPos, q);
-        if (!pts) return;
+        const pts = q && q.d <= 8 ? railPath(walkRails, railPos, q) : null;
+        if (!q || !pts) {
+          // 押した所の近くに線がない（ホールの外・広場など）：線をはなれて、まっすぐ歩いていく
+          railPos = null;
+          railPathAnim = null;
+          lastKeyWalk = "";
+          walkTo(p);
+          return;
+        }
         let len = 0;
         for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
         if (len < 0.3 || here.d > 1) return;
@@ -3331,7 +3340,13 @@ export function VenueView() {
           const k = 1 - Math.pow(1 - walkAnim.t, 2);
           persp.position.x = walkAnim.from.x + (walkAnim.to.x - walkAnim.from.x) * k;
           persp.position.z = walkAnim.from.z + (walkAnim.to.z - walkAnim.from.z) * k;
-          if (walkAnim.t >= 1) walkAnim = null;
+          if (walkAnim.t >= 1) {
+            walkAnim = null;
+            // 着いた所のすぐ近くに線があれば、また線に乗る
+            const hereHall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon([persp.position.x, persp.position.z], h.poly));
+            const q = hereHall ? nearestOnRails(walkRails, [persp.position.x, persp.position.z], hereHall.id) : null;
+            if (q && q.d < 2.5) railPos = { a: q.a, b: q.b, t: q.t };
+          }
         }
         if (!railPos) {
           persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
@@ -3780,12 +3795,6 @@ export function VenueView() {
           </button>
         ))}
       </div>
-      <button className="icon-btn small" aria-label="名前で探す" aria-pressed={findOpen} onClick={() => setFindOpen((o) => !o)} style={{ flex: "none" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="M15.5 15.5 21 21" />
-        </svg>
-      </button>
     </div>
   );
   const KIND_LABEL = { circle: "サークル", code: "配置番号", work: "作品", char: "キャラ", genre: "ジャンル" } as const;
@@ -3901,9 +3910,18 @@ export function VenueView() {
       <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
         {/* いつも出すもの：サイドバーを開くボタン、配置番号の欄、2D・3D、歩く、周辺 */}
         <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: 8, alignItems: "flex-start", pointerEvents: "none" }}>
-          <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="メニュー" onClick={() => setMenu(true)}>
-            <Icon name="menu" />
-          </button>
+          {/* 左の列：メニューと、名前で探す（配置番号の欄がスマホでせまくならないよう、欄の外に） */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, pointerEvents: "auto" }}>
+            <button className="icon-btn" aria-label="メニュー" onClick={() => setMenu(true)}>
+              <Icon name="menu" />
+            </button>
+            <button className="icon-btn" aria-label="名前で探す" aria-pressed={findOpen} onClick={() => setFindOpen((o) => !o)}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                <circle cx="10.5" cy="10.5" r="6.5" />
+                <path d="M15.5 15.5 21 21" />
+              </svg>
+            </button>
+          </div>
           {/* 配置番号の欄はモードによらずいつも地図の上に（ユーザーの指示） */}
           <div data-tour="picker" style={{ flex: 1, minWidth: 0, maxWidth: 520, pointerEvents: "auto" }}>
             {codePicker}
@@ -4253,7 +4271,20 @@ export function VenueView() {
         )}
       </div>
 
-      <div className="status-stack">
+      <div className="status-stack" hidden={findOpen}>
+      {pubNote && (
+        <div className="route-card" role="status" style={{ borderColor: "var(--accent)" }}>
+          <span>{pubNote === "ask" ? "配置・作品の新しいデータがあります" : "端末の保存がいっぱいで、新しい配置・作品を入れられませんでした"}</span>
+          {pubNote === "ask" && (
+            <button className="chip small" onClick={() => location.reload()}>
+              読みなおす
+            </button>
+          )}
+          <button className="chip small" onClick={() => setPubNote(null)} aria-label="閉じる">
+            ✕
+          </button>
+        </div>
+      )}
       {route && (
         <div className="route-card" role="status">
           {"error" in route ? (

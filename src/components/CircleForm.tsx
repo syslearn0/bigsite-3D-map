@@ -8,7 +8,7 @@ import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { accountStore, api, initAccount } from "@/lib/account";
 import { expandBooths, type HallLike, type Line } from "@/lib/layout";
-import { PUB_KEYS } from "@/lib/published";
+import { PUB_KEYS, refreshPublished } from "@/lib/published";
 import { loadLayout } from "@/lib/saved-layout";
 import { DAYS, type Day } from "@/lib/tags";
 import { AccountBox } from "./AccountBox";
@@ -62,12 +62,16 @@ export function CircleForm() {
   }, []);
 
   // 地図にある配置番号（公開された配置、なければ見本）。ないものを入れたときは注意だけ出す
-  // （この画面はブラウザだけで描くので、端末の保存を読める）
+  // （この画面はブラウザだけで描くので、端末の保存を読める）。地図を開いたことのない端末でも分かるよう、公開の配置を取り直す
+  const [pubTick, setPubTick] = useState(0);
+  useEffect(() => {
+    refreshPublished().then((changed) => changed && setPubTick((t) => t + 1));
+  }, []);
   const known = useMemo(() => {
     const pubLines = loadLayout(PUB_KEYS.layout);
     const lines = pubLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
-    return { set: new Set(expandBooths(lines, (venueJson as unknown as { halls: HallLike[] }).halls).map((b) => b.code)), real: !!pubLines };
-  }, []);
+    return { set: new Set(expandBooths(lines, (venueJson as unknown as { halls: HallLike[] }).halls).map((b) => b.code)), real: !!pubLines, tick: pubTick };
+  }, [pubTick]);
 
   const fill = (list: Mine[], d: Day) => {
     const m = list.find((c) => c.day === d);
