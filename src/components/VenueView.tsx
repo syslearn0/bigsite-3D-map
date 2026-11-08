@@ -2200,6 +2200,8 @@ export function VenueView() {
       const la = walkRails.nodes[q.a].level, lb = walkRails.nodes[q.b].level;
       return floorY(la) + (floorY(lb) - floorY(la)) * q.t;
     };
+    // 高さからいちばん近い階（1・2・4）
+    const levelAtY = (y: number) => [1, 2, 4].reduce((b, l) => (Math.abs(floorY(l) - y) < Math.abs(floorY(b) - y) ? l : b), 1);
     // 見ている階で線に乗れる階（1・2F を見ているときは 1F と 2F）
     const railLevels = (f: Floor) => (f === 4 ? [4] : [1, 2]);
     let railPos: RailPos | null = null;
@@ -2231,59 +2233,50 @@ export function VenueView() {
         near: walkRails.nodes.map((n, i) => [i, n.p, walkRails.adj[i]] as const).filter(([, q]) => Math.hypot(q[0] - persp.position.x, q[1] - persp.position.z) < 6),
       });
     // 線路の絵（床の上の細い帯）。歩くときだけ、見ている階のものを出す
-    const railMeshes: { mesh: THREE.Mesh; level: number }[] = [];
-    const railLines: { line: THREE.LineSegments; level: number }[] = [];
+    const railMeshes: { mesh: THREE.Mesh; levels: number[] }[] = [];
+    const railLines: { line: THREE.LineSegments; levels: number[] }[] = [];
     let railsPick = false; // 歩き始める場所を選んでいるあいだ
+    let lastWalkLevel = 1;
     {
-      // 階ごと（1・2F と 4F）にまとめる。階段の線は、両方の階に入れる（どちらの階を見ていても出す）
-      const byLv = new Map<number, number[]>();
+      // 階ごと（1F・2F・4F）にまとめる。階段の線は、上と下の階の組ごと（"1-2" など）。
+      // 歩いているときは、いま立っている階の線と、その階につながる階段の線だけを出す（ほかの階の線が重なって見えないように）
+      const keyOf = (la: number, lb: number) => (la === lb ? String(la) : `${Math.min(la, lb)}-${Math.max(la, lb)}`);
+      const byKey = new Map<string, { tri: number[]; seg: number[] }>();
       const W = 0.14;
       walkRails.adj.forEach((ns, a) => {
         const A = walkRails.nodes[a];
         for (const b of ns) {
           if (b < a) continue;
           const B = walkRails.nodes[b];
+          const k = keyOf(A.level, B.level);
+          if (!byKey.has(k)) byKey.set(k, { tri: [], seg: [] });
           const L = Math.hypot(B.p[0] - A.p[0], B.p[1] - A.p[1]) || 1;
           const nx = (-(B.p[1] - A.p[1]) / L) * W, nz = ((B.p[0] - A.p[0]) / L) * W;
           const ya = floorY(A.level) + 0.09, yb = floorY(B.level) + 0.09; // 床（+0.05）の上
-          for (const f of new Set([floorOf(A.level), floorOf(B.level)])) {
-            if (!byLv.has(f)) byLv.set(f, []);
-            byLv.get(f)!.push(A.p[0] + nx, ya, A.p[1] + nz, B.p[0] + nx, yb, B.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] + nx, ya, A.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] - nx, ya, A.p[1] - nz);
-          }
+          byKey.get(k)!.tri.push(A.p[0] + nx, ya, A.p[1] + nz, B.p[0] + nx, yb, B.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] + nx, ya, A.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] - nx, ya, A.p[1] - nz);
+          byKey.get(k)!.seg.push(A.p[0], ya + 0.11, A.p[1], B.p[0], yb + 0.11, B.p[1]);
         }
       });
       const mat = new THREE.MeshBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
-      for (const [lv, arr] of byLv) {
+      // 上から・3D で歩き始める場所を選ぶあいだは、遠くからでも見える細い線（画面の上で 1px）。2F の線は紫で、1F の線と分ける
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9, depthTest: false });
+      const lineMat2F = new THREE.LineBasicMaterial({ color: 0x9b4fd0, transparent: true, opacity: 0.9, depthTest: false });
+      for (const [k, { tri, seg }] of byKey) {
+        const levels = k.split("-").map(Number);
         const g = new THREE.BufferGeometry();
-        g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+        g.setAttribute("position", new THREE.Float32BufferAttribute(tri, 3));
         const mesh = new THREE.Mesh(g, mat);
         mesh.visible = false;
         mesh.renderOrder = 1;
         scene.add(mesh);
-        railMeshes.push({ mesh, level: lv });
-      }
-      // 上から・3D で歩き始める場所を選ぶあいだは、遠くからでも見える細い線（画面の上で 1px）で出す
-      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9, depthTest: false });
-      const segs = new Map<number, number[]>();
-      walkRails.adj.forEach((ns, a) => {
-        const A = walkRails.nodes[a];
-        for (const b of ns) {
-          if (b < a) continue;
-          const B = walkRails.nodes[b];
-          for (const f of new Set([floorOf(A.level), floorOf(B.level)])) {
-            if (!segs.has(f)) segs.set(f, []);
-            segs.get(f)!.push(A.p[0], floorY(A.level) + 0.2, A.p[1], B.p[0], floorY(B.level) + 0.2, B.p[1]);
-          }
-        }
-      });
-      for (const [lv, arr] of segs) {
-        const g = new THREE.BufferGeometry();
-        g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
-        const line = new THREE.LineSegments(g, lineMat);
+        railMeshes.push({ mesh, levels });
+        const g2 = new THREE.BufferGeometry();
+        g2.setAttribute("position", new THREE.Float32BufferAttribute(seg, 3));
+        const line = new THREE.LineSegments(g2, levels.includes(2) ? lineMat2F : lineMat);
         line.visible = false;
         line.renderOrder = 4;
         scene.add(line);
-        railLines.push({ line, level: lv });
+        railLines.push({ line, levels });
       }
     }
 
@@ -2399,8 +2392,10 @@ export function VenueView() {
         }
       }
       for (const { mesh, level } of numMeshes) mesh.visible = current === "walk" && shown(floorOf(level));
-      for (const { mesh, level } of railMeshes) mesh.visible = current === "walk" && floorOf(level) === currentFloor;
-      for (const { line, level } of railLines) line.visible = railsPick && current !== "walk" && shown(floorOf(level));
+      // 歩いているとき：いま立っている階（線の上の高さから）の線と、その階につながる階段の線
+      const walkLevel = railPos ? levelAtY(railY(railPos)) : currentFloor;
+      for (const { mesh, levels } of railMeshes) mesh.visible = current === "walk" && levels.includes(walkLevel);
+      for (const { line, levels } of railLines) line.visible = railsPick && current !== "walk" && levels.some((l) => shown(floorOf(l)));
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
@@ -3335,6 +3330,11 @@ export function VenueView() {
           // 線の上の高さ（2F の通路・階段の途中）。階段で階が変わったら、見せる階も変える
           const y = railY(railPos);
           persp.position.y = y + EYE;
+          // 立っている階（1F・2F・4F）が変わったら、出す線を入れかえる
+          if (levelAtY(y) !== lastWalkLevel) {
+            lastWalkLevel = levelAtY(y);
+            applyVisibility();
+          }
           const f: Floor = y > (floorY(2) + floorY(4)) / 2 ? 4 : 1;
           if (f !== currentFloor) {
             currentFloor = f;

@@ -118,7 +118,8 @@ for (const L of LEVELS) {
   const w = centerWeights(g);
   // 行き先：出入口・出口・階段の端（車のスロープと会場の外は除く）・救護室
   const keys: { at: XZ; kind: string }[] = [];
-  for (const d of venue.doors) if (d.level === L) keys.push({ at: d.at, kind: "door" });
+  // （搬入口＝トラック用のシャッターは、来場者は通らないので行き先にしない）
+  for (const d of venue.doors) if (d.level === L && (d as { kind?: string }).kind !== "搬入口") keys.push({ at: d.at, kind: "door" });
   for (const e of venue.exits ?? []) if (e.level === L) keys.push({ at: e.at, kind: "exit" });
   for (const s of venue.stairs ?? []) {
     if (s.kind === "ramp" || s.sur) continue;

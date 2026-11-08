@@ -715,7 +715,7 @@ export type Corridors = { lines: { level: number; pts: XZ[] }[]; stairs: { a: XZ
 export function addCorridors(
   r: Rails,
   c: Corridors,
-  doors: { at: XZ; level: number; hall: string }[],
+  doors: { at: XZ; level: number; hall: string; kind?: string }[],
   exits: { at: XZ; level: number }[],
   halls: { id: string; level: number; poly: XZ[]; closed?: string }[],
   desks: Map<string, XZ[]>,
@@ -790,26 +790,54 @@ export function addCorridors(
     }
     return true;
   };
+  // at からいちばん近い線の上の点（線を分けて点を足す）。ok：その線を使うか。maxD より遠ければ -1
+  const attach = (at: XZ, maxD: number, ok: (a: number, b: number) => boolean, hall: string, level: number) => {
+    let best: { a: number; b: number; t: number; q: XZ; d: number } | null = null;
+    for (const e of edges) {
+      const [a2, b2] = e.split(",").map(Number);
+      if (!ok(a2, b2)) continue;
+      const A = nodes[a2].p, B = nodes[b2].p;
+      if (at[0] < Math.min(A[0], B[0]) - maxD || at[0] > Math.max(A[0], B[0]) + maxD || at[1] < Math.min(A[1], B[1]) - maxD || at[1] > Math.max(A[1], B[1]) + maxD) continue;
+      const dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((at[0] - A[0]) * dx + (at[1] - A[1]) * dz) / L2));
+      const q: XZ = [A[0] + dx * t, A[1] + dz * t];
+      const d = dist(q, at);
+      if (d > maxD || (best && d >= best.d)) continue;
+      best = { a: a2, b: b2, t, q, d };
+    }
+    if (!best) return -1;
+    if (best.t < 0.05) return best.a;
+    if (best.t > 0.95) return best.b;
+    nodes.push({ p: best.q, hall, level });
+    const n = nodes.length - 1;
+    edges.delete(best.a < best.b ? `${best.a},${best.b}` : `${best.b},${best.a}`);
+    addEdge(best.a, n);
+    addEdge(n, best.b);
+    return n;
+  };
+  // 出入口：ホールの中の線のいちばん近い所（35m まで、机をよけて）と、外の通路の線のいちばん近い所（8m まで）を、出入口を通って結ぶ
   const link = (at: XZ, level: number, hall: string | null) => {
-    const out = near(at, 8, (i) => nodes[i].hall === "" && nodes[i].level === level);
     const hallsHere = hall ? [hall] : halls.filter((h) => h.level === level && !h.closed && edgeDist(at, h.poly) < 6).map((h) => h.id);
     for (const h of hallsHere) {
-      const inn = near(at, 30, (i) => nodes[i].hall === h && clearOfDesks(at, nodes[i].p, h));
-      if (inn < 0) continue;
+      // （ホールの壁と島のあいだが広いホールでは 30m ほどある。いちばん近い所なので、壁からまっすぐ入る線になる）
+      const inn = attach(at, 35, (a2, b2) => nodes[a2].hall === h && nodes[b2].hall === h, h, level);
+      if (inn < 0 || !clearOfDesks(at, nodes[inn].p, h)) continue;
+      const out = attach(at, 8, (a2, b2) => nodes[a2].hall === "" && nodes[b2].hall === "" && nodes[a2].level === level && nodes[b2].level === level, "", level);
       nodes.push({ p: at, hall: "", level });
       const di = nodes.length - 1;
       addEdge(di, inn);
       if (out >= 0) addEdge(di, out);
     }
   };
-  for (const d of doors) link(d.at, d.level, d.hall);
+  // 搬入口（トラック用のシャッター）は、来場者は通らないのでつながない
+  for (const d of doors) if (d.kind !== "搬入口") link(d.at, d.level, d.hall);
   for (const e of exits) link(e.at, e.level, null);
   // となりのホールとの壁の切れ目（東1〜3 のつなぎ目など）：両側のホールの中の線を、切れ目のまん中を通って結ぶ
   for (const g of gaps) {
     const m: XZ = [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2];
     const both = halls.filter((h) => !h.closed && edgeDist(m, h.poly) < 3);
     if (both.length < 2) continue;
-    const ends = both.map((h) => near(m, 25, (i) => nodes[i].hall === h.id && clearOfDesks(m, nodes[i].p, h.id)));
+    const ends = both.map((h) => attach(m, 35, (a2, b2) => nodes[a2].hall === h.id && nodes[b2].hall === h.id, h.id, h.level));
     if (ends.some((e) => e < 0)) continue;
     nodes.push({ p: m, hall: "", level: both[0].level });
     const mi = nodes.length - 1;
