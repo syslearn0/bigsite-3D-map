@@ -3151,7 +3151,7 @@ export function VenueView() {
             電波がありません。この端末に保存した地図と印を表示しています
           </div>
         )}
-        {here && <div style={{ ...OVER, bottom: 22, right: 8, fontWeight: 700, fontSize: ".85rem" }}>{here}{floor === 4 ? "（4F）" : ""}</div>}
+        {here && <div style={{ ...OVER, bottom: 22, right: 8, fontWeight: 700, fontSize: ".85rem" }}>{here}</div>}
         {walkPending && (
           // 配置番号の欄（いつも上にある）と、電波がないときの札の下に出す
           <div role="status" style={{ position: "absolute", left: "50%", top: online ? 64 : 116, transform: "translateX(-50%)", background: "#1f3b6e", color: "#fff", borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 2px 8px rgba(0,0,0,.25)", maxWidth: "92%" }}>
