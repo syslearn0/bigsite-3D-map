@@ -27,7 +27,9 @@ type Venue = {
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
     // br：運河をわたる地面の高さの橋（fill：車線と歩道のあいだを埋める板）
-    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; br?: boolean; fill?: boolean }[];
+    // ys：点ごとの高さ（掘割へ下りる首都高）
+    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; br?: boolean; fill?: boolean; ys?: number[] }[];
+    cuts?: XZ[][]; // 地面の板にあける穴（首都高の掘割）
     areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
     // 周辺をくわしく：建物（PLATEAU の形と計測高さ。kind "canopy" は屋根のある歩道などの屋根）、緑地と駐車場、木、横断歩道、
@@ -333,20 +335,22 @@ function slabUnder(poly: XZ[], color: number, y: number, level: number, holes: X
 }
 
 // 道・線路の帯（線の両側に幅 w/2 ずつ）。種類ごとに1つの形にまとめて描く。skirt があれば、帯のふちから下へ厚みもつける（高架）
-function ribbons(list: { pts: XZ[]; y: number; w: number }[], skirt = 0) {
+// ys があれば点ごとの高さ（坂）
+function ribbons(list: { pts: XZ[]; y: number; w: number; ys?: number[] }[], skirt = 0) {
   const pos: number[] = [];
   const quad = (a: number[], b: number[], c: number[], d: number[]) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
-  for (const { pts, y, w } of list) {
+  for (const { pts, y, w, ys } of list) {
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
       const len = Math.hypot(bx - ax, bz - az);
       if (len < 0.01) continue;
+      const ya = ys?.[i] ?? y, yb = ys?.[i + 1] ?? y;
       const nx = (-(bz - az) / len) * (w / 2), nz = ((bx - ax) / len) * (w / 2);
-      const l0 = [ax + nx, y, az + nz], r0 = [ax - nx, y, az - nz], l1 = [bx + nx, y, bz + nz], r1 = [bx - nx, y, bz - nz];
+      const l0 = [ax + nx, ya, az + nz], r0 = [ax - nx, ya, az - nz], l1 = [bx + nx, yb, bz + nz], r1 = [bx - nx, yb, bz - nz];
       quad(l0, l1, r1, r0);
       if (skirt > 0) {
-        quad([l0[0], y - skirt, l0[2]], [l1[0], y - skirt, l1[2]], l1, l0);
-        quad(r0, r1, [r1[0], y - skirt, r1[2]], [r0[0], y - skirt, r0[2]]);
+        quad([l0[0], ya - skirt, l0[2]], [l1[0], yb - skirt, l1[2]], l1, l0);
+        quad(r0, r1, [r1[0], yb - skirt, r1[2]], [r0[0], ya - skirt, r0[2]]);
       }
     }
   }
@@ -617,6 +621,14 @@ export function VenueView() {
     // 周辺の建物の立体（OSM の高さ。会議棟の逆ピラミッドは段ごとの部品を積んだもの）。「周辺も表示」のときだけ出す
     const surroundings = new THREE.Group();
     surroundings.visible = false;
+    // 「周辺も表示」のときの地面は、首都高の掘割の所に穴をあけた板（掘割が見えるように）。ふだんの地面と入れかえる
+    const cutGround = (venue.surroundings.cuts ?? []).length
+      ? flatPoly([[-4000, -4000], [4000, -4000], [4000, 4000], [-4000, 4000]], 0xd3d5d0, -0.2, 1, venue.surroundings.cuts)
+      : null;
+    if (cutGround) {
+      (cutGround.material as THREE.MeshLambertMaterial).side = THREE.FrontSide;
+      surroundings.add(cutGround);
+    }
     const towerMeshes: THREE.Mesh[] = [];
     // まわりの建物の足元の形も、「周辺も表示」のときだけ（ふだんは会場だけを見せる）
     for (const b of venue.context) surroundings.add(flatPoly(b.poly, 0xb9bfb8, -0.1));
@@ -638,6 +650,28 @@ export function VenueView() {
       const m = new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === kind && !l.br)), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide }));
       m.position.y = -0.08; // 地面（-0.2）より上、ホールの床より下
       surroundings.add(m);
+    }
+    // 首都高の掘割：下がっている所の両側に、道のふちから地面までのコンクリートの壁
+    {
+      const pos: number[] = [];
+      for (const l of sur.lines.filter((x) => x.ys)) {
+        const ys = l.ys!;
+        for (let i = 0; i + 1 < l.pts.length; i++) {
+          if (Math.max(ys[i], ys[i + 1]) > l.y - 0.1) continue;
+          const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1], len = Math.hypot(bx - ax, bz - az) || 1;
+          for (const k of [-1, 1]) {
+            const nx = (-(bz - az) / len) * (l.w / 2 + 0.5) * k, nz = ((bx - ax) / len) * (l.w / 2 + 0.5) * k;
+            const a0 = [ax + nx, ys[i] - 0.08, az + nz], b0 = [bx + nx, ys[i + 1] - 0.08, bz + nz], a1 = [ax + nx, -0.2, az + nz], b1 = [bx + nx, -0.2, bz + nz];
+            pos.push(...a0, ...b0, ...b1, ...a0, ...b1, ...a1);
+          }
+        }
+      }
+      if (pos.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+        g.computeVertexNormals();
+        surroundings.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xa9aaa6, side: THREE.DoubleSide })));
+      }
     }
     // 運河をわたる地面の高さの橋（あけみ橋など）：水面より少し上の道・歩道に、厚さ 1.2m の橋の板（側面）と、歩道の両側に高さ 1.1m の手すり
     {
@@ -966,15 +1000,17 @@ export function VenueView() {
       }
       // 道路の白線：広い道（幅 9m 以上、地上）の真ん中に破線（長さ 5m・間 5m）
       {
-        const dashes: { pts: XZ[]; y: number; w: number }[] = [];
+        const dashes: { pts: XZ[]; y: number; w: number; ys?: number[] }[] = [];
         for (const l of sur.lines.filter((x) => x.kind === "road" && x.y < 1 && x.w >= 9)) {
           let on = 0;
+          // 道の上の白線の高さ（掘割へ下りる所は道に沿って下がる）
+          const yAt = (i: number, f: number) => (l.ys ? l.ys[i] + (l.ys[i + 1] - l.ys[i]) * f - 0.065 : -0.035);
           for (let i = 0; i + 1 < l.pts.length; i++) {
             const [ax, az] = l.pts[i], [bx, bz] = l.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
             for (let d = 0; d < L; d += 5, on++)
               if (on % 2 === 0) {
                 const e = Math.min(L, d + 5);
-                dashes.push({ pts: [[ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L], [ax + ((bx - ax) * e) / L, az + ((bz - az) * e) / L]], y: -0.035, w: 0.18 });
+                dashes.push({ pts: [[ax + ((bx - ax) * d) / L, az + ((bz - az) * d) / L], [ax + ((bx - ax) * e) / L, az + ((bz - az) * e) / L]], y: -0.035, ys: [yAt(i, d / L), yAt(i, e / L)], w: 0.18 });
               }
           }
         }
@@ -2775,6 +2811,7 @@ export function VenueView() {
       applyVisibility();
     }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
         surroundings.visible = on;
+        ground.visible = !(on && cutGround);
       },
     };
 

@@ -1049,7 +1049,8 @@ const doors = (plan.doors ?? []).filter((d) => d.kind !== "ES" && usable(d.hall)
 // 地下（tunnel・layer がマイナス）は描かない（りんかい線は駅の名前だけ）
 // esc：エスカレーター（OSM の conveying）。br：運河をわたる、地面の高さの橋（橋の板の厚みと手すりをつけて描く）
 // fill：橋の車線と歩道のあいだ（中央分離帯など）を埋める板
-type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; esc?: boolean; br?: boolean; fill?: boolean };
+// ys：点ごとの高さ（掘割へ下りる首都高。ないときは y）
+type SLine = { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; esc?: boolean; br?: boolean; fill?: boolean; ys?: number[] };
 type SArea = { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] };
 type SStation = { name: string; line: string; at: XZ; y: number };
 const sur = { lines: [] as SLine[], areas: [] as SArea[], stations: [] as SStation[] };
@@ -1060,6 +1061,7 @@ const deckAreas: XZ[][] = []; // 歩行者デッキの広場（OSM の layer ≥
 // 橋（OSM の bridge=yes で layer ≥ 1 の道・歩道）と、地上の道の点（両端が地上の道につながる橋かを見る）。海の形ができてから決める
 const bridgeWays: { line: SLine; pts: XZ[]; walk: boolean; name: string }[] = [];
 const groundPts: XZ[] = [];
+const motorways: SLine[] = []; // 地上の首都高（layer ≤ 0 の motorway）
 if (existsSync("data/osm/surroundings.json")) {
   const so = JSON.parse(readFileSync("data/osm/surroundings.json", "utf8")) as { elements: El[] };
   const WIDTH: Record<string, number> = { motorway: 14, trunk: 12, primary: 10, secondary: 9, tertiary: 7, unclassified: 6, residential: 6, service: 4, pedestrian: 6, footway: 2.5, path: 2, cycleway: 2, steps: 2.5 };
@@ -1104,6 +1106,7 @@ if (existsSync("data/osm/surroundings.json")) {
       if (t.area === "yes" && pts.length > 3) sur.areas.push({ poly: pts, y, kind: "walk" });
       else {
         sur.lines.push({ pts, y, w: WIDTH[t.highway] ?? 3, kind: t.highway === "steps" ? "steps" : walk ? "walk" : "road", ...(t.conveying === "yes" ? { esc: true } : {}) });
+        if (t.highway === "motorway" && layer <= 0) motorways.push(sur.lines.at(-1)!);
         if (layer >= 1 && t.bridge === "yes") bridgeWays.push({ line: sur.lines.at(-1)!, pts, walk, name: t.name ?? t["bridge:name"] ?? `way ${e.id}` });
       }
     }
@@ -1308,8 +1311,108 @@ if (existsSync("data/osm/coast.json")) {
     Object.assign(bw.line, { kind: bw.walk ? "walk" : "road", y: 0.5, br: true }, bw.walk ? { w: 2.5 } : {});
     done.push(bw.name);
   }
-  // 上り・下りの車線と歩道は OSM では別々の線なので、あいだに水面が見えていた。航空写真では 1 枚の橋なので、となりあう橋の線
-  // （どこでも、ふちとふちのあいだが 15m 未満）のあいだを、まん中の線に沿った板で埋める
+  console.log(`運河をわたる地面の高さの橋：${done.length} 本（${[...new Set(done)].join("・")}）`);
+}
+
+// 首都高の掘割をまたぐ橋（環二通り：有明駅の北、way 45173874 など）：layer 1 の橋なので 8m（歩道は 12m のデッキ）に描いていたが、
+// 両端（120m はなれている）は地上の道につながり、橋の両端のすぐそば（10m・25m）で東京湾岸道路（国道 357 号、地上）と交わる
+// （有明二丁目の交差点。平面交差で、国道 357 号を立体にする工事中）。120m で首都高の上（6m 以上）まで上り下りはできないので、
+// 環二通りは地面の高さで、首都高のほうが掘割でくぐっている。両端が地上の道につながり、地上の首都高と交わる道路の橋は、
+// 地面の高さの橋にする。橋に沿った歩道の橋（どの点も橋の道路から 14m 以内）も同じ高さに。首都高は、交わる所の前後 30m を
+// 深さ 6.3m（橋の下 5.3m あく）にし、その先を 4% の坂で地上へもどす（深さと坂の長さは見当）
+{
+  const atGround = (q: XZ) => groundPts.some((g) => Math.hypot(g[0] - q[0], g[1] - q[1]) < 0.5);
+  const segX = (a2: XZ, b2: XZ, c2: XZ, d2: XZ): XZ | null => {
+    const rx = b2[0] - a2[0], rz = b2[1] - a2[1], sx = d2[0] - c2[0], sz = d2[1] - c2[1], den = rx * sz - rz * sx;
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((c2[0] - a2[0]) * sz - (c2[1] - a2[1]) * sx) / den, u = ((c2[0] - a2[0]) * rz - (c2[1] - a2[1]) * rx) / den;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [a2[0] + t * rx, a2[1] + t * rz] : null;
+  };
+  const crossings = (p: XZ[], q: XZ[]) => {
+    const out: XZ[] = [];
+    for (let i = 0; i + 1 < p.length; i++)
+      for (let j = 0; j + 1 < q.length; j++) {
+        const x = segX(p[i], p[i + 1], q[j], q[j + 1]);
+        if (x) out.push(x);
+      }
+    return out;
+  };
+  const distTo = (q: XZ, pts: XZ[]) =>
+    Math.min(...pts.slice(1).map((b2, i) => {
+      const a2 = pts[i], dx = b2[0] - a2[0], dz = b2[1] - a2[1], L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((q[0] - a2[0]) * dx + (q[1] - a2[1]) * dz) / L2));
+      return Math.hypot(q[0] - a2[0] - t * dx, q[1] - a2[1] - t * dz);
+    }));
+  // 道路の橋は途中で別の way に分かれていることがある（環二通りの北行き：way 1166015108 と 45173877）。首都高と交わる橋に、端どうしで
+  // つながる道路の橋を足していき、ひと続きの橋の外の端がどれも地上の道につながるものだけ
+  const roadBw = bridgeWays.filter((bw) => !bw.walk && !bw.line.br);
+  const ends = (bw: (typeof bridgeWays)[number]) => [bw.pts[0], bw.pts.at(-1)!];
+  const touch = (q: XZ, bw: (typeof bridgeWays)[number]) => ends(bw).some((e2) => Math.hypot(e2[0] - q[0], e2[1] - q[1]) < 0.5);
+  const set = new Set(roadBw.filter((bw) => motorways.some((m) => crossings(bw.pts, m.pts).length)));
+  for (let grow = true; grow; ) {
+    grow = false;
+    for (const bw of roadBw)
+      if (!set.has(bw) && ends(bw).some((q) => [...set].some((o) => touch(q, o)))) {
+        set.add(bw);
+        grow = true;
+      }
+  }
+  const roads = [...set].filter((bw) => ends(bw).every((q) => atGround(q) || [...set].some((o) => o !== bw && touch(q, o))));
+  const BY = 0.2;
+  for (const bw of roads) Object.assign(bw.line, { kind: "road", y: BY, br: true });
+  const walks = bridgeWays.filter((bw) => bw.walk && !bw.line.br && roads.length && bw.pts.every((q) => roads.some((r) => distTo(q, r.pts) < 14)));
+  for (const bw of walks) Object.assign(bw.line, { kind: "walk", y: BY, w: 2.5, br: true });
+  // 地面の高さにした歩道の端から始まる 2F のデッキ（有明の丘の建物へ行くデッキ way 1120579608）は、最初の区間（12m 以上）を、
+  // 歩道からデッキへ上がる階段にする（航空写真で、そこに段の縞が見える。デッキのまま描くと 12m の段差で途切れる）
+  const brLines = [...roads, ...walks].map((bw) => bw.line);
+  let stepsAdded = 0;
+  for (const l of sur.lines.filter((x) => x.kind === "deck")) {
+    for (const head of [true, false]) {
+      const pts = head ? l.pts : [...l.pts].reverse();
+      if (pts.length < 3 || !brLines.some((o) => distTo(pts[0], o.pts) < o.w / 2 + 1)) continue;
+      if (Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) < 12) continue;
+      deckSteps.push({ pts: [pts[1], pts[0]], esc: false });
+      l.pts = head ? pts.slice(1) : pts.slice(1).reverse();
+      stepsAdded++;
+    }
+  }
+  const xs = roads.flatMap((r) => motorways.flatMap((m) => crossings(r.pts, m.pts)));
+  const D = 6.3, FLAT = 30, RAMP = D / 0.04;
+  const cutRects: [number, number][][][] = [];
+  let dipped = 0;
+  for (const m of motorways) {
+    if (!xs.some((x) => distTo(x, m.pts) < FLAT + RAMP)) continue;
+    const dense: XZ[] = [m.pts[0]];
+    for (let i = 0; i + 1 < m.pts.length; i++) {
+      const [a2, b2] = [m.pts[i], m.pts[i + 1]], L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]), n = Math.max(1, Math.ceil(L / 5));
+      for (let k = 1; k <= n; k++) dense.push([Math.round((a2[0] + ((b2[0] - a2[0]) * k) / n) * 10) / 10, Math.round((a2[1] + ((b2[1] - a2[1]) * k) / n) * 10) / 10]);
+    }
+    const ys = dense.map((q) => {
+      const d = Math.min(...xs.map((x) => Math.hypot(x[0] - q[0], x[1] - q[1])));
+      const f = d <= FLAT ? 1 : d >= FLAT + RAMP ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (d - FLAT)) / RAMP);
+      return Math.round((m.y - D * f) * 100) / 100;
+    });
+    if (!ys.some((y) => y < m.y - 0.3)) continue;
+    m.pts = dense;
+    m.ys = ys;
+    dipped++;
+    // 地面の板にあける穴（下がっている所の道の幅＋左右 0.5m）
+    for (let i = 0; i + 1 < dense.length; i++) {
+      if (Math.max(ys[i], ys[i + 1]) > m.y - 0.3) continue;
+      const [a2, b2] = [dense[i], dense[i + 1]], L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1, hw = m.w / 2 + 0.5;
+      const nx = (-(b2[1] - a2[1]) / L) * hw, nz = ((b2[0] - a2[0]) / L) * hw, ux = ((b2[0] - a2[0]) / L) * 0.3, uz = ((b2[1] - a2[1]) / L) * 0.3;
+      const r: [number, number][] = [[a2[0] + nx - ux, a2[1] + nz - uz], [b2[0] + nx + ux, b2[1] + nz + uz], [b2[0] - nx + ux, b2[1] - nz + uz], [a2[0] - nx - ux, a2[1] - nz - uz]];
+      cutRects.push([[...r, r[0]]]);
+    }
+  }
+  const cuts = cutRects.length ? polygonClipping.union(cutRects[0], ...cutRects.slice(1)).map((pg) => pg[0].slice(0, -1).map(([x, z]) => [Math.round(x * 10) / 10, Math.round(z * 10) / 10] as XZ)) : [];
+  Object.assign(sur, { cuts });
+  console.log(`首都高の掘割をまたぐ橋：道路 ${roads.length} 本・歩道 ${walks.length} 本を地面の高さに・首都高 ${dipped} 本を掘割に（地面の穴 ${cuts.length}）・デッキへ上がる階段 ${stepsAdded}`);
+}
+
+// 地面の高さの橋（運河・首都高の掘割）：上り・下りの車線と歩道は OSM では別々の線なので、あいだに水面や掘割が見えていた。
+// 航空写真では 1 枚の橋なので、となりあう橋の線（どこでも、ふちとふちのあいだが 15m 未満）のあいだを、まん中の線に沿った板で埋める
+{
   const brs = sur.lines.filter((l) => l.br);
   const nearestOn = (q: XZ, pts: XZ[]) => {
     let best = { d: Infinity, p: q };
@@ -1349,7 +1452,7 @@ if (existsSync("data/osm/coast.json")) {
       fills++;
     }),
   );
-  console.log(`運河をわたる地面の高さの橋：${done.length} 本（${[...new Set(done)].join("・")}）・あいだを埋める板 ${fills}`);
+  console.log(`地面の高さの橋：あいだを埋める板 ${fills}`);
 }
 
 // 南の角の建物（45° の四角）：公式フロアマップでは、1F・2F・3F・4F の同じ所にエスカレーター・エレベーター・トイレが重なる、
