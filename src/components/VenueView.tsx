@@ -11,6 +11,10 @@ import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/s
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { sampleTags } from "@/lib/sample-tags";
 import Tour, { type TourStep } from "./Tour";
+import { AccountBox } from "./AccountBox";
+import { flatten, unflatten, useAccountSync } from "@/lib/sync";
+import { buildRails, moveOnRails, nearestOnRails, railPath, railPoint, type RailPos } from "@/lib/rails";
+import { loadCircles, PUB_KEYS, refreshPublishedAndReload, type Circle } from "@/lib/published";
 import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
@@ -67,18 +71,42 @@ const venue = venueJson as unknown as Venue;
 // 机の配置：島のエディタで「3D で確かめる」を押した配置が端末にあればそれ、なければ見本
 // （この画面はブラウザでだけ描くので、読み込むときに端末の保存を読める）
 const savedLines = loadLayout(LAYOUT_KEY);
-const lines = savedLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
+// 作者が公開した配置（端末に取ってあるもの）。エディタの配置があればそちらが先
+const pubLines = savedLines ? null : loadLayout(PUB_KEYS.layout);
+const lines = savedLines ?? pubLines ?? (layoutJson as unknown as { lines: Line[] }).lines;
 // 配置図から写した配置なら、柱と壁の切れ目（出入口・開いているシャッター）もある
-const features = savedLines ? loadLayoutFeatures(LAYOUT_KEY) : null;
+const features = savedLines ? loadLayoutFeatures(LAYOUT_KEY) : pubLines ? loadLayoutFeatures(PUB_KEYS.layout) : null;
 // 作品・キャラ（島のエディタで入れたもの）。なければ見本の作品で色分けする
-const savedTags = loadTags(TAGS_KEY);
+// サークル本人が登録して、作者が公開したもの（日 → 配置番号 → サークル）
+const circles = loadCircles();
+const savedTags = (() => {
+  const t = loadTags(TAGS_KEY) ?? loadTags(PUB_KEYS.tags);
+  // 作品・キャラが入っていない机は、サークル本人の登録の作品を使う
+  let out = t;
+  for (const d of DAYS)
+    for (const [code, c] of Object.entries(circles[d])) {
+      if (!c.works.length) continue;
+      out ??= {};
+      out[d] ??= {};
+      if (!out[d][code]?.works?.length) out[d][code] = { ...out[d][code], works: c.works, ...(Object.keys(c.chars).length ? { chars: c.chars } : {}) };
+    }
+  return out;
+})();
+// 本当の配置・作品（公開されたもの）があるか。ないときは見本（架空の作品）
+const realData = !!(pubLines || savedLines);
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
 type Mode = "register" | "plan";
 type Floor = 1 | 4;
-const EYE = 1.6;
-const WALK_SPEED = 6; // m/秒（見て回りやすいよう、歩く速さより速め）
+// 目の高さと歩く速さ。1.6m・広い画角・6m/秒では、自分が大きく感じた（ユーザーの指摘。目を下げて画角をせまく）
+const EYE = 1.35;
+// 歩くときの画角（縦）。せまくして前のものを大きく写す（ユーザーの指示：目の高さを下げて、画角をせまく）
+const WALK_FOV = 50;
+const WALK_SPEED = 3.5; // m/秒（見て回りやすいよう、ふつうに歩く速さより少し速め）
+// 歩いて見るとき、近くの机の上に出すサークルの札（画像とサークル名）。この距離までで、画面の上で重なる札は出さない
+const CARD_NEAR = 16;
+const CARD_MAX = 12;
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
@@ -168,7 +196,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     mode: "register",
     title: "机に印とメモ",
-    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。机を選ぶと、その下にメモの欄が出ます（任意・印をつけなくても書けます・この端末の中だけに保存）。メモは一覧と印刷にも出ます。印とメモは日ごとに別です（同じ番号でも日が違えば別のサークル）。",
+    text: "机を押すと「★ 行きたい」「◆ 候補」の印をつけられます。机を選ぶと、その下にメモの欄が出ます（任意・印をつけなくても書けます・この端末に保存。ログインすると、ほかの端末とも合わせます）。メモは一覧と印刷にも出ます。印とメモは日ごとに別です（同じ番号でも日が違えば別のサークル）。",
   },
   {
     target: '[aria-label="3D にする"], [aria-label="2D にする"]',
@@ -487,6 +515,7 @@ type Api = {
   setView: (v: View) => void;
   setFloor: (f: Floor) => void;
   setBoth: (on: boolean) => void;
+  redrawCards: () => void;
   recolor: (colorByGenre: boolean, marks: Record<string, Mark>, visited: Record<string, number>, selected: number | null, dayTags: Record<string, SpaceTag> | null, genre: string | null, work: string | null, char: string | null) => void;
   setPins: (list: { booth: number; mark: Mark | null; done: boolean }[]) => void;
   focusBooth: (i: number) => void;
@@ -498,9 +527,38 @@ type Api = {
   snapshot: (hallIds: string[], marked: { booth: number; mark: Mark }[]) => string;
 };
 
+// 選んだ机の、サークル本人が登録した情報（作者が公開したもの）
+function CircleCard({ c }: { c: Circle }) {
+  return (
+    <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
+      {c.image && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={c.image} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
+      )}
+      <div style={{ minWidth: 0, fontSize: ".9rem" }}>
+        <div style={{ fontWeight: 700 }}>{c.name}</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {c.x && (
+            <a href={`https://x.com/${c.x}`} target="_blank" rel="noopener noreferrer">
+              @{c.x}
+            </a>
+          )}
+          {c.url && (
+            <a href={c.url} target="_blank" rel="noopener noreferrer">
+              お品書き・サイト
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function VenueView() {
   const box = useRef<HTMLDivElement>(null);
   const api = useRef<Api | null>(null);
+  // 歩いて見るときの札の中身（机の配置番号 → サークル名・画像、なければ作品名）。日を変えたら入れかえる
+  const cardInfo = useRef<(code: string) => { name: string; image: string; sub: string } | null>(() => null);
   const booths = useMemo<Booth[]>(() => expandBooths(lines, venue.halls), []);
   const codeIndex = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
   // サイトを開いた最初は、どのモードでも 3D（モードを切りかえたときは、そのモードの最初の見方）
@@ -536,6 +594,16 @@ export function VenueView() {
     setView("walk");
     requestAnimationFrame(() => api.current?.focusBooth(i));
   }, []);
+  // 開発中だけ：画面を確かめるために、配置番号の机の前に立つ
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    (window as unknown as { __walkTo?: (code: string) => void }).__walkTo = (code) => {
+      setSplash(false);
+      setTour(false);
+      const i = booths.findIndex((b) => b.code === code);
+      if (i >= 0) startWalkAt(i);
+    };
+  });
   const cancelWalk = () => {
     standPick.current = null;
     setWalkPending(false);
@@ -564,6 +632,14 @@ export function VenueView() {
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
   const [notesByDay, setNotesByDay] = useState<ByDay<string>>(loadNotes);
   const [visitedByDay, setVisitedByDay] = useState<ByDay<number>>(loadVisited);
+  // ログインしているときは、ほかの端末と合わせる（サーバーの方が新しい所は、端末の保存を入れかえる）
+  const syncFlat = useMemo(() => flatten(marksByDay, notesByDay, visitedByDay), [marksByDay, notesByDay, visitedByDay]);
+  useAccountSync(syncFlat, (f) => {
+    const u = unflatten(f);
+    setMarksByDay(u.marks);
+    setNotesByDay(u.notes);
+    setVisitedByDay(u.visited);
+  });
   const marks = marksByDay[day];
   const notes = notesByDay[day];
   // 「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ（ユーザーの指示）。印を外した机の「行った」は出さない
@@ -617,6 +693,10 @@ export function VenueView() {
       localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
     } catch {}
   }, [pinsOn]);
+  // 作者が公開したデータに新しいものがあれば取り直す（取ったら 1 回だけ読みなおす）
+  useEffect(() => {
+    refreshPublishedAndReload();
+  }, []);
 
   // ---- 3D の準備（1回だけ） ----
   useEffect(() => {
@@ -1748,9 +1828,10 @@ export function VenueView() {
     // 机の置き方。見やすく押しやすいよう、机をサークルの座る側（いすの所）までのばして描く（奥行き 0.45m → TOP_DESK_D・VIEW_DESK_D）。
     // 並びの向きにのばすと隣の机と重なるので、のばすのは奥行きだけ
     const TOP_DESK_D = 1.4;
-    const VIEW_DESK_D = 1.4; // 3D・歩く
-    const placeDesks = (top: boolean) => {
-      const d = top ? TOP_DESK_D : VIEW_DESK_D;
+    const VIEW_DESK_D = 1.4; // 3D
+    const WALK_DESK_D = VIEW_DESK_D; // 歩くときも同じ（机はこのままで、画角を広げて大きく見えすぎないようにする。ユーザーの指示）
+    const placeDesks = (v: View) => {
+      const d = v === "top" ? TOP_DESK_D : v === "walk" ? WALK_DESK_D : VIEW_DESK_D;
       for (const [lv, { mesh, index }] of deskMeshes) {
         index.forEach((bi, k) => {
           const b = booths[bi];
@@ -1773,7 +1854,7 @@ export function VenueView() {
       partsOf(lv).solid.push(mesh);
       deskMeshes.set(lv, { mesh, index });
     }
-    placeDesks(true);
+    placeDesks("top");
     // 机の側面の番号（3D・歩く）。「05a」のような文字を1枚の絵にならべ、スペースごとに机の長い面の両側へ貼る
     const numTexts = [...new Set(booths.map((b) => `${String(b.num).padStart(2, "0")}${b.half}`))];
     const N_COLS = 16, CW = 128, CH = 96;
@@ -1814,11 +1895,11 @@ export function VenueView() {
       index.forEach((bi, k) => {
         const b = booths[bi];
         const cell = numCell.get(`${String(b.num).padStart(2, "0")}${b.half}`)!;
-        const out = (b.side * (VIEW_DESK_D - DESK_D)) / 2;
+        const out = (b.side * (WALK_DESK_D - DESK_D)) / 2;
         const nx = -Math.sin(b.angle), nz = Math.cos(b.angle);
         const cx = b.at[0] + nx * out, cz = b.at[1] + nz * out;
         for (const [j, sgn] of [[0, 1], [1, -1]] as const) {
-          const off = VIEW_DESK_D / 2 + 0.02;
+          const off = WALK_DESK_D / 2 + 0.02;
           tmp.position.set(cx + nx * sgn * off, floorY(lv) + 0.37, cz + nz * sgn * off);
           tmp.rotation.set(0, sgn > 0 ? -b.angle : Math.PI - b.angle, 0);
           tmp.scale.set(1, 1, 1);
@@ -1832,7 +1913,7 @@ export function VenueView() {
       scene.add(mesh);
       numMeshes.push({ mesh, level: lv });
       // 机の上の面にも、平らに。字の頭は島の内側へ向け、通路（サークルの座る側）から読める向きにする
-      const topGeo = new THREE.PlaneGeometry(DESK_L / 2 - 0.12, 0.62);
+      const topGeo = new THREE.PlaneGeometry(DESK_L / 2 - 0.12, Math.min(0.62, WALK_DESK_D - 0.06));
       const topRects = new Float32Array(index.length * 4);
       const top = new THREE.InstancedMesh(topGeo, numMat, index.length);
       const flat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
@@ -1840,7 +1921,7 @@ export function VenueView() {
       index.forEach((bi, k) => {
         const b = booths[bi];
         const cell = numCell.get(`${String(b.num).padStart(2, "0")}${b.half}`)!;
-        const out = (b.side * (VIEW_DESK_D - DESK_D)) / 2;
+        const out = (b.side * (WALK_DESK_D - DESK_D)) / 2;
         tmp.position.set(b.at[0] - Math.sin(b.angle) * out, floorY(lv) + 0.71, b.at[1] + Math.cos(b.angle) * out);
         yawQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), b.side > 0 ? -b.angle : Math.PI - b.angle);
         tmp.quaternion.copy(yawQ).multiply(flat);
@@ -1902,6 +1983,60 @@ export function VenueView() {
     const keys = new Set<string>();
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
     let walkAnim: { t: number; from: THREE.Vector3; to: THREE.Vector3; secs: number } | null = null;
+    // 歩くときは、机の前の通路の線（線路）の上だけを進む。線から遠い所（机のない広場など）に立ったときは、自由に歩く
+    const walkRails = buildRails(lines, booths, venue.halls);
+    let railPos: RailPos | null = null;
+    let railPathAnim: { pts: XZ[]; len: number; s: number; to: RailPos } | null = null; // ダブルタップした所まで、線に沿って歩く
+    const RAIL_SNAP = 14; // 立った所からこの距離に線があれば、線に乗る
+    const snapToRails = () => {
+      const p: XZ = [persp.position.x, persp.position.z];
+      const hall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon(p, h.poly));
+      const q = hall ? nearestOnRails(walkRails, p, hall.id) : null;
+      railPathAnim = null;
+      if (q && q.d < RAIL_SNAP) {
+        railPos = { a: q.a, b: q.b, t: q.t };
+        persp.position.x = q.at[0];
+        persp.position.z = q.at[1];
+      } else railPos = null;
+      lastKeyWalk = "";
+    };
+    if (process.env.NODE_ENV !== "production")
+      (window as unknown as { __walkDbg?: () => unknown }).__walkDbg = () => ({
+        pos: [persp.position.x, persp.position.z],
+        yaw,
+        railPos,
+        at: railPos ? railPoint(walkRails, railPos) : null,
+        nodes: walkRails.nodes.length,
+        near: walkRails.nodes.map((n, i) => [i, n.p, walkRails.adj[i]] as const).filter(([, q]) => Math.hypot(q[0] - persp.position.x, q[1] - persp.position.z) < 6),
+      });
+    // 線路の絵（床の上の細い帯）。歩くときだけ、見ている階のものを出す
+    const railMeshes: { mesh: THREE.Mesh; level: number }[] = [];
+    {
+      const byLv = new Map<number, number[]>();
+      const W = 0.14;
+      walkRails.adj.forEach((ns, a) => {
+        const lv = hallById.get(walkRails.nodes[a].hall)!.level;
+        for (const b of ns) {
+          if (b < a) continue;
+          const A = walkRails.nodes[a].p, B = walkRails.nodes[b].p;
+          const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+          const nx = (-(B[1] - A[1]) / L) * W, nz = ((B[0] - A[0]) / L) * W;
+          const y = floorY(lv) + 0.09; // ホールの床（+0.05）の上
+          if (!byLv.has(lv)) byLv.set(lv, []);
+          byLv.get(lv)!.push(A[0] + nx, y, A[1] + nz, B[0] + nx, y, B[1] + nz, B[0] - nx, y, B[1] - nz, A[0] + nx, y, A[1] + nz, B[0] - nx, y, B[1] - nz, A[0] - nx, y, A[1] - nz);
+        }
+      });
+      const mat = new THREE.MeshBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+      for (const [lv, arr] of byLv) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+        const mesh = new THREE.Mesh(g, mat);
+        mesh.visible = false;
+        mesh.renderOrder = 1;
+        scene.add(mesh);
+        railMeshes.push({ mesh, level: lv });
+      }
+    }
 
     const size = () => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -1936,7 +2071,7 @@ export function VenueView() {
       fly = null;
       const labelSprites = new Set(labels.map((l) => l.s));
       for (const s of sprites) s.material.depthTest = v !== "top" && !labelSprites.has(s);
-      persp.fov = v === "walk" ? 70 : 50;
+      persp.fov = v === "walk" ? WALK_FOV : 50;
       persp.updateProjectionMatrix();
       if (v === "top") {
         camera = ortho;
@@ -1984,8 +2119,9 @@ export function VenueView() {
         pitch = 0;
         // 2D から歩くに入ったときは、2D の画面の上の向き（机の列の向き）を向いて立つ
         if (prev === "top") yaw = Math.atan2(-TOP_UP[0], -TOP_UP[1]);
+        snapToRails();
       }
-      placeDesks(v === "top");
+      placeDesks(v);
       applyVisibility();
     };
 
@@ -2013,11 +2149,16 @@ export function VenueView() {
         }
       }
       for (const { mesh, level } of numMeshes) mesh.visible = current === "walk" && shown(floorOf(level));
+      for (const { mesh, level } of railMeshes) mesh.visible = current === "walk" && floorOf(level) === currentFloor;
       pin.visible = pinOn && current === "orbit"; // 上からは真上から見た丸がとなりの机を隠すので出さない（選んだ机はオレンジになる）
     };
     const setFloor = (f: Floor) => {
       currentFloor = f;
       applyVisibility();
+      if (current === "walk") {
+        persp.position.y = eyeY();
+        snapToRails();
+      }
       focus.y = floorY(f);
       if (current === "walk") persp.position.y = eyeY();
       if (current === "orbit" && controls) {
@@ -2054,8 +2195,16 @@ export function VenueView() {
         // 机の前の通路（サークルの反対側）に立って、机を向く
         const nx = -Math.sin(b.angle) * -b.side, nz = Math.cos(b.angle) * -b.side;
         persp.position.set(b.at[0] + nx * 3, floorY(lv) + EYE, b.at[1] + nz * 3);
-        yaw = Math.atan2(nx, nz);
-        pitch = -0.25;
+        // 机の前の線に乗り、机を向く
+        const q = nearestOnRails(walkRails, b.at, b.hall);
+        if (q && q.d < RAIL_SNAP) {
+          railPos = { a: q.a, b: q.b, t: q.t };
+          railPathAnim = null;
+          persp.position.x = q.at[0];
+          persp.position.z = q.at[1];
+        } else railPos = null;
+        yaw = Math.atan2(persp.position.x - b.at[0], persp.position.z - b.at[1]);
+        pitch = -0.12;
         focus.copy(p);
       } else focusPoint(p, true);
     };
@@ -2083,11 +2232,13 @@ export function VenueView() {
         startFly(p.clone(), p.clone().add(new THREE.Vector3(-12, 22, 28).normalize().multiplyScalar(d)));
       } else {
         persp.position.set(cx, floorY(lv) + EYE, cz);
+        snapToRails();
       }
     };
     // 歩く：(x, z) に立つ。向きは、それまで見ていた向き（真上から見ていたときは、2D の画面の上の向き）
     const standAt = (x: number, z: number) => {
       persp.position.set(x, eyeY(), z);
+      snapToRails();
       pitch = -0.1;
       focus.set(x, floorY(currentFloor), z);
     };
@@ -2098,6 +2249,7 @@ export function VenueView() {
       const p = new THREE.Vector3(x, floorY(h.level), z);
       if (current === "walk") {
         persp.position.set(x, floorY(h.level) + EYE, z);
+        snapToRails();
         focus.copy(p);
       } else {
         if (current === "top") {
@@ -2240,6 +2392,19 @@ export function VenueView() {
       return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY(currentFloor)), new THREE.Vector3());
     };
     const walkTo = (p: THREE.Vector3) => {
+      // 線に乗っているときは、押した所にいちばん近い線の上まで、線に沿って歩く
+      if (railPos) {
+        const here = nearestOnRails(walkRails, [persp.position.x, persp.position.z])!;
+        const q = nearestOnRails(walkRails, [p.x, p.z], walkRails.nodes[railPos.a].hall);
+        if (!q || q.d > 8) return;
+        const pts = railPath(walkRails, railPos, q);
+        if (!pts) return;
+        let len = 0;
+        for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+        if (len < 0.3 || here.d > 1) return;
+        railPathAnim = { pts, len, s: 0, to: { a: q.a, b: q.b, t: q.t } };
+        return;
+      }
       const from = persp.position.clone();
       const dx = p.x - from.x, dz = p.z - from.z;
       const dist = Math.hypot(dx, dz);
@@ -2354,6 +2519,7 @@ export function VenueView() {
         scene.add(s);
         pins.push({ s, level: lv, base: s.scale.clone(), booth });
       }
+      lastKeyWalk = ""; // 歩いて見るときの札を置きなおす（ピンをよける）
     };
 
     // 1m が画面の何 px か（その場所で）
@@ -2600,9 +2766,158 @@ export function VenueView() {
       }
       flushItems();
     };
+    // 歩いて見るときの札：いまいるホールの、前の CARD_NEAR m までの机。近い机から置き、画面の上で前の札と重なる札は出さない。
+    // 1 つのサークルが 2 スペース（a・b）なら、札は 1 つ
+    const hallBooths = new Map<string, number[]>();
+    booths.forEach((b, i) => {
+      if (!hallBooths.has(b.hall)) hallBooths.set(b.hall, []);
+      hallBooths.get(b.hall)!.push(i);
+    });
+    const imgCache = new Map<string, HTMLImageElement | null>();
+    let lastKeyWalk = "";
+    const cardImg = (src: string) => {
+      if (!imgCache.has(src)) {
+        const im = new Image();
+        imgCache.set(src, null);
+        im.onload = () => {
+          imgCache.set(src, im);
+          lastKeyWalk = "";
+        };
+        im.src = src;
+      }
+      return imgCache.get(src) ?? null;
+    };
+    const drawWalkCards = (w: number, h: number) => {
+      const cp = persp.position;
+      const key = [cp.x, cp.z, yaw, pitch, w, h, currentFloor].map((v) => (typeof v === "number" ? v.toFixed(3) : String(v))).join(",");
+      if (key === lastKeyWalk && codesShown) return;
+      lastKeyWalk = key;
+      codesShown = true;
+      // カメラの行列は描くとき（このあと）に更新されるので、ここで先に更新する（しないと 1 つ前の位置で札を置き、止まるとそのまま残る）
+      persp.updateMatrixWorld();
+      codeCtx.clearRect(0, 0, w, h);
+      const here = venue.halls.find((hh) => floorOf(hh.level) === currentFloor && !hh.closed && pointInPolygon([cp.x, cp.z], hh.poly));
+      if (!here) return;
+      const info = cardInfo.current;
+      const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+      const cand: { d: number; x: number; z: number; c: { name: string; image: string; sub: string }; top: number }[] = [];
+      // ピンを立てた机の札は、ピンの上に出す
+      const pinTop = new Map<number, number>();
+      for (const pin of pins) if (pin.s.visible) pinTop.set(pin.booth, pin.s.position.y + pin.s.scale.y + 0.3);
+      const seen = new Set<string>();
+      for (const i of hallBooths.get(here.id) ?? []) {
+        const b = booths[i];
+        const dx = b.at[0] - cp.x, dz = b.at[1] - cp.z;
+        const d = Math.hypot(dx, dz);
+        if (d > CARD_NEAR || d < 1.2 || dx * fx + dz * fz < d * 0.35) continue; // 前の、だいたい ±70° の中だけ
+        const c = info(b.code);
+        if (!c) continue;
+        const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        // 同じサークルの 2 スペース（a・b）は、2 つの間の上に 1 つ
+        const nb = booths[i + 1];
+        const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
+        const x = pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z = pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1];
+        cand.push({ d, x, z, c, top: pinTop.get(i) ?? (pair ? pinTop.get(i + 1) : undefined) ?? 0 });
+      }
+      cand.sort((p, q) => p.d - q.d);
+      const placed: [number, number, number, number][] = [];
+      // 印のピンと重ならないように、ピンの場所を先にふさいでおく
+      for (const pin of pins) {
+        if (!pin.s.visible || floorOf(pin.level) !== currentFloor) continue;
+        pv.copy(pin.s.position).project(persp);
+        if (pv.z < -1 || pv.z > 1) continue;
+        const bx = ((pv.x + 1) / 2) * w, by = ((1 - pv.y) / 2) * h;
+        pv.copy(pin.s.position).y += pin.s.scale.y;
+        pv.project(persp);
+        const ty = ((1 - pv.y) / 2) * h, hw = ((by - ty) * 64) / 88 / 2;
+        placed.push([bx - hw, ty, bx + hw, by]);
+      }
+      const tanH = Math.tan((persp.fov * Math.PI) / 360);
+      // 列の名前・WC・出入口などの札とも重ならないように（90m まで）
+      for (const { s: sp } of labels) {
+        if (!sp.visible) continue;
+        const dist = sp.position.distanceTo(cp);
+        if (dist > 90) continue;
+        pv.copy(sp.position).project(persp);
+        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) continue;
+        const sx = ((pv.x + 1) / 2) * w, sy = ((1 - pv.y) / 2) * h;
+        const ppm = h / (2 * Math.max(0.5, dist) * tanH);
+        const W = sp.scale.x * ppm, H = sp.scale.y * ppm;
+        if (W > w * 0.3) continue; // 大きく写る札（ホールの名前など）は、札を出すのをあきらめるほどではない
+        placed.push([sx - sp.center.x * W, sy - (1 - sp.center.y) * H, sx + (1 - sp.center.x) * W, sy + sp.center.y * H]);
+      }
+      const y = floorY(here.level) + 1.25;
+      let n = 0;
+      for (const it of cand) {
+        if (n >= CARD_MAX) break;
+        pv.set(it.x, Math.max(y, it.top), it.z).project(persp);
+        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1 || Math.abs(pv.y) > 1) continue;
+        const sx = ((pv.x + 1) / 2) * w, sy = ((1 - pv.y) / 2) * h;
+        const ppm = h / (2 * Math.max(0.5, it.d) * tanH);
+        const scale = Math.max(0.6, Math.min(1.3, ppm / 60));
+        const imgS = it.c.image ? Math.round(56 * scale) : 0;
+        const fs = Math.round(Math.max(10, 13 * scale));
+        codeCtx.font = `700 ${fs}px system-ui, sans-serif`;
+        const name = it.c.name.length > 14 ? it.c.name.slice(0, 13) + "…" : it.c.name;
+        const sub = it.c.sub.length > 14 ? it.c.sub.slice(0, 13) + "…" : it.c.sub;
+        const tw = Math.max(name ? codeCtx.measureText(name).width : 0, sub ? codeCtx.measureText(sub).width * 0.85 : 0);
+        const bw = Math.max(imgS, tw) + 12, bh = imgS + (name ? fs + 4 : 0) + (sub ? fs * 0.85 + 4 : 0) + 10;
+        const r: [number, number, number, number] = [sx - bw / 2, sy - bh, sx + bw / 2, sy];
+        if (r[0] < 0 || r[2] > w || r[1] < 0) continue;
+        if (placed.some((q) => r[0] < q[2] + 4 && r[2] > q[0] - 4 && r[1] < q[3] + 4 && r[3] > q[1] - 4)) continue;
+        placed.push(r);
+        n++;
+        // 遠い札は少し薄く
+        codeCtx.globalAlpha = Math.max(0.55, 1 - it.d / (CARD_NEAR * 1.6));
+        codeCtx.fillStyle = "rgba(255,255,255,.94)";
+        codeCtx.strokeStyle = "rgba(0,0,0,.18)";
+        codeCtx.lineWidth = 1;
+        codeCtx.beginPath();
+        codeCtx.roundRect(r[0], r[1], bw, bh - 6, 6);
+        codeCtx.moveTo(sx - 5, sy - 6);
+        codeCtx.lineTo(sx, sy);
+        codeCtx.lineTo(sx + 5, sy - 6);
+        codeCtx.fill();
+        codeCtx.stroke();
+        let ty = r[1] + 5;
+        if (imgS) {
+          const im = cardImg(it.c.image);
+          if (im) {
+            const k = Math.max(imgS / im.width, imgS / im.height), iw = im.width * k, ih = im.height * k;
+            codeCtx.save();
+            codeCtx.beginPath();
+            codeCtx.rect(sx - imgS / 2, ty, imgS, imgS);
+            codeCtx.clip();
+            codeCtx.drawImage(im, sx - iw / 2, ty + (imgS - ih) / 2, iw, ih);
+            codeCtx.restore();
+          } else {
+            codeCtx.fillStyle = "#e6e6e1";
+            codeCtx.fillRect(sx - imgS / 2, ty, imgS, imgS);
+          }
+          ty += imgS + 2;
+        }
+        codeCtx.textAlign = "center";
+        codeCtx.textBaseline = "top";
+        if (name) {
+          codeCtx.font = `700 ${fs}px system-ui, sans-serif`;
+          codeCtx.fillStyle = "#1d1d1b";
+          codeCtx.fillText(name, sx, ty);
+          ty += fs + 3;
+        }
+        if (sub) {
+          codeCtx.font = `500 ${Math.round(fs * 0.85)}px system-ui, sans-serif`;
+          codeCtx.fillStyle = "#55554f";
+          codeCtx.fillText(sub, sx, ty);
+        }
+      }
+      codeCtx.globalAlpha = 1;
+    };
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
       if (current === "orbit") return drawCodes3d(w, h);
+      if (current === "walk") return drawWalkCards(w, h);
       lastKey3d = "";
       const ppm = (h * ortho.zoom) / (2 * 160);
       // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
@@ -2724,7 +3039,44 @@ export function VenueView() {
         const fwd = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + hold;
         const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-        if (fwd || side) walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
+        if (fwd || side) {
+          walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
+          railPathAnim = null;
+        }
+        const turnTo = (dx: number, dz: number, k: number) => {
+          // 進む向きへ、ゆっくり向きを変える（線路のように曲がる）
+          const target = Math.atan2(-dx, -dz);
+          let dy = target - yaw;
+          dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+          yaw += dy * Math.min(1, k);
+        };
+        if (railPos && railPathAnim) {
+          const a = railPathAnim;
+          a.s = Math.min(a.len, a.s + WALK_SPEED * 1.4 * dt);
+          let s0 = a.s;
+          for (let i = 1; i < a.pts.length; i++) {
+            const P = a.pts[i - 1], Q = a.pts[i], L = Math.hypot(Q[0] - P[0], Q[1] - P[1]);
+            if (s0 <= L || i === a.pts.length - 1) {
+              const k = L ? Math.min(1, s0 / L) : 1;
+              persp.position.x = P[0] + (Q[0] - P[0]) * k;
+              persp.position.z = P[1] + (Q[1] - P[1]) * k;
+              if (L > 0.05) turnTo(Q[0] - P[0], Q[1] - P[1], dt * 4);
+              break;
+            }
+            s0 -= L;
+          }
+          if (a.s >= a.len) {
+            railPos = a.to;
+            railPathAnim = null;
+          }
+        } else if (railPos && fwd) {
+          const m = moveOnRails(walkRails, railPos, [fx * Math.sign(fwd), fz * Math.sign(fwd)], Math.abs(fwd) * WALK_SPEED * dt);
+          railPos = m.pos;
+          const at = railPoint(walkRails, railPos);
+          persp.position.x = at[0];
+          persp.position.z = at[1];
+          if (fwd > 0) turnTo(m.dir[0], m.dir[1], dt * 3);
+        }
         if (walkAnim) {
           walkAnim.t = Math.min(1, walkAnim.t + dt / walkAnim.secs);
           const k = 1 - Math.pow(1 - walkAnim.t, 2);
@@ -2732,8 +3084,10 @@ export function VenueView() {
           persp.position.z = walkAnim.from.z + (walkAnim.to.z - walkAnim.from.z) * k;
           if (walkAnim.t >= 1) walkAnim = null;
         }
-        persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
-        persp.position.z += (fz * fwd + fx * side) * WALK_SPEED * dt;
+        if (!railPos) {
+          persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
+          persp.position.z += (fz * fwd + fx * side) * WALK_SPEED * dt;
+        }
         persp.position.y = eyeY();
         persp.rotation.set(pitch, yaw, 0, "YXZ");
       } else if (controls) {
@@ -2769,7 +3123,7 @@ export function VenueView() {
       const level = hs[0].level;
       const prevFloor = currentFloor;
       setFloor(floorOf(level));
-      placeDesks(true);
+      placeDesks("top");
       const hiddenSprites: THREE.Sprite[] = [];
       scene.traverse((o) => {
         if (o instanceof THREE.Sprite && o.visible) {
@@ -2816,7 +3170,7 @@ export function VenueView() {
       // 元に戻す（札の大きさと見せ方は、次のフレームの placeLabels が決め直す）
       for (const o of hiddenSprites) o.visible = true;
       pin.visible = pinWas;
-      placeDesks(current === "top");
+      placeDesks(current);
       setFloor(prevFloor);
       const px = (x: number, z: number): [number, number] => {
         const [u, v] = toUV(x, z);
@@ -2949,7 +3303,7 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { setView, setFloor, setBoth: (on) => {
+    api.current = { redrawCards: () => (lastKeyWalk = ""), setView, setFloor, setBoth: (on) => {
       bothFloors = on;
       applyVisibility();
     }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
@@ -2986,6 +3340,15 @@ export function VenueView() {
     api.current?.setSurround(surround);
   }, [surround]);
   useEffect(() => api.current?.recolor(byGenre, marks, visited, selected, dayTags, genre, work, char), [byGenre, marks, visited, selected, dayTags, genre, work, char]);
+  useEffect(() => {
+    cardInfo.current = (code) => {
+      const c = circles[day][code];
+      if (c) return { name: c.name, image: c.image, sub: c.works[0] ?? "" };
+      const w = dayTags?.[code]?.works?.[0];
+      return w ? { name: "", image: "", sub: w } : null;
+    };
+    api.current?.redrawCards();
+  }, [day, dayTags]);
   useEffect(() => {
     // 印の机（ピンを立てる印だけ）。「行った」の机は灰色の ✓
     const list = Object.entries(marks)
@@ -3299,7 +3662,7 @@ export function VenueView() {
               </span>
             </div>
             {marked + memoOnly.length === 0 && (
-              <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末の中だけに保存します。</p>
+              <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末に保存します（ログインすると、ほかの端末とも合わせます）。</p>
             )}
             {MARKS.filter((m) => lists[m].length > 0).map((m) => (
               <section key={m} style={{ marginTop: 8 }}>
@@ -3378,14 +3741,19 @@ export function VenueView() {
               {dayTags ? (
                 <>
                   {dayTags[sel.code]?.genre ? `ジャンル：${dayTags[sel.code].genre}　／　` : ""}
-                  作品{savedTags ? "" : "（見本）"}：{dayTags[sel.code]?.works?.join("・") ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
+                  作品{savedTags || realData ? "" : "（見本）"}：{dayTags[sel.code]?.works?.join("・") ?? <span style={{ color: "var(--muted)" }}>まだ入っていません</span>}
                   {charsText(dayTags[sel.code]) ? `　／　キャラ：${charsText(dayTags[sel.code])}` : ""}
                 </>
               ) : (
                 <>作品（見本）：{lines[sel.line].genre}</>
               )}
-              　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
+              {!circles[day][sel.code] && (
+                <>
+                  　／　サークル：<span style={{ color: "var(--muted)" }}>まだ登録されていません</span>
+                </>
+              )}
             </div>
+            {circles[day][sel.code] && <CircleCard c={circles[day][sel.code]} />}
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               {/* 当日・計画のモードでも ★ 行きたい・◆ 候補の印をつけられる（ユーザーの指示）。
                   「✓ 行った」にできるのは、印がある机だけ */}
@@ -3448,13 +3816,14 @@ export function VenueView() {
       <aside className={"side" + (menu ? " open" : "")} aria-hidden={!menu}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <strong style={{ fontSize: "1.05rem" }}>即売会 3D マップ</strong>
-          <span className="tag">{savedLines ? "編集した配置" : "見本"}</span>
+          <span className="tag">{savedLines ? "編集した配置" : pubLines ? "配置" : "見本"}</span>
           <button className="icon-btn small" style={{ marginLeft: "auto" }} aria-label="閉じる" onClick={() => setMenu(false)}>
             ✕
           </button>
         </div>
         <p style={{ color: "var(--muted)", fontSize: ".78rem", margin: "4px 0 10px" }}>
-          コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置・作品は仮です（C109 の本当の配置ではありません）
+          コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。
+          {realData ? "作品・サークルは協力者とサークルの方が入れたものです（まちがいがあるかもしれません）" : "島の配置・作品は仮です（C109 の本当の配置ではありません）"}
         </p>
         <h3>モード</h3>
         <div className="seg" role="group" aria-label="モード" style={{ display: "flex" }}>
@@ -3615,6 +3984,11 @@ export function VenueView() {
             </div>
           </>
         )}
+        <h3>ログイン（任意）</h3>
+        <AccountBox />
+        <p style={{ fontSize: ".8rem", margin: "8px 0 0" }}>
+          <a href="/circle/">サークルの方へ：作品の登録</a>
+        </p>
         <button
           className="chip"
           style={{ marginTop: 12 }}
@@ -3626,7 +4000,11 @@ export function VenueView() {
         >
           使い方を見る
         </button>
-        <p style={{ color: "var(--muted)", fontSize: ".7rem", marginTop: 14 }}>{venue.attribution}</p>
+        <p style={{ color: "var(--muted)", fontSize: ".7rem", marginTop: 14 }}>
+          {venue.attribution}
+          <br />
+          <a href="/privacy/">プライバシーポリシー</a>
+        </p>
       </aside>
 
       {/* 初めての人向けの使い方の案内（開いたときの「非公式」の案内を閉じてから） */}
@@ -3657,7 +4035,10 @@ export function VenueView() {
             <p>
               会場の図は、株式会社東京ビッグサイトから図面の利用について了承を得て、それを参考に独自に描いたものです（同社の公認・監修ではありません）。
             </p>
-            <p>島の配置・作品は仮です（C109 の本当の配置ではありません）。当日の出入口・動線は、運営の案内に従ってください。</p>
+            <p>
+              {realData ? "作品・サークルは協力者とサークルの方が入れたもので、まちがいがあるかもしれません。" : "島の配置・作品は仮です（C109 の本当の配置ではありません）。"}
+              当日の出入口・動線は、運営の案内に従ってください。
+            </p>
             <p style={{ color: "var(--muted)", fontSize: ".85rem", marginBottom: 0 }}>画面のどこかを押すと閉じます</p>
           </div>
         </div>

@@ -18,3 +18,14 @@ AddType application/manifest+json .webmanifest
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>
+
+# 受け口の共通部分は直接開かせない
+<FilesMatch "^_.*\.php$">
+  Require all denied
+</FilesMatch>
+# 公開データ（作者が「公開」で書き出す）は毎回新しい版を確かめる
+<IfModule mod_headers.c>
+  <FilesMatch "\.json$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

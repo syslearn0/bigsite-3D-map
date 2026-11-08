@@ -5,6 +5,7 @@ import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { minAreaRect, type XZ } from "@/lib/geo";
 import { DESK_D, DESK_L, expandBooths, islandEnds, layoutProblems, lineLength, nextBlock, wallLabelSpots, parseLayoutFeatures, parseLayoutFile, PITCH, toLayoutFile, type HallLike, type LayoutFeatures, type Line } from "@/lib/layout";
+import { EditorServerBar } from "./EditorServerBar";
 import { DRAFT_KEY, LAYOUT_KEY, loadLayout, loadLayoutFeatures, saveLayout } from "@/lib/saved-layout";
 import { applyChars, applyWorks, charsOf, DAYS, loadTags, parseTagsFile, saveTags, splitChars, TAGS_DRAFT_KEY, TAGS_KEY, toTagsFile, workColor, worksOf, type Day, type Tags } from "@/lib/tags";
 
@@ -875,6 +876,19 @@ export function IslandEditor() {
           </button>
         </span>
       </header>
+      <EditorServerBar
+        tags={tags}
+        setTags={changeTags}
+        lines={lines}
+        features={features}
+        setLayout={(json) => {
+          const l = parseLayoutFile(json);
+          if (!l) return setMsg("サーバーの配置が読めませんでした");
+          change(l);
+          setFeatures(parseLayoutFeatures(json));
+          setSel(null);
+        }}
+      />
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         <div ref={box} style={{ position: "relative", flex: 1, minWidth: 0 }}>
           <canvas
