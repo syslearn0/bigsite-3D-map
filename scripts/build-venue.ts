@@ -1678,7 +1678,9 @@ if (existsSync("data/osm/coast.json")) {
       ...sur.lines.filter((l) => l.kind === "deck").map((l) => Math.min(...l.pts.slice(1).map((b2, i) => segDist(q, l.pts[i], b2))) - l.w / 2),
       ...lv2Polys.map((pl) => polyDist(q, pl)),
     );
-  const deckStairs: { from: XZ; to: XZ; w: number; esc?: boolean; y?: number; tower?: boolean }[] = []; // y：上の端の高さ（ないときは 2F）
+  // y：上の端の高さ（ないときは 2F）。pts：折り返す階段の道すじ（上の端から下の端へ。まっすぐな階段にはない）
+  const deckStairs: { from: XZ; to: XZ; w: number; esc?: boolean; y?: number; tower?: boolean; pts?: XZ[] }[] = [];
+  const pathLen = (pts: XZ[]) => pts.slice(1).reduce((s2, q, i) => s2 + Math.hypot(q[0] - pts[i][0], q[1] - pts[i][1]), 0);
   // 両方の端がデッキの広場の中にある階段は、広場の形が階段の上まで含んでいる（東京ビッグサイト駅の南の、屋根つきの
   // エスカレーターと階段 way 243799255：OSM の広場の細い尾）。階段の形（幅＋1m）を広場から切りとってから、上の端を決める
   const stairRect = (pts: XZ[], w: number): [number, number][] => {
@@ -1718,7 +1720,18 @@ if (existsSync("data/osm/coast.json")) {
     const da = deckDist(a2), db = deckDist(b2);
     if (Math.min(da, db) > 3 || Math.abs(da - db) < 1) continue; // どちらの端もデッキから遠い（地上の階段）か、両方の端がデッキの上
     if (inVenue(centroid(c.pts)) && !c.line) continue;
-    deckStairs.push({ ...(da < db ? { from: a2, to: b2 } : { from: b2, to: a2 }), w: c.w, ...(c.esc ? { esc: true } : {}) });
+    // 折り返す階段（OSM の線が、両端を結ぶ直線より 2 割以上長い）は、線のとおりに描く。両端を結ぶ直線で描くと、
+    // 短い所で高さを上るので壁のように立つ（デッキの角の下の階段 way 642798317：直線 9m・線 27m。航空写真でも 2 本並ぶ）
+    const path = da < db ? [...c.pts] : [...c.pts].reverse();
+    const fold = c.pts.length > 2 && pathLen(c.pts) > 1.2 * Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
+    // 上の端がデッキの少し手前（3m まで）で止まっているときは、最初の向きのままデッキの上 1m まで伸ばす
+    const g0 = Math.min(da, db);
+    if (g0 > 0.2) {
+      const [p0, p1] = [path[0], path[1]], L = Math.hypot(p0[0] - p1[0], p0[1] - p1[1]) || 1;
+      const ext: XZ = [p0[0] + ((p0[0] - p1[0]) / L) * (g0 + 1), p0[1] + ((p0[1] - p1[1]) / L) * (g0 + 1)];
+      if (deckDist(ext) <= 0) path.unshift([Math.round(ext[0] * 10) / 10, Math.round(ext[1] * 10) / 10]);
+    }
+    deckStairs.push({ from: path[0], to: path.at(-1)!, w: c.w, ...(c.esc ? { esc: true } : {}), ...(fold || path.length > c.pts.length ? { pts: path } : {}) });
     if (c.line) usedSteps.add(c.line);
   }
   sur.lines = sur.lines.filter((l) => !usedSteps.has(l));
@@ -1860,7 +1873,7 @@ if (existsSync("data/osm/coast.json")) {
       for (const st of deckStairs) {
         if (!all.some((pl) => near(st.from, pl, 3))) continue;
         st.y = deckY;
-        if (!st.esc && Math.hypot(st.to[0] - st.from[0], st.to[1] - st.from[1]) < deckY * 1.2) {
+        if (!st.esc && pathLen(st.pts ?? [st.from, st.to]) < deckY * 1.2) {
           st.tower = true;
           const r = band(st.from, st.to, 2.5, -1, 1).slice(0, -1).map(([x, z]) => [x, z] as XZ);
           buildings.push({ poly: r, h: deckY - 0.8, est: `折り返しの階段の階段室（${est}）` });

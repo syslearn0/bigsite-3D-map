@@ -44,7 +44,8 @@ type Venue = {
     busStops?: { at: XZ; name: string }[];
     taxis?: XZ[];
     // デッキと地上をむすぶ階段（esc：エスカレーター。y：上の端の高さ、ないときは 2F。tower：階段室の箱の中なので段は描かない）
-    deckStairs?: { from: XZ; to: XZ; w?: number; esc?: boolean; y?: number; tower?: boolean }[];
+    // pts：折り返す階段の道すじ（上の端から下の端へ）
+    deckStairs?: { from: XZ; to: XZ; w?: number; esc?: boolean; y?: number; tower?: boolean; pts?: XZ[] }[];
     decks?: { poly: XZ[]; holes?: XZ[][] }[]; // 歩行者デッキの広場（2F の高さの面）
     deckRails?: XZ[][]; // 広場のふちの手すり（ほかのデッキや会場の床につながる所は除いてある）
   };
@@ -904,15 +905,29 @@ export function VenueView() {
       }
       // デッキへ上る階段（デッキにつく端が 2F の高さ）：段の板を並べる
       for (const st of sur.deckStairs ?? []) {
-        const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
+        // 道すじ（上の端から下の端へ。折り返す階段は OSM の線のとおり）に沿って、段の板を並べる。高さは道すじの長さで割りふる
+        const path = st.pts ?? [st.from, st.to];
+        const segs = path.slice(1).map((q, k) => ({ a: path[k], b: q, L: Math.hypot(q[0] - path[k][0], q[1] - path[k][1]) }));
+        const run = segs.reduce((s2, g) => s2 + g.L, 0);
+        const at = (d: number) => {
+          for (const g of segs) {
+            if (d <= g.L || g === segs.at(-1)) {
+              const t = Math.min(1, d / (g.L || 1));
+              return { x: g.a[0] + (g.b[0] - g.a[0]) * t, z: g.a[1] + (g.b[1] - g.a[1]) * t, dx: g.a[0] - g.b[0], dz: g.a[1] - g.b[1] };
+            }
+            d -= g.L;
+          }
+          return { x: st.to[0], z: st.to[1], dx: 0, dz: 1 };
+        };
         const topY = st.y ?? DECK_Y;
         const n = st.tower ? 0 : Math.max(3, Math.round(topY / 0.2));
         const im = new THREE.InstancedMesh(new THREE.BoxGeometry(st.w ?? 3, 1, run / Math.max(n, 1) + 0.02), new THREE.MeshLambertMaterial({ color: st.esc ? 0x6f8fb3 : 0xc9c2b0 }), n);
         const o = new THREE.Object3D();
         for (let i = 0; i < n; i++) {
           const f = (i + 0.5) / n, top = (topY * (i + 1)) / n, th = Math.min(1.5, top);
-          o.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
-          o.rotation.set(0, Math.atan2(dx, dz), 0);
+          const p = at(run * (1 - f));
+          o.position.set(p.x, top - th / 2, p.z);
+          o.rotation.set(0, Math.atan2(p.dx, p.dz), 0);
           o.scale.set(1, th, 1);
           o.updateMatrix();
           im.setMatrixAt(i, o.matrix);
@@ -923,7 +938,8 @@ export function VenueView() {
         }
         // 札（寄ったときだけ）：デッキと地上のあいだを上り下りできる所
         const t = textSprite(st.esc ? "⇅ エスカレーター" : "⇅ 階段", { bg: st.esc ? "rgba(60,95,140,.92)" : "rgba(150,120,80,.92)", height: 2.4, px: 28 });
-        t.position.set((st.from[0] + st.to[0]) / 2, st.tower ? topY + 4.5 : topY / 2 + 3, (st.from[1] + st.to[1]) / 2);
+        const mid = at(run / 2);
+        t.position.set(mid.x, st.tower ? topY + 4.5 : topY / 2 + 3, mid.z);
         surroundings.add(t);
         addLabel(t, "sur");
       }
