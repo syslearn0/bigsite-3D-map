@@ -108,6 +108,8 @@ type Floor = 1 | 4;
 const EYE = 1.35;
 // 歩くときの画角（縦）。せまくして前のものを大きく写す（ユーザーの指示：目の高さを下げて、画角をせまく）
 const WALK_FOV = 50;
+// 歩くときの上下の向きは決めておく（ドラッグで上下にも動くと歩きにくい。ユーザーの指摘）。机が見やすいよう、少しだけ下向き
+const WALK_PITCH = -0.1;
 const WALK_SPEED = 3.5; // m/秒（見て回りやすいよう、ふつうに歩く速さより少し速め）
 // 歩いて見るとき、近くの机の上に出すサークルの札（画像とサークル名）。この距離までで、画面の上で重なる札は出さない
 const CARD_NEAR = 16;
@@ -2217,7 +2219,7 @@ export function VenueView() {
     let currentFloor: Floor = 1;
     let bothFloors = false; // 1F と 4F の両方を見る（どちらも薄くしない）
     const shown = (f: Floor) => bothFloors || f === currentFloor;
-    let yaw = 0, pitch = 0;
+    let yaw = 0, pitch = WALK_PITCH;
     let hold: -1 | 0 | 1 = 0;
     let holdSide: -1 | 0 | 1 = 0;
     let lastRailDir: XZ | null = null; // 線の上で最後に進んだ向き（横を向いて進むとき、向きを決めるため）
@@ -2357,7 +2359,7 @@ export function VenueView() {
       } else {
         camera = persp;
         persp.position.set(focus.x, eyeY(), focus.z);
-        pitch = 0;
+        pitch = WALK_PITCH;
         // 2D から歩くに入ったときは、2D の画面の上の向き（机の列の向き）を向いて立つ
         if (prev === "top") yaw = Math.atan2(-TOP_UP[0], -TOP_UP[1]);
         snapToRails();
@@ -2445,7 +2447,7 @@ export function VenueView() {
           persp.position.z = q.at[1];
         } else railPos = null;
         yaw = Math.atan2(persp.position.x - b.at[0], persp.position.z - b.at[1]);
-        pitch = -0.12;
+        pitch = WALK_PITCH;
         focus.copy(p);
       } else focusPoint(p, true);
     };
@@ -2480,7 +2482,7 @@ export function VenueView() {
     const standAt = (x: number, z: number) => {
       persp.position.set(x, eyeY(), z);
       snapToRails();
-      pitch = -0.1;
+      pitch = WALK_PITCH;
       focus.set(x, floorY(currentFloor), z);
     };
     const focusHall = (id: string) => {
@@ -2667,7 +2669,7 @@ export function VenueView() {
     const onMove = (e: PointerEvent) => {
       if (!down || current !== "walk") return;
       yaw = down.yaw - (e.clientX - down.x) * 0.005;
-      pitch = Math.max(-1.2, Math.min(1.2, down.pitch - (e.clientY - down.y) * 0.005));
+      // 上下には動かさない（左右の向きだけ）
     };
     const onUp = (e: PointerEvent) => {
       if (!down) return;
