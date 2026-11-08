@@ -14,6 +14,7 @@
     "fetch:coast": "tsx scripts/fetch-osm-coast.ts",
     "fetch:detail": "tsx scripts/fetch-osm-detail.ts",
     "build:venue": "tsx scripts/build-venue.ts",
+    "build:corridors": "tsx scripts/build-corridors.ts",
     "build:layout": "tsx scripts/build-layout.ts",
     "make:icons": "tsx scripts/make-icons.ts"
   },

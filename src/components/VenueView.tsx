@@ -13,7 +13,8 @@ import { sampleTags } from "@/lib/sample-tags";
 import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
-import { buildRails, moveOnRails, nearestOnRails, railPoint, type RailPos } from "@/lib/rails";
+import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos } from "@/lib/rails";
+import corridorsJson from "@/data/corridors.json";
 import { search, type Hit } from "@/lib/search";
 import { hallAt, makeSteady, type Where } from "@/lib/locate";
 import { buildGrid, findPath, type Grid, type NavVenue } from "@/lib/nav";
@@ -790,6 +791,7 @@ export function VenueView() {
   };
   const [here, setHere] = useState(""); // 近づいたときの、いま見ているホール
   const onHere = useRef(setHere);
+  const onFloor = useRef<(f: Floor) => void>(() => {}); // 歩いていて階段で階が変わったとき（下で setFloor を入れる）
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
 
   useEffect(() => {
@@ -2231,13 +2233,31 @@ export function VenueView() {
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
     let walkAnim: { t: number; from: THREE.Vector3; to: THREE.Vector3; secs: number } | null = null;
     // 歩くときは、机の前の通路の線（線路）の上だけを進む。線から遠い所（机のない広場など）に立ったときは、自由に歩く
-    const walkRails = buildRails(lines, booths, venue.halls);
+    // ホールの中の線（机の前の通路）に、通路・広場・階段の線（scripts/build-corridors.ts）を足して、出入口でつなぐ
+    const walkRails = (() => {
+      const desksByHall = new Map<string, XZ[]>();
+      for (const b of booths) (desksByHall.get(b.hall) ?? desksByHall.set(b.hall, []).get(b.hall)!).push(b.at);
+      return addCorridors(buildRails(lines, booths, venue.halls), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? []);
+    })();
+    // 線の上の位置の高さ（階段の線では、上と下の端のあいだ）
+    const railY = (q: RailPos) => {
+      const la = walkRails.nodes[q.a].level, lb = walkRails.nodes[q.b].level;
+      return floorY(la) + (floorY(lb) - floorY(la)) * q.t;
+    };
+    // 見ている階で線に乗れる階（1・2F を見ているときは 1F と 2F）
+    const railLevels = (f: Floor) => (f === 4 ? [4] : [1, 2]);
     let railPos: RailPos | null = null;
     const RAIL_SNAP = 14; // 立った所からこの距離に線があれば、線に乗る
     const snapToRails = () => {
       const p: XZ = [persp.position.x, persp.position.z];
       const hall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon(p, h.poly));
-      const q = hall ? nearestOnRails(walkRails, p, hall.id) : null;
+      // ホールの中ならそのホールの線、外なら見ている階の通路の線（1F と 2F が重なる所は、近いほう）
+      let q = hall ? nearestOnRails(walkRails, p, hall.id) : nearestOnRails(walkRails, p, undefined, railLevels(currentFloor));
+      if (!hall && currentFloor === 1) {
+        // 1F と 2F の線が重なる所（2F のコンコースの下など）では、近さが 4m の差までなら 1F を選ぶ
+        const q1 = nearestOnRails(walkRails, p, undefined, [1]);
+        if (q1 && q && q1.d <= q.d + 4) q = q1;
+      }
       if (q && q.d < RAIL_SNAP) {
         railPos = { a: q.a, b: q.b, t: q.t };
         persp.position.x = q.at[0];
@@ -2259,18 +2279,21 @@ export function VenueView() {
     const railLines: { line: THREE.LineSegments; level: number }[] = [];
     let railsPick = false; // 歩き始める場所を選んでいるあいだ
     {
+      // 階ごと（1・2F と 4F）にまとめる。階段の線は、両方の階に入れる（どちらの階を見ていても出す）
       const byLv = new Map<number, number[]>();
       const W = 0.14;
       walkRails.adj.forEach((ns, a) => {
-        const lv = hallById.get(walkRails.nodes[a].hall)!.level;
+        const A = walkRails.nodes[a];
         for (const b of ns) {
           if (b < a) continue;
-          const A = walkRails.nodes[a].p, B = walkRails.nodes[b].p;
-          const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
-          const nx = (-(B[1] - A[1]) / L) * W, nz = ((B[0] - A[0]) / L) * W;
-          const y = floorY(lv) + 0.09; // ホールの床（+0.05）の上
-          if (!byLv.has(lv)) byLv.set(lv, []);
-          byLv.get(lv)!.push(A[0] + nx, y, A[1] + nz, B[0] + nx, y, B[1] + nz, B[0] - nx, y, B[1] - nz, A[0] + nx, y, A[1] + nz, B[0] - nx, y, B[1] - nz, A[0] - nx, y, A[1] - nz);
+          const B = walkRails.nodes[b];
+          const L = Math.hypot(B.p[0] - A.p[0], B.p[1] - A.p[1]) || 1;
+          const nx = (-(B.p[1] - A.p[1]) / L) * W, nz = ((B.p[0] - A.p[0]) / L) * W;
+          const ya = floorY(A.level) + 0.09, yb = floorY(B.level) + 0.09; // 床（+0.05）の上
+          for (const f of new Set([floorOf(A.level), floorOf(B.level)])) {
+            if (!byLv.has(f)) byLv.set(f, []);
+            byLv.get(f)!.push(A.p[0] + nx, ya, A.p[1] + nz, B.p[0] + nx, yb, B.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] + nx, ya, A.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] - nx, ya, A.p[1] - nz);
+          }
         }
       });
       const mat = new THREE.MeshBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
@@ -2287,12 +2310,14 @@ export function VenueView() {
       const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9, depthTest: false });
       const segs = new Map<number, number[]>();
       walkRails.adj.forEach((ns, a) => {
-        const lv = hallById.get(walkRails.nodes[a].hall)!.level;
+        const A = walkRails.nodes[a];
         for (const b of ns) {
           if (b < a) continue;
-          const A = walkRails.nodes[a].p, B = walkRails.nodes[b].p, y = floorY(lv) + 0.2;
-          if (!segs.has(lv)) segs.set(lv, []);
-          segs.get(lv)!.push(A[0], y, A[1], B[0], y, B[1]);
+          const B = walkRails.nodes[b];
+          for (const f of new Set([floorOf(A.level), floorOf(B.level)])) {
+            if (!segs.has(f)) segs.set(f, []);
+            segs.get(f)!.push(A.p[0], floorY(A.level) + 0.2, A.p[1], B.p[0], floorY(B.level) + 0.2, B.p[1]);
+          }
         }
       });
       for (const [lv, arr] of segs) {
@@ -2425,12 +2450,13 @@ export function VenueView() {
     const setFloor = (f: Floor) => {
       currentFloor = f;
       applyVisibility();
-      if (current === "walk") {
+      // 歩いていて、線の上ですでにその階にいる（階段をのぼって階が変わった）ときは、立つ所を変えない
+      const onThisFloor = current === "walk" && railPos && (railY(railPos) > (floorY(2) + floorY(4)) / 2 ? 4 : 1) === f;
+      if (current === "walk" && !onThisFloor) {
         persp.position.y = eyeY();
         snapToRails();
       }
       focus.y = floorY(f);
-      if (current === "walk") persp.position.y = eyeY();
       if (current === "orbit" && controls) {
         controls.target.y = focus.y;
         controls.update();
@@ -2658,13 +2684,16 @@ export function VenueView() {
     const floorAt = (e: PointerEvent) => {
       const r = renderer.domElement.getBoundingClientRect();
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-      return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY(currentFloor)), new THREE.Vector3());
+      // 歩いているときは、いま立っている高さ（2F の通路など）の床で
+      const y = current === "walk" && railPos ? railY(railPos) : floorY(currentFloor);
+      return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
     };
     // 青い線（線路）をダブルタップしたら、その線の上へすぐ移る（ユーザーの指示）。向きは変えない
     const JUMP_NEAR = 2.5;
     const walkTo = (p: THREE.Vector3) => {
-      const tapHall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon([p.x, p.z], h.poly));
-      const q = tapHall ? nearestOnRails(walkRails, [p.x, p.z], tapHall.id) : null;
+      // いま立っている階の線（ホールの中も通路も）から探す
+      const curLevel = railPos ? (railY(railPos) > floorY(4) - 1 ? 4 : railY(railPos) > floorY(2) - 1 ? 2 : 1) : currentFloor === 4 ? 4 : 1;
+      const q = nearestOnRails(walkRails, [p.x, p.z], undefined, [curLevel]);
       if (q && q.d <= JUMP_NEAR) {
         walkAnim = null;
         railPos = { a: q.a, b: q.b, t: q.t };
@@ -3346,7 +3375,19 @@ export function VenueView() {
           persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
           persp.position.z += (fz * fwd + fx * side) * WALK_SPEED * dt;
         }
-        persp.position.y = eyeY();
+        if (railPos) {
+          // 線の上の高さ（2F の通路・階段の途中）。階段で階が変わったら、見せる階も変える
+          const y = railY(railPos);
+          persp.position.y = y + EYE;
+          const f: Floor = y > (floorY(2) + floorY(4)) / 2 ? 4 : 1;
+          if (f !== currentFloor) {
+            currentFloor = f;
+            focus.y = floorY(f);
+            applyVisibility();
+            lastKeyWalk = "";
+            onFloor.current(f);
+          }
+        } else persp.position.y = eyeY();
         persp.rotation.set(pitch, yaw, 0, "YXZ");
       } else if (controls) {
         // 回転の中心は、いつも選んでいる階の床の上に（カーソルへの拡大で少しずれても戻す）
@@ -3609,6 +3650,9 @@ export function VenueView() {
 
   useEffect(() => api.current?.setView(view), [view]);
   useEffect(() => api.current?.setFloor(floor), [floor]);
+  useEffect(() => {
+    onFloor.current = (f) => setFloor(f);
+  }, []);
   useEffect(() => api.current?.setBoth(both), [both]);
   useEffect(() => {
     api.current?.setSurround(surround);

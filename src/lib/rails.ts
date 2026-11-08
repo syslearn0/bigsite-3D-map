@@ -5,7 +5,8 @@
 import { pointInPolygon, type XZ } from "./geo";
 import { DESK_L, type Booth, type HallLike, type Line } from "./layout";
 
-export type Rails = { nodes: { p: XZ; hall: string }[]; adj: number[][] };
+// hall：ホールの中の線はそのホール、通路・階段の線は ""。level：階（1・2・4）
+export type Rails = { nodes: { p: XZ; hall: string; level: number }[]; adj: number[][] };
 export type RailPos = { a: number; b: number; t: number }; // 辺 a→b の上の、a からの割合 t
 const R = 2.4; // 机の中心から線までの距離（机 0.45m＋いす 0.9m＋通路の半分ほど）
 const MERGE = 6; // 向かい合う線（通路をはさんで向かい合う机の線）がこれより近ければ、まん中で 1 本に
@@ -40,6 +41,7 @@ export function buildRails(
   halls: HallLike[],
 ): Rails {
   const hallPoly = new Map(halls.map((h) => [h.id, h.poly]));
+  const hallLevel = new Map(halls.map((h) => [h.id, h.level]));
   // 机（番号）ごとの中心と通路の向き
   type Pt = {
     p: XZ;
@@ -237,7 +239,7 @@ export function buildRails(
     for (let gx = Math.floor((p[0] - SNAP) / cell); gx <= Math.floor((p[0] + SNAP) / cell); gx++)
       for (let gz = Math.floor((p[1] - SNAP) / cell); gz <= Math.floor((p[1] + SNAP) / cell); gz++)
         for (const j of nodeGrid.get(`${gx},${gz}`) ?? []) if (nodes[j].hall === hall && dist(nodes[j].p, p) < SNAP) return j;
-    nodes.push({ p, hall });
+    nodes.push({ p, hall, level: hallLevel.get(hall) ?? 1 });
     const i = nodes.length - 1;
     nodeKey.set(k, i);
     const g = key(p[0], p[1]);
@@ -548,16 +550,19 @@ export function buildRails(
 }
 
 // いちばん近い線の上の点（hall を渡したときは、そのホールの線だけ）
+// levels を渡したときは、両端がその階の線だけ
 export function nearestOnRails(
   r: Rails,
   p: XZ,
   hall?: string,
+  levels?: number[],
 ): (RailPos & { at: XZ; d: number }) | null {
   let best: (RailPos & { at: XZ; d: number }) | null = null;
   r.adj.forEach((ns, a) => {
     if (hall && r.nodes[a].hall !== hall) return;
+    if (levels && !levels.includes(r.nodes[a].level)) return;
     for (const b of ns) {
-      if (b < a) continue;
+      if (b < a || (levels && !levels.includes(r.nodes[b].level))) continue;
       const A = r.nodes[a].p,
         B = r.nodes[b].p;
       const dx = B[0] - A[0],
@@ -702,4 +707,94 @@ export function railPath(r: Rails, from: RailPos, to: RailPos): XZ[] | null {
     out.push(r.nodes[i].p);
   out.push(start);
   return out.reverse();
+}
+
+// 通路・広場・階段の線（scripts/build-corridors.ts で作ったもの）を足し、ホールの出入口でホールの中の線とつなぐ。
+// desks：ホールごとの机（出入口からホールの中の線へまっすぐ結ぶとき、机をよける）
+export type Corridors = { lines: { level: number; pts: XZ[] }[]; stairs: { a: XZ; la: number; b: XZ; lb: number; kind: string }[] };
+export function addCorridors(
+  r: Rails,
+  c: Corridors,
+  doors: { at: XZ; level: number; hall: string }[],
+  exits: { at: XZ; level: number }[],
+  halls: { id: string; level: number; poly: XZ[]; closed?: string }[],
+  desks: Map<string, XZ[]>,
+  gaps: { a: XZ; b: XZ }[] = [],
+): Rails {
+  const nodes = r.nodes.slice();
+  const edges = new Set<string>();
+  r.adj.forEach((ns, a) => ns.forEach((b) => b > a && edges.add(`${a},${b}`)));
+  const addEdge = (a: number, b: number) => a !== b && edges.add(a < b ? `${a},${b}` : `${b},${a}`);
+  const grid = new Map<string, number[]>();
+  const gk = (p: XZ) => `${Math.floor(p[0] / 4)},${Math.floor(p[1] / 4)}`;
+  nodes.forEach((n, i) => (grid.get(gk(n.p)) ?? grid.set(gk(n.p), []).get(gk(n.p))!).push(i));
+  const near = (p: XZ, r2: number, ok: (i: number) => boolean) => {
+    let best = -1, bd = r2;
+    for (let gx = Math.floor((p[0] - r2) / 4); gx <= Math.floor((p[0] + r2) / 4); gx++)
+      for (let gz = Math.floor((p[1] - r2) / 4); gz <= Math.floor((p[1] + r2) / 4); gz++)
+        for (const j of grid.get(`${gx},${gz}`) ?? []) {
+          const d = dist(nodes[j].p, p);
+          if (d < bd && ok(j)) [best, bd] = [j, d];
+        }
+    return best;
+  };
+  // 通路の点（同じ階で 0.8m 以内の点は 1 つに）
+  const corridorNode = (p: XZ, level: number) => {
+    const j = near(p, 0.8, (i) => nodes[i].hall === "" && nodes[i].level === level);
+    if (j >= 0) return j;
+    nodes.push({ p, hall: "", level });
+    (grid.get(gk(p)) ?? grid.set(gk(p), []).get(gk(p))!).push(nodes.length - 1);
+    return nodes.length - 1;
+  };
+  for (const ln of c.lines) {
+    let prev = -1;
+    for (const p of ln.pts) {
+      const i = corridorNode(p, ln.level);
+      if (prev >= 0) addEdge(prev, i);
+      prev = i;
+    }
+  }
+  for (const s of c.stairs) addEdge(corridorNode(s.a, s.la), corridorNode(s.b, s.lb));
+  // 出入口・出口：通路の線の近い点と、ホールの中の線の近い点を、出入口の所を通って結ぶ
+  const clearOfDesks = (a: XZ, b: XZ, hall: string) => {
+    const list = desks.get(hall) ?? [];
+    const L = dist(a, b), n = Math.max(1, Math.ceil(L / 0.5));
+    for (let k = 0; k <= n; k++) {
+      const q: XZ = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+      for (const d of list) if (Math.abs(d[0] - q[0]) < 1 && Math.abs(d[1] - q[1]) < 1 && dist(d, q) < 0.9) return false;
+    }
+    return true;
+  };
+  const link = (at: XZ, level: number, hall: string | null) => {
+    const out = near(at, 8, (i) => nodes[i].hall === "" && nodes[i].level === level);
+    const hallsHere = hall ? [hall] : halls.filter((h) => h.level === level && !h.closed && edgeDist(at, h.poly) < 6).map((h) => h.id);
+    for (const h of hallsHere) {
+      const inn = near(at, 30, (i) => nodes[i].hall === h && clearOfDesks(at, nodes[i].p, h));
+      if (inn < 0) continue;
+      nodes.push({ p: at, hall: "", level });
+      const di = nodes.length - 1;
+      addEdge(di, inn);
+      if (out >= 0) addEdge(di, out);
+    }
+  };
+  for (const d of doors) link(d.at, d.level, d.hall);
+  for (const e of exits) link(e.at, e.level, null);
+  // となりのホールとの壁の切れ目（東1〜3 のつなぎ目など）：両側のホールの中の線を、切れ目のまん中を通って結ぶ
+  for (const g of gaps) {
+    const m: XZ = [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2];
+    const both = halls.filter((h) => !h.closed && edgeDist(m, h.poly) < 3);
+    if (both.length < 2) continue;
+    const ends = both.map((h) => near(m, 25, (i) => nodes[i].hall === h.id && clearOfDesks(m, nodes[i].p, h.id)));
+    if (ends.some((e) => e < 0)) continue;
+    nodes.push({ p: m, hall: "", level: both[0].level });
+    const mi = nodes.length - 1;
+    for (const e of ends) addEdge(mi, e);
+  }
+  const adj: number[][] = nodes.map(() => []);
+  for (const e of edges) {
+    const [a, b] = e.split(",").map(Number);
+    adj[a].push(b);
+    adj[b].push(a);
+  }
+  return { nodes, adj };
 }

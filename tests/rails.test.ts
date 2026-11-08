@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildRails, moveOnRails, nearestOnRails, railPath, railPoint } from "../src/lib/rails";
+import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPath, railPoint, type Corridors } from "../src/lib/rails";
 import { expandBooths, type HallLike, type Line } from "../src/lib/layout";
 
 // 2 つの島が 7m おきに並んだ、四角いホール
@@ -90,4 +90,35 @@ test("見本の配置：どのホールも線が 1 つにつながり、行き�
   for (const [h, set] of perHall) assert.equal(set.size, 1, `${h} の線が ${set.size} つに分かれている`);
   const dead = r.adj.filter((ns) => ns.length === 1).length;
   assert.equal(dead, 0);
+});
+
+test("通路・階段の線を足すと、ホールの中から出入口・階段を通って 2F と 4F まで行ける", async () => {
+  const layout = (await import("../src/data/layout-sample.json")).default as unknown as { lines: Line[] };
+  const venue = (await import("../src/data/venue.json")).default as unknown as {
+    halls: (HallLike & { id: string })[];
+    doors: { at: [number, number]; level: number; hall: string }[];
+    exits: { at: [number, number]; level: number }[];
+    wallGaps: { a: [number, number]; b: [number, number] }[];
+  };
+  const corridors = (await import("../src/data/corridors.json")).default as unknown as Corridors;
+  const bs = expandBooths(layout.lines, venue.halls);
+  const desks = new Map<string, [number, number][]>();
+  for (const b of bs) (desks.get(b.hall) ?? desks.set(b.hall, []).get(b.hall)!).push(b.at);
+  const r = addCorridors(buildRails(layout.lines, bs, venue.halls), corridors, venue.doors, venue.exits, venue.halls, desks, venue.wallGaps);
+  const from = nearestOnRails(r, bs.find((b) => b.code === "東K-13a")!.at, "E2")!;
+  // 線をたどって行ける階
+  const seen = new Set<number>([from.a]);
+  const st = [from.a];
+  while (st.length)
+    for (const w of r.adj[st.pop()!])
+      if (!seen.has(w)) {
+        seen.add(w);
+        st.push(w);
+      }
+  const levels = new Set([...seen].map((i) => r.nodes[i].level));
+  assert.ok(levels.has(2), "2F へ行けない");
+  assert.ok(levels.has(4), "4F へ行けない");
+  // 西・南のホールの中の線へも行ける
+  const halls = new Set([...seen].map((i) => r.nodes[i].hall).filter(Boolean));
+  for (const h of ["E1", "E3", "E7", "W1", "W3", "S1", "S3"]) assert.ok(halls.has(h), `${h} へ行けない`);
 });

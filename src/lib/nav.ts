@@ -41,7 +41,8 @@ function fill(g: Grid, poly: XZ[], f: (i: number) => void) {
   }
 }
 
-export function buildGrid(v: NavVenue, level: number, desks: XZ[]): Grid {
+// outside：ホールの中を歩けないことにする（ホールの外の通路だけの升目。出入口のまわりは残す）
+export function buildGrid(v: NavVenue, level: number, desks: XZ[], outside = false): Grid {
   const halls = v.halls.map((h, i) => ({ ...h, i })).filter((h) => h.level === level && !h.closed);
   const areas = v.areas.filter((a) => a.level === level && !a.sur && !/駐車場/.test(a.name));
   const pts = [...halls.flatMap((h) => h.poly), ...areas.flatMap((a) => a.poly)];
@@ -84,7 +85,37 @@ export function buildGrid(v: NavVenue, level: number, desks: XZ[]): Grid {
     const L = Math.hypot(gp.b[0] - gp.a[0], gp.b[1] - gp.a[1]), n = Math.max(1, Math.ceil(L));
     for (let k = 0; k <= n; k++) mark([gp.a[0] + ((gp.b[0] - gp.a[0]) * k) / n, gp.a[1] + ((gp.b[1] - gp.a[1]) * k) / n], 1.5);
   }
+  if (outside) for (let i = 0; i < g.region.length; i++) if (g.region[i] > 0 && !g.portal[i]) g.region[i] = -1;
   return g;
+}
+
+// 升目ごとの「壁（歩けない所）からの距離」から、通りにくさを作る：壁ぎわほど通りにくい（道が通路のまん中を通る）
+export function centerWeights(g: Grid): Float32Array {
+  const n = g.w * g.h;
+  const d = new Float32Array(n).fill(1e9);
+  const q: number[] = [];
+  for (let i = 0; i < n; i++)
+    if (g.region[i] < 0) {
+      d[i] = 0;
+      q.push(i);
+    }
+  // 4 方向の距離で広げる（だいたいでよい）
+  for (let k = 0; k < q.length; k++) {
+    const i = q[k], c = i % g.w, r = (i - c) / g.w;
+    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const cc = c + dc, rr = r + dr;
+      if (cc < 0 || rr < 0 || cc >= g.w || rr >= g.h) continue;
+      const j = rr * g.w + cc;
+      if (d[j] > d[i] + 1) {
+        d[j] = d[i] + 1;
+        q.push(j);
+      }
+    }
+  }
+  const w = new Float32Array(n);
+  // 壁から 1m で 1 + 12/2^1.3 ≒ 5.9、15m で 1 + 12/16^1.3 ≒ 1.3：広い通路でも、まん中の 1 本に道が集まる
+  for (let i = 0; i < n; i++) w[i] = 1 + 12 / Math.pow(1 + Math.min(d[i], 40) * CELL, 1.3);
+  return w;
 }
 
 const cellOf = (g: Grid, p: XZ) => {
@@ -113,7 +144,8 @@ function nearestFree(g: Grid, p: XZ, rad: number): number {
 }
 
 // from から、goals のうちいちばん近い所までの道。返すのは点の列と、何番目の goal か・道のりの長さ
-export function findPath(g: Grid, from: XZ, goals: XZ[]): { path: XZ[]; goal: number; length: number } | null {
+// weight：升目ごとの通りにくさ（1 がふつう。通路のまん中を通るように、壁ぎわを通りにくくするときに使う）
+export function findPath(g: Grid, from: XZ, goals: XZ[], weight?: Float32Array): { path: XZ[]; goal: number; length: number } | null {
   if (!g.w) return null;
   const s = nearestFree(g, from, 6);
   if (s < 0) return null;
@@ -180,7 +212,7 @@ export function findPath(g: Grid, from: XZ, goals: XZ[]): { path: XZ[]; goal: nu
       if (dc && dr && (g.region[r * g.w + cc] < 0 || g.region[rr * g.w + c] < 0)) continue;
       // ホールの壁をこえるのは、出入口などの所だけ
       if (rj !== ri && !(g.portal[i] || g.portal[j])) continue;
-      const nd = d + cost * CELL;
+      const nd = d + cost * CELL * (weight ? (weight[i] + weight[j]) / 2 : 1);
       if (nd < dist[j]) {
         dist[j] = nd;
         prev[j] = i;
@@ -214,7 +246,7 @@ function clearLine(g: Grid, a: XZ, b: XZ) {
   }
   return true;
 }
-function simplify(g: Grid, pts: XZ[]): XZ[] {
+export function simplify(g: Grid, pts: XZ[]): XZ[] {
   if (pts.length < 3) return pts.slice();
   const out: XZ[] = [pts[0]];
   let k = 0;
