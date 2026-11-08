@@ -3490,23 +3490,24 @@ export function VenueView() {
             </button>
           ))}
         </div>
-        <h3>配置</h3>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <a className="chip" href="/editor" style={{ border: "1px solid var(--line)", textDecoration: "none", color: "var(--fg)" }}>
-            島のエディタ
-          </a>
-          {savedLines && (
-            <button
-              className="chip"
-              onClick={() => {
-                clearLayout(LAYOUT_KEY);
-                location.reload();
-              }}
-            >
-              見本に戻す
-            </button>
-          )}
-        </div>
+        {/* 島のエディタへのリンクは出さない（ユーザーの指示。エディタは /editor を直接開いたときだけ）。
+            エディタで作った配置を使っているときだけ、見本に戻すボタンを出す */}
+        {savedLines && (
+          <>
+            <h3>配置</h3>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                className="chip"
+                onClick={() => {
+                  clearLayout(LAYOUT_KEY);
+                  location.reload();
+                }}
+              >
+                見本に戻す
+              </button>
+            </div>
+          </>
+        )}
         <button
           className="chip"
           style={{ marginTop: 12 }}
