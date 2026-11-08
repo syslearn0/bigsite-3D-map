@@ -31,14 +31,20 @@ type Venue = {
     stations: { name: string; line: string; at: XZ; y: number }[];
     // 周辺をくわしく：建物（PLATEAU の形と計測高さ。kind "canopy" は屋根のある歩道などの屋根）、緑地と駐車場、木、横断歩道、
     // 駅の出入口、バス停、タクシー乗り場、歩行者デッキへ上る階段
-    buildings?: { poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station"; est?: string; body?: number }[]; // station：高架の下の部分（body の高さまで）とホームの上の屋根
+    // station：高架の下の部分（body の高さまで）とホームの上の屋根。bridgeHouse：駅の出口の歩道橋の通路と建物（base より上だけ）。
+    // tube：歩道橋から地上へ下りる屋根つきのエスカレーター（slope の上の端 y から下の端の地面へ傾く）
+    buildings?: {
+      poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station" | "bridgeHouse" | "tube"; est?: string; body?: number; base?: number;
+      slope?: { from: XZ; to: XZ; y: number };
+    }[];
     greens?: { poly: XZ[]; kind: "grass" | "wood" | "pitch" | "parking" }[];
     trees?: XZ[];
     crossings?: XZ[][];
     entrances?: { at: XZ; name: string; line: string }[];
     busStops?: { at: XZ; name: string }[];
     taxis?: XZ[];
-    deckStairs?: { from: XZ; to: XZ; w?: number; esc?: boolean }[]; // デッキと地上をむすぶ階段（esc：エスカレーター）
+    // デッキと地上をむすぶ階段（esc：エスカレーター。y：上の端の高さ、ないときは 2F。tower：階段室の箱の中なので段は描かない）
+    deckStairs?: { from: XZ; to: XZ; w?: number; esc?: boolean; y?: number; tower?: boolean }[];
     decks?: { poly: XZ[]; holes?: XZ[][] }[]; // 歩行者デッキの広場（2F の高さの面）
     deckRails?: XZ[][]; // 広場のふちの手すり（ほかのデッキや会場の床につながる所は除いてある）
   };
@@ -743,6 +749,60 @@ export function VenueView() {
           });
           return;
         }
+        if (b.kind === "bridgeHouse") {
+          // 駅の出口の歩道橋の通路と建物：base（床の板の下）から屋根までの箱。下は 8m ごとの太い柱で、道や歩道が通れる
+          const m = new THREE.Mesh(new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: b.h - (b.base ?? 0), bevelEnabled: false }), matOf(b.h, i));
+          m.rotation.x = -Math.PI / 2;
+          m.position.y = b.base ?? 0;
+          surroundings.add(m);
+          const cx = b.poly.reduce((a, q) => a + q[0], 0) / b.poly.length, cz = b.poly.reduce((a, q) => a + q[1], 0) / b.poly.length;
+          let next = 2, run = 0;
+          b.poly.forEach((q, k) => {
+            const r = b.poly[(k + 1) % b.poly.length], L = Math.hypot(r[0] - q[0], r[1] - q[1]);
+            for (; next <= run + L; next += 8) {
+              const d = next - run, x = q[0] + ((r[0] - q[0]) * d) / (L || 1), z = q[1] + ((r[1] - q[1]) * d) / (L || 1), dl = Math.hypot(cx - x, cz - z) || 1;
+              const px = x + ((cx - x) / dl) * 0.8, pz = z + ((cz - z) / dl) * 0.8;
+              if (pointInPolygon([px, pz], b.poly)) posts.push([px, pz, -(b.base ?? 0)]);
+            }
+            run += L;
+          });
+          return;
+        }
+        if (b.kind === "tube" && b.slope) {
+          // 屋根つきのエスカレーター：床は上の端（歩道橋の床）から下の端（地面）へ、屋根はその 3m 上。
+          // 横はガラス（少し透ける）なので、中のエスカレーターが見える
+          const { from, to, y: top } = b.slope;
+          const L = Math.hypot(to[0] - from[0], to[1] - from[1]) || 1, ux = (to[0] - from[0]) / L, uz = (to[1] - from[1]) / L;
+          const tAt = (q: XZ) => Math.max(0, Math.min(1, ((q[0] - from[0]) * ux + (q[1] - from[1]) * uz) / L));
+          const floorAt = (q: XZ) => Math.max(0, top * (1 - tAt(q)) - 0.4);
+          const roofAt = (q: XZ) => top * (1 - tAt(q)) + 3.2;
+          const pts = b.poly;
+          const roofPos: number[] = [];
+          for (const [a0, a1, a2] of THREE.ShapeUtils.triangulateShape(pts.map(([x, z]) => new THREE.Vector2(x, z)), []))
+            for (const k of [a0, a2, a1]) roofPos.push(pts[k][0], roofAt(pts[k]), pts[k][1]);
+          const wallPos: number[] = [];
+          pts.forEach((q, k) => {
+            const r = pts[(k + 1) % pts.length];
+            const q0 = [q[0], floorAt(q), q[1]], q1 = [q[0], roofAt(q), q[1]], r0 = [r[0], floorAt(r), r[1]], r1 = [r[0], roofAt(r), r[1]];
+            wallPos.push(...q0, ...r0, ...r1, ...q0, ...r1, ...q1);
+          });
+          const geo = (pos: number[]) => {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+            g.computeVertexNormals();
+            return g;
+          };
+          surroundings.add(
+            new THREE.Mesh(geo(roofPos), new THREE.MeshLambertMaterial({ color: 0xe4e6e3, side: THREE.DoubleSide })),
+            new THREE.Mesh(geo(wallPos), new THREE.MeshLambertMaterial({ color: 0xa9c2cf, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })),
+          );
+          // 下が空いている所（地面から床まで）は、8m ごとの柱
+          for (let d = 4; d < L - 4; d += 8) {
+            const q: XZ = [from[0] + ux * d, from[1] + uz * d];
+            if (floorAt(q) > 2.5) posts.push([q[0], q[1], -floorAt(q)]);
+          }
+          return;
+        }
         if (b.kind === "canopy") {
           // 屋根の板（厚さ 0.3m）と、ふちに 8m ごとの柱
           const g = new THREE.ExtrudeGeometry(shapeOf(b.poly), { depth: 0.3, bevelEnabled: false });
@@ -845,22 +905,25 @@ export function VenueView() {
       // デッキへ上る階段（デッキにつく端が 2F の高さ）：段の板を並べる
       for (const st of sur.deckStairs ?? []) {
         const dx = st.from[0] - st.to[0], dz = st.from[1] - st.to[1], run = Math.hypot(dx, dz);
-        const n = Math.max(3, Math.round(DECK_Y / 0.2));
-        const im = new THREE.InstancedMesh(new THREE.BoxGeometry(st.w ?? 3, 1, run / n + 0.02), new THREE.MeshLambertMaterial({ color: st.esc ? 0x6f8fb3 : 0xc9c2b0 }), n);
+        const topY = st.y ?? DECK_Y;
+        const n = st.tower ? 0 : Math.max(3, Math.round(topY / 0.2));
+        const im = new THREE.InstancedMesh(new THREE.BoxGeometry(st.w ?? 3, 1, run / Math.max(n, 1) + 0.02), new THREE.MeshLambertMaterial({ color: st.esc ? 0x6f8fb3 : 0xc9c2b0 }), n);
         const o = new THREE.Object3D();
         for (let i = 0; i < n; i++) {
-          const f = (i + 0.5) / n, top = (DECK_Y * (i + 1)) / n, th = Math.min(1.5, top);
+          const f = (i + 0.5) / n, top = (topY * (i + 1)) / n, th = Math.min(1.5, top);
           o.position.set(st.to[0] + dx * f, top - th / 2, st.to[1] + dz * f);
           o.rotation.set(0, Math.atan2(dx, dz), 0);
           o.scale.set(1, th, 1);
           o.updateMatrix();
           im.setMatrixAt(i, o.matrix);
         }
-        im.computeBoundingSphere();
-        surroundings.add(im);
+        if (n) {
+          im.computeBoundingSphere();
+          surroundings.add(im);
+        }
         // 札（寄ったときだけ）：デッキと地上のあいだを上り下りできる所
         const t = textSprite(st.esc ? "⇅ エスカレーター" : "⇅ 階段", { bg: st.esc ? "rgba(60,95,140,.92)" : "rgba(150,120,80,.92)", height: 2.4, px: 28 });
-        t.position.set((st.from[0] + st.to[0]) / 2, DECK_Y / 2 + 3, (st.from[1] + st.to[1]) / 2);
+        t.position.set((st.from[0] + st.to[0]) / 2, st.tower ? topY + 4.5 : topY / 2 + 3, (st.from[1] + st.to[1]) / 2);
         surroundings.add(t);
         addLabel(t, "sur");
       }

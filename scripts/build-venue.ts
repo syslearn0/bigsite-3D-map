@@ -1498,7 +1498,12 @@ if (existsSync("data/osm/coast.json")) {
   };
   // kind "station"：高架の線路が上を通る建物（ゆりかもめの駅）。線路とホームが見えるよう、高架の下の低い部分（body の高さまで）と、
   // ホームの上の屋根（h の高さ）に分けて描く
-  type SBuilding = { poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station"; est?: string; body?: number };
+  // kind "bridgeHouse"：駅の出口の歩道橋の、道の上を渡る通路と出口の建物（base の高さから上だけ。下は柱）。
+  // kind "tube"：歩道橋から地上へ下りる、屋根つきのエスカレーター（slope の上の端から下の端へ、床と屋根が傾く）
+  type SBuilding = {
+    poly: XZ[]; h: number; name?: string; kind?: "canopy" | "station" | "bridgeHouse" | "tube"; est?: string; body?: number; base?: number;
+    slope?: { from: XZ; to: XZ; y: number };
+  };
   const railPts: { p: XZ; y: number }[] = [];
   for (const l of sur.lines.filter((x) => x.kind === "rail" && x.y > 1))
     for (let i = 0; i + 1 < l.pts.length; i++) {
@@ -1673,7 +1678,7 @@ if (existsSync("data/osm/coast.json")) {
       ...sur.lines.filter((l) => l.kind === "deck").map((l) => Math.min(...l.pts.slice(1).map((b2, i) => segDist(q, l.pts[i], b2))) - l.w / 2),
       ...lv2Polys.map((pl) => polyDist(q, pl)),
     );
-  const deckStairs: { from: XZ; to: XZ; w: number; esc?: boolean }[] = [];
+  const deckStairs: { from: XZ; to: XZ; w: number; esc?: boolean; y?: number; tower?: boolean }[] = []; // y：上の端の高さ（ないときは 2F）
   // 両方の端がデッキの広場の中にある階段は、広場の形が階段の上まで含んでいる（東京ビッグサイト駅の南の、屋根つきの
   // エスカレーターと階段 way 243799255：OSM の広場の細い尾）。階段の形（幅＋1m）を広場から切りとってから、上の端を決める
   const stairRect = (pts: XZ[], w: number): [number, number][] => {
@@ -1798,6 +1803,80 @@ if (existsSync("data/osm/coast.json")) {
         flush();
       });
   Object.assign(sur, { decks, deckRails });
+  // 駅の出口の歩道橋（有明駅）：PLATEAU では、道の上を渡る通路・出口の建物・屋根つきのエスカレーターが、まとめて地面から
+  // 屋根まで詰まった 1 つの箱（高さ 13〜14m）になっていて、エスカレーターが建物の壁に貼りついて見えた（ユーザーの指摘）。
+  // OSM のエスカレーター（conveying）が床の 2 割より多くを通る、小さめの建物（100〜1500 m²）を、
+  // ・エスカレーターに沿った帯（幅 9m）→ 傾いた屋根つきの通路（kind "tube"）
+  // ・残り → 歩道橋の高さから上だけの建物（kind "bridgeHouse"、下は柱で、車や人が通れる）
+  // に分ける。歩道橋の床の高さは資料がないので、PLATEAU の屋根の高さから 3.5m（通路の天井まで）引いた見当
+  {
+    const rg = (r: XZ[]): [number, number][] => [...r, r[0]].map(([x, z]) => [x, z]);
+    const ringA = (r: XZ[]) => Math.abs(r.reduce((s2, p, i) => s2 + p[0] * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * p[1], 0) / 2);
+    const mpA = (mp: [number, number][][][]) => mp.reduce((s2, pg) => s2 + ringA(pg[0].slice(0, -1) as XZ[]) - pg.slice(1).reduce((s3, h) => s3 + ringA(h.slice(0, -1) as XZ[]), 0), 0);
+    const band = (a2: XZ, b2: XZ, hw: number, ext0: number, ext1: number): [number, number][] => {
+      const L = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1, ux = (b2[0] - a2[0]) / L, uz = (b2[1] - a2[1]) / L;
+      const p0: XZ = [a2[0] + ux * ext0, a2[1] + uz * ext0], p1: XZ = [b2[0] + ux * ext1, b2[1] + uz * ext1];
+      const r: XZ[] = [[p0[0] - uz * hw, p0[1] + ux * hw], [p1[0] - uz * hw, p1[1] + ux * hw], [p1[0] + uz * hw, p1[1] - ux * hw], [p0[0] + uz * hw, p0[1] - ux * hw]];
+      return [...r, r[0]].map(([x, z]) => [x, z]);
+    };
+    const escs = deckStairs.filter((st) => st.esc);
+    const found: { i: number; b: SBuilding; tubes: { poly: XZ[]; st: (typeof deckStairs)[number] }[]; rest: XZ[][] }[] = [];
+    buildings.forEach((b, i) => {
+      if (b.kind) return;
+      const A = ringA(b.poly);
+      if (A < 100 || A > 1500) return;
+      const own = [rg(b.poly)];
+      const hit = escs.filter((st) => mpA(polygonClipping.intersection(own, [band(st.from, st.to, 4, 0, 0)])) > 0.2 * A);
+      if (!hit.length) return;
+      // 帯は、上の端から 3m 下りた所から、下の端の 2m 先まで（上の端のまわりは出口の建物のほう）
+      const tubes = hit.flatMap((st) =>
+        polygonClipping.intersection(own, [band(st.from, st.to, 4.5, 3, 2)]).map((pg) => ({ poly: pg[0].slice(0, -1).map(([x, z]) => [x, z] as XZ), st })),
+      );
+      const rest = polygonClipping
+        .difference(own, ...hit.map((st) => [band(st.from, st.to, 4.5, 3, 2)]))
+        .filter((pg) => ringA(pg[0].slice(0, -1) as XZ[]) >= 10)
+        .map((pg) => pg[0].slice(0, -1).map(([x, z]) => [x, z] as XZ));
+      found.push({ i, b, tubes, rest });
+    });
+    if (found.length) {
+      const deckY = Math.round((found.reduce((s2, f) => s2 + f.b.h, 0) / found.length - 3.5) * 2) / 2;
+      const est = `歩道橋の床の高さ ${deckY}m は、PLATEAU の屋根の高さから 3.5m 引いた見当`;
+      const near = (q: XZ, poly: XZ[], d: number) => pointInPolygon(q, poly) || polyDist(q, poly) < d;
+      // 歩道橋の床（OSM のデッキの線）：分けた建物にかかる線と、それにつながる線（駅とのつなぎも）を、この高さにする
+      const all = found.flatMap((f) => [...f.rest, ...f.tubes.map((t) => t.poly)]);
+      const lines = sur.lines.filter((l) => l.kind === "deck");
+      const on = new Set(lines.filter((l) => l.pts.some((q) => all.some((pl) => near(q, pl, 1)))));
+      for (let grow = true; grow; ) {
+        grow = false;
+        for (const l of lines)
+          if (!on.has(l) && [l.pts[0], l.pts.at(-1)!].some((q) => [...on].some((o) => Math.min(...o.pts.slice(1).map((b2, k) => segDist(q, o.pts[k], b2))) < 2))) {
+            on.add(l);
+            grow = true;
+          }
+      }
+      for (const l of on) l.y = deckY;
+      // 階段・エスカレーターの上の端も、この高さから。OSM の短い階段（長さが高さの 1.2 倍に足りない：折り返しの階段を短い線で
+      // 描いている）は、まっすぐ描くと壁のように立つので、まわり 5m 四方を地面から歩道橋の床までの階段室（箱）にする
+      for (const st of deckStairs) {
+        if (!all.some((pl) => near(st.from, pl, 3))) continue;
+        st.y = deckY;
+        if (!st.esc && Math.hypot(st.to[0] - st.from[0], st.to[1] - st.from[1]) < deckY * 1.2) {
+          st.tower = true;
+          const r = band(st.from, st.to, 2.5, -1, 1).slice(0, -1).map(([x, z]) => [x, z] as XZ);
+          buildings.push({ poly: r, h: deckY - 0.8, est: `折り返しの階段の階段室（${est}）` });
+        }
+      }
+      for (const f of [...found].reverse()) {
+        buildings.splice(
+          f.i,
+          1,
+          ...f.rest.map((poly) => ({ poly, h: f.b.h, kind: "bridgeHouse" as const, base: deckY - 0.8, est })),
+          ...f.tubes.map((t) => ({ poly: t.poly, h: f.b.h, kind: "tube" as const, slope: { from: t.st.from, to: t.st.to, y: deckY }, est })),
+        );
+      }
+      console.log(`駅の出口の歩道橋：PLATEAU の箱 ${found.length} 個を、通路・出口の建物 ${found.reduce((s2, f) => s2 + f.rest.length, 0)} と屋根つきのエスカレーター ${found.reduce((s2, f) => s2 + f.tubes.length, 0)} に分けた（床 ${deckY}m・デッキの線 ${on.size} 本）`);
+    }
+  }
   Object.assign(sur, { buildings, greens, trees: treesOut, crossings, entrances, busStops, taxis, deckStairs });
   console.log(`周辺：建物 ${buildings.filter((b) => !b.kind).length}（PLATEAU にないもの ${buildings.filter((b) => b.est).length}）・屋根 ${buildings.filter((b) => b.kind).length}・緑地と駐車場 ${greens.length}・木 ${treesOut.length}・横断歩道 ${crossings.length}・駅の出入口 ${entrances.length}・バス停 ${busStops.length}・デッキ ${sur.lines.filter((l) => l.kind === "deck").length}・デッキの階段 ${deckStairs.length}`);
   for (const b of buildings.filter((b2) => b2.est)) console.log(`  高さの目安：${b.name ?? "（名前なし）"} ${b.h}m（${b.est}）`);
