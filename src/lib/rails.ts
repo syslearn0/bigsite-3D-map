@@ -100,36 +100,61 @@ export function buildRails(lines: Line[], booths: Booth[], halls: HallLike[]): R
     if (!groups.has(q.group)) groups.set(q.group, []);
     groups.get(q.group)!.push(i);
   });
+  // 同じ所の点は 1 つにまとめる（向かい合う 2 つの島の線は、まん中に寄せると重なる。島の端の線の端も重なる）
+  const nodeKey = new Map<string, number>();
+  const nodeGrid = new Map<string, number[]>();
+  const nodeAt = (p: XZ, hall: string) => {
+    const k = `${hall}|${Math.round(p[0] * 3)}|${Math.round(p[1] * 3)}`;
+    const got = nodeKey.get(k);
+    if (got !== undefined) return got;
+    nodes.push({ p, hall });
+    const i = nodes.length - 1;
+    nodeKey.set(k, i);
+    const g = key(p[0], p[1]);
+    if (!nodeGrid.has(g)) nodeGrid.set(g, []);
+    nodeGrid.get(g)!.push(i);
+    return i;
+  };
+  // 島の列ごとに、線の端をそろえる所（u）：島の両端の少し先と、列の切れ目（横切る通路）のまん中
+  const cutsOf = new Map<number, number[]>();
+  lines.forEach((line, li) => {
+    if (line.wall) return;
+    const us = [...new Set(pts.filter((q) => q.line === li).map((q) => Math.round(q.u * 10) / 10))].sort((a, b) => a - b);
+    if (!us.length) return;
+    const cuts = [us[0] - EXT, us[us.length - 1] + EXT];
+    for (let k = 1; k < us.length; k++) if (us[k] - us[k - 1] > DESK_L * 1.9) cuts.push((us[k] + us[k - 1]) / 2);
+    cutsOf.set(li, cuts.sort((a, b) => a - b));
+  });
   for (const idx of groups.values()) {
     idx.sort((a, b) => pts[a].u - pts[b].u);
     let chain: number[] = [];
     const flush = () => {
       if (!chain.length) return;
-      const ids = chain.map((i) => {
-        nodes.push({ p: moved[i], hall: pts[i].hall });
-        return nodes.length - 1;
-      });
+      const li = pts[chain[0]].line, line = lines[li];
+      const ids = chain.map((i) => nodeAt(moved[i], pts[i].hall));
       for (let k = 1; k < ids.length; k++) addEdge(ids[k - 1], ids[k]);
-      // 両端をのばす（島の端をまわれるように）
-      for (const [end, prev] of [
-        [ids[0], ids[1]],
-        [ids[ids.length - 1], ids[ids.length - 2]],
+      // 両端をのばす：島の列は、列の向きにまっすぐ、端をそろえる所（cuts）まで。壁ぞいの列は、線の向きに EXT だけ
+      for (const [end, prev, sgn, ue] of [
+        [ids[0], ids[1], -1, pts[chain[0]].u],
+        [ids[ids.length - 1], ids[ids.length - 2], 1, pts[chain[chain.length - 1]].u],
       ] as const) {
         const e = nodes[end].p;
-        let dir: XZ;
-        if (prev !== undefined) {
+        let dir: XZ, len = EXT;
+        const cuts = cutsOf.get(li);
+        if (cuts) {
+          dir = [Math.cos(line.angle) * sgn, Math.sin(line.angle) * sgn];
+          const beyond = cuts.filter((c) => (c - ue) * sgn > 0.3).sort((a, b) => (a - b) * sgn);
+          len = beyond.length ? Math.abs(beyond[0] - ue) : EXT;
+        } else if (prev !== undefined) {
           const pp = nodes[prev].p, L = dist(e, pp) || 1;
           dir = [(e[0] - pp[0]) / L, (e[1] - pp[1]) / L];
-        } else {
-          const line = lines[pts[chain[0]].line];
-          dir = [Math.cos(line.angle) * (end === ids[0] ? -1 : 1), Math.sin(line.angle) * (end === ids[0] ? -1 : 1)];
-        }
-        const q: XZ = [e[0] + dir[0] * EXT, e[1] + dir[1] * EXT];
+        } else dir = [Math.cos(line.angle) * sgn, Math.sin(line.angle) * sgn];
+        const q: XZ = [e[0] + dir[0] * len, e[1] + dir[1] * len];
         const hall = nodes[end].hall;
         if (clearSeg(e, q, hall)) {
-          nodes.push({ p: q, hall });
-          addEdge(end, nodes.length - 1);
-          ends.push({ i: nodes.length - 1, dir });
+          const qi = nodeAt(q, hall);
+          addEdge(end, qi);
+          ends.push({ i: qi, dir });
         } else ends.push({ i: end, dir });
         if (ids.length === 1) break;
       }
@@ -141,77 +166,55 @@ export function buildRails(lines: Line[], booths: Booth[], halls: HallLike[]): R
     }
     flush();
   }
-  // 線の端を、近くのほかの線の端・線の点へつなぐ（机をよけて、ホールの中だけ）
-  const nodeGrid = new Map<string, number[]>();
-  const addToGrid = (i: number) => {
-    const k = key(nodes[i].p[0], nodes[i].p[1]);
-    if (!nodeGrid.has(k)) nodeGrid.set(k, []);
-    nodeGrid.get(k)!.push(i);
-  };
-  nodes.forEach((_, i) => addToGrid(i));
-  const nearestNode = (p: XZ, r: number, hall: string) => {
-    let best = -1, bd = r;
-    for (let gx = Math.floor((p[0] - r) / cell); gx <= Math.floor((p[0] + r) / cell); gx++)
-      for (let gz = Math.floor((p[1] - r) / cell); gz <= Math.floor((p[1] + r) / cell); gz++)
-        for (const j of nodeGrid.get(`${gx},${gz}`) ?? []) {
-          if (nodes[j].hall !== hall) continue;
-          const d = dist(p, nodes[j].p);
-          if (d < bd) [best, bd] = [j, d];
-        }
+  // 島を横切る線（ユーザーの指示：列の途切れている所にも線路を）：端をそろえる所で、島の中心線の上に点を置き、
+  // 両側の通路の線の端（同じ u にある）と結ぶ。となりの島の分とつながって、横切る通路の 1 本の線になる
+  const sideEnd = (li: number, u: number, sg: number, hall: string) => {
+    const line = lines[li];
+    const lc = Math.cos(line.angle), ls = Math.sin(line.angle);
+    let best = -1, bv = 6;
+    for (const i of ends.map((e) => e.i)) {
+      const nd = nodes[i];
+      if (nd.hall !== hall) continue;
+      const dx = nd.p[0] - line.start[0], dz = nd.p[1] - line.start[1];
+      const nu = dx * lc + dz * ls, nv = -dx * ls + dz * lc;
+      if (Math.abs(nu - u) > 0.4 || nv * sg <= 0.5 || Math.abs(nv) >= bv) continue;
+      [best, bv] = [i, Math.abs(nv)];
+    }
     return best;
   };
-  // 島の列の切れ目（横切る通路）と島の両端に、島を横切る線を足す（両側の通路の線をつなぐ。ユーザーの指示：
-  // 列の途切れている所にも線路を）。島の中心線の上に点を置き、両側の通路の線の、いちばん近い点と結ぶ
   lines.forEach((line, li) => {
-    if (line.wall) return;
-    const us = [...new Set(pts.filter((q) => q.line === li).map((q) => Math.round(q.u * 10) / 10))].sort((a, b) => a - b);
-    if (!us.length) return;
+    const cuts = cutsOf.get(li);
+    if (!cuts) return;
     const lc = Math.cos(line.angle), ls = Math.sin(line.angle);
-    const left: XZ = [-ls, lc];
-    const at = (u: number, v: number): XZ => [line.start[0] + u * lc + v * left[0], line.start[1] + u * ls + v * left[1]];
-    const cuts: number[] = [us[0] - DESK_L / 2 - 1.4, us[us.length - 1] + DESK_L / 2 + 1.4];
-    for (let k = 1; k < us.length; k++) if (us[k] - us[k - 1] > DESK_L * 1.9) cuts.push((us[k] + us[k - 1]) / 2);
     const hall = pts.find((q) => q.line === li)!.hall;
     for (const u of cuts) {
-      const c = at(u, 0);
+      const c: XZ = [line.start[0] + u * lc, line.start[1] + u * ls];
       if (!clearAt(c) || !pointInPolygon(c, hallPoly.get(hall) ?? [c])) continue;
-      const ends = [-1, 1].map((sg) => nearestNode(at(u, sg * (R + 0.4)), 3.2, hall)).filter((j) => j >= 0 && clearSeg(c, nodes[j].p, hall));
-      if (ends.length < 2) continue;
-      nodes.push({ p: c, hall });
-      const ci = nodes.length - 1;
-      addToGrid(ci);
-      for (const j of ends) addEdge(ci, j);
+      const se = [-1, 1].map((sg) => sideEnd(li, u, sg, hall)).filter((j) => j >= 0 && clearSeg(c, nodes[j].p, hall));
+      if (se.length < 2) continue;
+      const ci = nodeAt(c, hall);
+      for (const j of se) addEdge(ci, j);
     }
   });
-  const adjTmp = new Map<number, Set<number>>();
-  for (const e of edges) {
-    const [a, b] = e.split(",").map(Number);
-    if (!adjTmp.has(a)) adjTmp.set(a, new Set());
-    if (!adjTmp.has(b)) adjTmp.set(b, new Set());
-    adjTmp.get(a)!.add(b);
-    adjTmp.get(b)!.add(a);
-  }
+  // まだどこにもつながっていない線の端だけ、近くの点とつなぐ（まっすぐ先か、直角の向きだけ。ななめにはつながない）
+  const deg = new Map<number, number>();
+  for (const e of edges) for (const v of e.split(",").map(Number)) deg.set(v, (deg.get(v) ?? 0) + 1);
   for (const { i, dir } of ends) {
+    if ((deg.get(i) ?? 0) > 1) continue;
     const p = nodes[i].p;
-    const cand: { j: number; d: number }[] = [];
+    let best = -1, bd = LINK;
     for (let gx = Math.floor((p[0] - LINK) / cell); gx <= Math.floor((p[0] + LINK) / cell); gx++)
       for (let gz = Math.floor((p[1] - LINK) / cell); gz <= Math.floor((p[1] + LINK) / cell); gz++)
         for (const j of nodeGrid.get(`${gx},${gz}`) ?? []) {
-          if (j === i || nodes[j].hall !== nodes[i].hall || adjTmp.get(i)?.has(j)) continue;
+          if (j === i || nodes[j].hall !== nodes[i].hall) continue;
           const d = dist(p, nodes[j].p);
-          if (d > LINK) continue;
-          // うしろ（来た向き）へ戻るつなぎは要らない
-          if (d > 0.5 && ((nodes[j].p[0] - p[0]) * dir[0] + (nodes[j].p[1] - p[1]) * dir[1]) / d < -0.3) continue;
-          cand.push({ j, d });
+          if (d >= bd || d < 0.2) continue;
+          const cos = ((nodes[j].p[0] - p[0]) * dir[0] + (nodes[j].p[1] - p[1]) * dir[1]) / d;
+          if (!(cos > 0.97 || Math.abs(cos) < 0.15)) continue;
+          if (!clearSeg(p, nodes[j].p, nodes[i].hall)) continue;
+          [best, bd] = [j, d];
         }
-    cand.sort((a, b) => a.d - b.d);
-    let n = 0;
-    for (const { j } of cand) {
-      if (n >= 2) break;
-      if (!clearSeg(p, nodes[j].p, nodes[i].hall)) continue;
-      addEdge(i, j);
-      n++;
-    }
+    if (best >= 0) addEdge(i, best);
   }
   const adj: number[][] = nodes.map(() => []);
   for (const e of edges) {

@@ -52,3 +52,12 @@ test("列の切れ目（横切る通路）で、島を横切って反対側の�
   for (let k = 1; k < path.length; k++) len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
   assert.ok(len < 10, String(len));
 });
+
+test("線は列の向きか直角だけ（ななめのつなぎがない）", () => {
+  for (const [a, ns] of rails.adj.entries())
+    for (const b of ns) {
+      const A = rails.nodes[a].p, B = rails.nodes[b].p;
+      const dx = Math.abs(B[0] - A[0]), dz = Math.abs(B[1] - A[1]);
+      assert.ok(dx < 0.05 || dz < 0.05, `${A} → ${B}`);
+    }
+});

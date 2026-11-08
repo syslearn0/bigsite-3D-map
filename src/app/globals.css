@@ -567,3 +567,8 @@ table.admin td {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* リンク：暗い画面でも読める色に */
+a {
+  color: var(--accent);
+}
