@@ -26,7 +26,8 @@ type Venue = {
   context: { name: string; height: number; poly: XZ[] }[];
   parts3d: { poly: XZ[]; min: number; max: number; color: string | null; name: string }[];
   surroundings: {
-    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck" }[];
+    // br：運河をわたる地面の高さの橋（fill：車線と歩道のあいだを埋める板）
+    lines: { pts: XZ[]; y: number; w: number; kind: "road" | "walk" | "steps" | "rail" | "deck"; br?: boolean; fill?: boolean }[];
     areas: { poly: XZ[]; y: number; kind: "walk" | "platform" | "water"; name?: string; labels?: XZ[]; holes?: XZ[][] }[];
     stations: { name: string; line: string; at: XZ; y: number }[];
     // 周辺をくわしく：建物（PLATEAU の形と計測高さ。kind "canopy" は屋根のある歩道などの屋根）、緑地と駐車場、木、横断歩道、
@@ -634,9 +635,29 @@ export function VenueView() {
     const sur = venue.surroundings;
     const SUR_COLOR = { road: 0x6f7376, walk: 0xe3ddcf, steps: 0xc9c2b0, rail: 0xb4bac0 }; // 道はアスファルトの濃い灰色
     for (const kind of ["road", "walk", "steps"] as const) {
-      const m = new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === kind)), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide }));
+      const m = new THREE.Mesh(ribbons(sur.lines.filter((l) => l.kind === kind && !l.br)), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide }));
       m.position.y = -0.08; // 地面（-0.2）より上、ホールの床より下
       surroundings.add(m);
+    }
+    // 運河をわたる地面の高さの橋（あけみ橋など）：水面より少し上の道・歩道に、厚さ 1.2m の橋の板（側面）と、歩道の両側に高さ 1.1m の手すり
+    {
+      const brs = sur.lines.filter((l) => l.br);
+      for (const kind of ["road", "walk"] as const) {
+        const list = brs.filter((l) => l.kind === kind && !l.fill);
+        if (list.length) surroundings.add(new THREE.Mesh(ribbons(list, 1.2), new THREE.MeshLambertMaterial({ color: SUR_COLOR[kind], side: THREE.DoubleSide })));
+      }
+      // 車線と歩道のあいだ（中央分離帯など）：コンクリートの色
+      const fills = brs.filter((l) => l.fill);
+      if (fills.length) surroundings.add(new THREE.Mesh(ribbons(fills, 1.2), new THREE.MeshLambertMaterial({ color: 0xb4b6b2, side: THREE.DoubleSide })));
+      const rails = brs.filter((l) => l.kind === "walk").flatMap((l) => [-1, 1].map((k) => ({
+        y: l.y + 1.1, w: 0.08,
+        pts: l.pts.map(([x, z], i) => {
+          const [bx, bz] = l.pts[Math.min(i + 1, l.pts.length - 1)], [ax, az] = l.pts[Math.max(i - 1, 0)];
+          const len = Math.hypot(bx - ax, bz - az) || 1;
+          return [x - ((bz - az) / len) * k * (l.w / 2 - 0.1), z + ((bx - ax) / len) * k * (l.w / 2 - 0.1)] as XZ;
+        }),
+      })));
+      if (rails.length) surroundings.add(new THREE.Mesh(ribbons(rails, 1.1), new THREE.MeshLambertMaterial({ color: 0x9fb4c0, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
     }
     const elevated = sur.lines.filter((l) => l.kind === "rail" && l.y > 1);
     surroundings.add(new THREE.Mesh(ribbons(elevated, 1.5), new THREE.MeshLambertMaterial({ color: SUR_COLOR.rail, side: THREE.DoubleSide })));
