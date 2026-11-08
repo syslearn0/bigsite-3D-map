@@ -2210,7 +2210,8 @@ export function VenueView() {
           }
           if (comp.length < 4) continue;
           const mx = comp.reduce((a, i) => a + list[i].x, 0) / comp.length, mz = comp.reduce((a, i) => a + list[i].z, 0) / comp.length;
-          const s = textSprite(key, { bg: workColor(key), fg: "#16181d", height: 2.6, px: 32 });
+          // 地は机の色を暗くしたもの、文字は白（明るい地に黒い文字は見にくい：ユーザーの指摘）
+          const s = textSprite(key, { bg: workColor(key).replace(/56%\)$/, "34%)"), fg: "#fff", height: 2.6, px: 32 });
           s.position.set(mx, floorY(list[comp[0]].lv) + 2.8, mz);
           s.userData.level = list[comp[0]].lv;
           s.renderOrder = 11;
