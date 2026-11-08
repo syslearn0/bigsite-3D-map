@@ -550,3 +550,20 @@ table.admin td {
 .status-stack > * {
   pointer-events: auto;
 }
+
+/* 歩くときの十字のボタン（前・後ろ・左・右） */
+.walk-pad {
+  display: grid;
+  grid-template-columns: 52px 64px 52px;
+  grid-template-rows: 48px 48px 48px;
+  gap: 4px;
+}
+.walk-pad button {
+  min-height: 0;
+  padding: 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}

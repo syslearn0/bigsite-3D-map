@@ -532,6 +532,7 @@ type Api = {
   standAt: (x: number, z: number) => void; // 歩く：その場所に立つ（いま見ている向きのまま）
   focusHall: (id: string) => void;
   hold: (dir: -1 | 0 | 1) => void;
+  holdSide: (dir: -1 | 0 | 1) => void; // 横へ（向きはそのまま）
   setSurround: (on: boolean) => void;
   snapshot: (hallIds: string[], marked: { booth: number; mark: Mark }[]) => string;
 };
@@ -2215,6 +2216,8 @@ export function VenueView() {
     const shown = (f: Floor) => bothFloors || f === currentFloor;
     let yaw = 0, pitch = 0;
     let hold: -1 | 0 | 1 = 0;
+    let holdSide: -1 | 0 | 1 = 0;
+    let lastRailDir: XZ | null = null; // 線の上で最後に進んだ向き（横を向いて進むとき、向きを決めるため）
     const keys = new Set<string>();
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
     let walkAnim: { t: number; from: THREE.Vector3; to: THREE.Vector3; secs: number } | null = null;
@@ -3272,7 +3275,7 @@ export function VenueView() {
       }
       if (current === "walk") {
         const fwd = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + hold;
-        const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
+        const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0) + holdSide;
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
         if (fwd || side) {
           walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
@@ -3304,13 +3307,24 @@ export function VenueView() {
             railPos = a.to;
             railPathAnim = null;
           }
-        } else if (railPos && fwd) {
-          const m = moveOnRails(walkRails, railPos, [fx * Math.sign(fwd), fz * Math.sign(fwd)], Math.abs(fwd) * WALK_SPEED * dt);
+        } else if (railPos && (fwd || side)) {
+          // 行きたい向き：前後は見ている向き、左右は見ている向きの横（横を向いたまま、机を見ながら歩ける）
+          let wx = fx * fwd - fz * side, wz = fz * fwd + fx * side;
+          const wl = Math.hypot(wx, wz) || 1;
+          wx /= wl;
+          wz /= wl;
+          // 線と直角に近い向き（机のほうを向いて「前へ」など）のときは、さっき進んでいた向きへ
+          const A = walkRails.nodes[railPos.a].p, B = walkRails.nodes[railPos.b].p, L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+          const along = (wx * (B[0] - A[0]) + wz * (B[1] - A[1])) / L;
+          if (Math.abs(along) < 0.35 && lastRailDir) [wx, wz] = lastRailDir;
+          const m = moveOnRails(walkRails, railPos, [wx, wz], Math.min(1, Math.abs(fwd) + Math.abs(side)) * WALK_SPEED * dt);
           railPos = m.pos;
+          lastRailDir = m.dir;
           const at = railPoint(walkRails, railPos);
           persp.position.x = at[0];
           persp.position.z = at[1];
-          if (fwd > 0) turnTo(m.dir[0], m.dir[1], dt * 3);
+          // 進む向きとほぼ同じ向きを見て「前へ」のときだけ、線の曲がりに合わせて向きを変える（横を向いているときは変えない）
+          if (fwd > 0 && !side && m.dir[0] * fx + m.dir[1] * fz > 0.7) turnTo(m.dir[0], m.dir[1], dt * 3);
         }
         if (walkAnim) {
           walkAnim.t = Math.min(1, walkAnim.t + dt / walkAnim.secs);
@@ -3554,7 +3568,7 @@ export function VenueView() {
     }, setView, setFloor, setBoth: (on) => {
       bothFloors = on;
       applyVisibility();
-    }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), setSurround: (on) => {
+    }, recolor, setPins, focusBooth, focusLine, standAt, focusHall, snapshot, hold: (d) => (hold = d), holdSide: (d) => (holdSide = d), setSurround: (on) => {
         surroundings.visible = on;
         ground.visible = !(on && cutGround);
       },
@@ -4001,24 +4015,33 @@ export function VenueView() {
         )}
         {view === "walk" && (
           <div style={{ position: "absolute", right: 12, bottom: sel ? 150 : 40, display: "flex", flexDirection: "column", gap: 8 }}>
-            {(
-              [
-                [1, "前へ"],
-                [-1, "後ろへ"],
-              ] as const
-            ).map(([d, label]) => (
-              <button
-                key={d}
-                style={{ minWidth: 76, minHeight: 52, fontWeight: 700 }}
-                onPointerDown={() => api.current?.hold(d)}
-                onPointerUp={() => api.current?.hold(0)}
-                onPointerLeave={() => api.current?.hold(0)}
-                onPointerCancel={() => api.current?.hold(0)}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                {label}
-              </button>
-            ))}
+            {/* 前・後ろ（見ている向き）と、左・右（向きはそのまま横へ）。押しているあいだ進む */}
+            <div className="walk-pad">
+              {(
+                [
+                  ["f", 1, "前へ", "1 / 2 / 2 / 3"],
+                  ["l", -1, "←", "2 / 1 / 3 / 2"],
+                  ["r", 1, "→", "2 / 3 / 3 / 4"],
+                  ["b", -1, "後ろへ", "3 / 2 / 4 / 3"],
+                ] as const
+              ).map(([k, d, label, area]) => {
+                const go = (v: -1 | 0 | 1) => (k === "l" || k === "r" ? api.current?.holdSide(v) : api.current?.hold(v));
+                return (
+                  <button
+                    key={k}
+                    aria-label={k === "l" ? "左へ（向きはそのまま）" : k === "r" ? "右へ（向きはそのまま）" : label}
+                    style={{ gridArea: area }}
+                    onPointerDown={() => go(d)}
+                    onPointerUp={() => go(0)}
+                    onPointerLeave={() => go(0)}
+                    onPointerCancel={() => go(0)}
+                    onContextMenu={(e) => e.preventDefault()}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <span style={{ ...OVER, position: "static", fontSize: ".72rem" }}>ドラッグで見回す</span>
           </div>
         )}

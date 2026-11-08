@@ -143,10 +143,45 @@ export function buildRails(lines: Line[], booths: Booth[], halls: HallLike[]): R
   }
   // 線の端を、近くのほかの線の端・線の点へつなぐ（机をよけて、ホールの中だけ）
   const nodeGrid = new Map<string, number[]>();
-  nodes.forEach((nd, i) => {
-    const k = key(nd.p[0], nd.p[1]);
+  const addToGrid = (i: number) => {
+    const k = key(nodes[i].p[0], nodes[i].p[1]);
     if (!nodeGrid.has(k)) nodeGrid.set(k, []);
     nodeGrid.get(k)!.push(i);
+  };
+  nodes.forEach((_, i) => addToGrid(i));
+  const nearestNode = (p: XZ, r: number, hall: string) => {
+    let best = -1, bd = r;
+    for (let gx = Math.floor((p[0] - r) / cell); gx <= Math.floor((p[0] + r) / cell); gx++)
+      for (let gz = Math.floor((p[1] - r) / cell); gz <= Math.floor((p[1] + r) / cell); gz++)
+        for (const j of nodeGrid.get(`${gx},${gz}`) ?? []) {
+          if (nodes[j].hall !== hall) continue;
+          const d = dist(p, nodes[j].p);
+          if (d < bd) [best, bd] = [j, d];
+        }
+    return best;
+  };
+  // 島の列の切れ目（横切る通路）と島の両端に、島を横切る線を足す（両側の通路の線をつなぐ。ユーザーの指示：
+  // 列の途切れている所にも線路を）。島の中心線の上に点を置き、両側の通路の線の、いちばん近い点と結ぶ
+  lines.forEach((line, li) => {
+    if (line.wall) return;
+    const us = [...new Set(pts.filter((q) => q.line === li).map((q) => Math.round(q.u * 10) / 10))].sort((a, b) => a - b);
+    if (!us.length) return;
+    const lc = Math.cos(line.angle), ls = Math.sin(line.angle);
+    const left: XZ = [-ls, lc];
+    const at = (u: number, v: number): XZ => [line.start[0] + u * lc + v * left[0], line.start[1] + u * ls + v * left[1]];
+    const cuts: number[] = [us[0] - DESK_L / 2 - 1.4, us[us.length - 1] + DESK_L / 2 + 1.4];
+    for (let k = 1; k < us.length; k++) if (us[k] - us[k - 1] > DESK_L * 1.9) cuts.push((us[k] + us[k - 1]) / 2);
+    const hall = pts.find((q) => q.line === li)!.hall;
+    for (const u of cuts) {
+      const c = at(u, 0);
+      if (!clearAt(c) || !pointInPolygon(c, hallPoly.get(hall) ?? [c])) continue;
+      const ends = [-1, 1].map((sg) => nearestNode(at(u, sg * (R + 0.4)), 3.2, hall)).filter((j) => j >= 0 && clearSeg(c, nodes[j].p, hall));
+      if (ends.length < 2) continue;
+      nodes.push({ p: c, hall });
+      const ci = nodes.length - 1;
+      addToGrid(ci);
+      for (const j of ends) addEdge(ci, j);
+    }
   });
   const adjTmp = new Map<number, Set<number>>();
   for (const e of edges) {
