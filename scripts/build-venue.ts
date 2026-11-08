@@ -736,6 +736,40 @@ const plan = existsSync("data/plan-toilets.json")
   for (const d of pl.doors ?? []) if (d.hall === "W2") d.at = rot(d.at);
   for (const r of pl.toiletRooms ?? []) if (r.hall === "W2") r.poly = r.poly.map(rot);
 }
+// 東1 の図面から読んだもの（トイレ・トイレの囲み・出入口・搬入口）は、東2・東3 にくらべて東1 の端の側へ 5.5m ずれていた。
+// コミケの配置図（C108）と比べると、トラックヤード側の搬入口の両わきの柱（v -282.7・-257.4）、トラックヤード側のトイレ、
+// ホールの真ん中の階段の区画が、どれも同じ向きに 5〜6m ずれている（東2・東3 では 1m 以内で合う）。v を 5.5m 東2 の側へ戻す
+const E1_SHIFT = -5.5;
+{
+  const sh = (p: XZ): XZ => {
+    const [u, v] = toUV(p);
+    return fromUV([[u, v + E1_SHIFT]])[0];
+  };
+  const pl = plan as { toilets: { at: XZ; hall?: string }[]; doors?: { at: XZ; hall: string }[]; toiletRooms?: { hall: string; poly: XZ[] }[]; firstAid: { at: XZ; hall?: string }[] };
+  for (const t of pl.toilets) if (t.hall === "E1") t.at = sh(t.at);
+  for (const d of pl.doors ?? []) if (d.hall === "E1") d.at = sh(d.at);
+  for (const r of pl.toiletRooms ?? []) if (r.hall === "E1") r.poly = r.poly.map(sh);
+  for (const a of pl.firstAid) if (a.hall === "E1") a.at = sh(a.at);
+}
+// 東7 の図面の上の端（リンクスペースの側）のトイレ 2 か所は、東7 の右下の角を基準に置いていたため、角から遠いこの所で 20m ほどずれていた。
+// すぐそばのリンクスペースのシャッター（会場データの東7 の出入口 W 6.0m・12.0m・12.0m）を基準に置き直す：図面（140dpi の px）の
+// x → v = -593.7 + (x − 1190) × 0.11、y → u = -20.2 + (265 − y) × 0.11。コミケの配置図（C108）のトイレの位置と 5m 以内で合う。
+// ホールの中ではなくリンクスペースのトイレなので、ホールの壁へ寄せない（hall をはずす）
+{
+  const at = (x: number, y: number) => fromUV([[-20.2 + (265 - y) * 0.11, -593.7 + (x - 1190) * 0.11]])[0];
+  const pl = plan as { toilets: { at: XZ; hall?: string }[] };
+  for (const [raw, [x, y]] of [[[-6.3, -586.7], [1095, 60]], [[-7.6, -539.4], [1530, 75]]] as [XZ, XZ][]) {
+    const t = pl.toilets.find((q) => q.hall === "E7" && Math.hypot(toUV(q.at)[0] - raw[0], toUV(q.at)[1] - raw[1]) < 1);
+    if (!t) throw new Error(`東7 のリンクスペースのトイレが ${raw} にない`);
+    t.at = at(x, y);
+    t.hall = undefined;
+  }
+  // 東8 の図面の端に描かれたトイレ（図面の位置は会場の外、v -500）は、東8 の壁へ寄せると上の男子トイレの 7m 横に重なって出ていた。
+  // 配置図でもここは男子トイレ 1 か所だけなので除く
+  const i8 = pl.toilets.findIndex((q) => q.hall === "E8" && Math.hypot(toUV(q.at)[0] + 30.2, toUV(q.at)[1] + 500.0) < 1);
+  if (i8 < 0) throw new Error("東8 の端のトイレがない");
+  pl.toilets.splice(i8, 1);
+}
 const osmToilets: Toilet[] = osm.elements
   .filter((e) => e.tags?.amenity === "toilets")
   .map((e) => {
@@ -812,6 +846,21 @@ const toiletRooms = ((plan as { toiletRooms?: { hall: string; level: number; pol
 // 東2 の図面から読んだトイレの囲みは、ガレリアの側へ 5.5m ずれている（図面のホールの溝が東1 より小さく、溝の中心で合わせたため。
 // 図面の出入口の文字は、どのホールでも帯のホールの側の壁から 7.3m。東2 だけ図面から読んだ会場データでは 12.9m）。帯の中へ戻す
 for (const r of toiletRooms) if (r.hall === "E2") r.poly = fromUV(r.poly.map((p) => [toUV(p)[0] + 5.5, toUV(p)[1]] as XZ));
+// 西1 の北（トラックヤード側、搬入口 A・B のあいだ）のトイレの囲みは、図面の壁から小さな部屋（多機能トイレなど）だけが取れていて、
+// 男子・女子トイレの区画の大きさになっていなかった。図面（西1 の白図。搬入口 B の文字 y 1058 → u 140.5、1pt = 0.0707m で u が減る）で
+// 測った区画にする：男子 u 126.4〜137.8、女子 u 100.9〜111.1（奥行きは今の囲みと同じ v -83〜-79）。西2 は西1 をアトリウムの
+// 真ん中（v 11.5）で折り返した所（v 102〜106）
+{
+  for (let i = toiletRooms.length - 1; i >= 0; i--) {
+    const r = toiletRooms[i];
+    const [u, v] = toUV(centroid(r.poly));
+    if ((r.hall === "W1" && u > 95 && u < 140 && v < -75) || (r.hall === "W2" && u > 95 && u < 140 && v > 100)) toiletRooms.splice(i, 1);
+  }
+  for (const [u0, u1] of [[126.4, 137.8], [100.9, 111.1]]) {
+    toiletRooms.push({ hall: "W1", level: 1, poly: fromUV([[u0, -83], [u1, -83], [u1, -79], [u0, -79]]) });
+    toiletRooms.push({ hall: "W2", level: 1, poly: fromUV([[u0, 102], [u1, 102], [u1, 106], [u0, 106]]) });
+  }
+}
 // ホールの外壁：会場データのホールの形（OSM）は展示場の床だけで、トイレ・事務室などの部屋の帯はその外に出ている。
 // コミケの配置図でもビッグサイトの図面でも、トイレは外壁の内側にあるので、トイレ（図面の位置・部屋の囲み）がはみ出している辺を、
 // トイレを囲むところまで外へずらす（20m まで。ほかのホールと分け合う辺は動かさない）。展示場の床の形は inner に残す
@@ -1103,8 +1152,8 @@ for (const d of doors) if (d.hall === "W3" && d.kind === "出入口" && Math.hyp
 // 西の端に近いほうが A（W 7.2m × H 4.9m）。ホールの端の壁の C・D は W 10.0m × H 8.0m。位置は図面から読んだ札の位置のまま
 {
   const sizes: [string, XZ, number, number][] = [
-    ["E1", [282.3, -36.3], 7.2, 4.9], // 東1-A
-    ["E1", [297.4, -46.3], 7.9, 5.8], // 東1-B
+    ["E1", [286.9, -39.3], 7.2, 4.9], // 東1-A
+    ["E1", [302.0, -49.3], 7.9, 5.8], // 東1-B
     ["E1", [236.7, -46], 10, 8], // 東1-C・D
     ["E1", [212.2, -83.2], 10, 8],
     ["E2", [361.1, -87.6], 7.2, 4.9], // 東2-A
@@ -1119,7 +1168,20 @@ for (const d of doors) if (d.hall === "W3" && d.kind === "出入口" && Math.hyp
     if (!d) throw new Error(`${hall} の搬入口が ${at} の近くにない`);
     Object.assign(d, { width, height });
   }
+  // 西1・西2 の搬入口（シャッター）は、図面ではどれも W 8.0m × H 6.0m（有効 7.4m）
+  for (const d of doors) if ((d.hall === "W1" || d.hall === "W2") && d.kind === "搬入口") Object.assign(d, { width: 8, height: 6 });
 }
+// 西1・西2 のトラックヤード側の帯：トイレとトイレのあいだは、図面ではコインロッカー・給湯室・階段の区画で、帯の奥まで閉じている
+// （搬入口の通路は、その外側）。黒い低い箱（kind "room"）で描く。西1 の白図で測った位置、西2 は西1 をアトリウムの真ん中（v 11.5）で
+// 折り返した所。帯の奥行きは、外壁から図面の帯の深さ（10.2m）まで。ただし西2 の南は会場データの帯（v 103.3〜107.5）の中だけ
+// （そのすぐ内側に、配置図の壁ぞいの机がある）
+for (const [name, u0, u1, v0, v1] of [
+  ["階段・ロッカー（西1）", 201.9, 211.4, -37.3, -26.5],
+  ["階段・ロッカー（西2）", 201.9, 211.4, 49.5, 60.3],
+  ["階段・給湯室（西1）", 114.9, 122.5, -84.6, -74.4],
+  ["階段・給湯室（西2）", 114.9, 122.5, 103.3, 107.5],
+] as [string, number, number, number, number][])
+  blocks.push({ name, level: 1, kind: "room", height: 3.5, poly: fromUV([[u0, v0], [u1, v0], [u1, v1], [u0, v1]]) });
 // 東1 と東2、東2 と東3 のつなぎ目の、トラックヤード側の外壁の開口（コミケの配置図（C108）で、つなぎ目の黒い塊（階段・EV の区画）の
 // 外側の壁が開いて描かれている所。搬入口ではない）。配置図を読みこんでいなくても開ける（ユーザーの指示で公開版にも入れる）。
 // 配置図から読んだ切れ目（a〜b）はホールの床のふち（部屋の帯の内側、外壁から 5m ほど内）の線で、つなぎ目の塊の幅まで含む。
@@ -1164,7 +1226,7 @@ for (const [ids, a0, b0, t0, t1] of [
   const PX3 = ((0.6 * 0.0254) / 72) * 566; // 東3：A4 の図面の画像の 1px
   const sheets: { s: number; x0: number; v0: number; y0: number; u0: number; rooms: [string, number, number, number, number][] }[] = [
     {
-      s: PT, x0: 637, v0: -273.6, y0: 1479, u0: 28.8, // 東1
+      s: PT, x0: 637, v0: -273.6 + E1_SHIFT, y0: 1479, u0: 28.8, // 東1（図面の出入口の文字の位置。上の E1_SHIFT でずれを戻す）
       rooms: [["商談室", 59, 1567, 196, 1682], ["給湯室", 196, 1641, 226, 1700], ["主催者事務室", 226, 1522, 509, 1700], ["階段", 719, 1479, 834, 1570],
         ["給湯室", 1017, 1522, 1053, 1547], ["多目的室", 1019, 1679, 1087, 1763], ["東VIPルーム", 1119, 1679, 1344, 1763]],
     },
