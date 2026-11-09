@@ -122,10 +122,6 @@ const walkFov = (aspect: number) => (aspect < 1 ? WALK_FOV_PORTRAIT : WALK_FOV);
 const WALK_PITCH = -0.1;
 const WALK_SPEED = 3.5; // m/秒（見て回りやすいよう、ふつうに歩く速さより少し速め）
 // 歩いて見るとき、近くの机の上に出すサークルの札（画像とサークル名）。この距離までで、画面の上で重なる札は出さない
-// 歩くときの札：いま歩いている通路の両側の列（通路に向いた机）だけ、向きを変えても全部出す（ユーザーの指示：
-// 半径で決めると周りの関係ない机まで出る。重なりで出したり消したりしない）。通路の前後 CARD_NEAR m まで、CARD_FADE m から先は薄く
-const CARD_NEAR = 45;
-const CARD_FADE = 35;
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
@@ -2259,7 +2255,6 @@ export function VenueView() {
         persp.position.x = q.at[0];
         persp.position.z = q.at[1];
       } else railPos = null;
-      lastKeyWalk = "";
     };
     if (process.env.NODE_ENV !== "production")
       (window as unknown as { __walkDbg?: () => unknown }).__walkDbg = () => ({
@@ -2704,7 +2699,6 @@ export function VenueView() {
       railPos = { a: q.a, b: q.b, t: q.t };
       persp.position.x = q.at[0];
       persp.position.z = q.at[1];
-      lastKeyWalk = "";
     };
     const onDown = (e: PointerEvent) => {
       down = { x: e.clientX, y: e.clientY, yaw, pitch };
@@ -2812,7 +2806,6 @@ export function VenueView() {
         scene.add(s);
         pins.push({ s, level: lv, base: s.scale.clone(), booth });
       }
-      lastKeyWalk = ""; // 歩いて見るときの札を置きなおす（ピンをよける）
     };
 
     // 1m が画面の何 px か（その場所で）
@@ -3059,168 +3052,151 @@ export function VenueView() {
       }
       flushItems();
     };
-    // 歩いて見るときの札：いまいるホールの、前の CARD_NEAR m までの机。近い机から置き、画面の上で前の札と重なる札は出さない。
-    // 1 つのサークルが 2 スペース（a・b）なら、札は 1 つ
+    // 歩いて見るときの札：机の上に立てた板（ユーザーの指示：画面の上に出すと、向きを変えるたびに出たり消えたりしてややこしい。
+    // すべて固定して、机と平行に並べる）。いるホールの机ぜんぶに、通路の側を向けて立てる。1 つのサークルが 2 スペース（a・b）なら 1 枚。
+    // ホールごとに、札を並べた 1 枚の絵と、板をまとめた 1 つの形にする（机の数だけ絵を作ると重い）
     const hallBooths = new Map<string, number[]>();
     booths.forEach((b, i) => {
       if (!hallBooths.has(b.hall)) hallBooths.set(b.hall, []);
       hallBooths.get(b.hall)!.push(i);
     });
-    const imgCache = new Map<string, HTMLImageElement | null>();
-    let lastKeyWalk = "";
-    const cardImg = (src: string) => {
-      if (!imgCache.has(src)) {
-        const im = new Image();
-        imgCache.set(src, null);
-        im.onload = () => {
-          imgCache.set(src, im);
-          lastKeyWalk = "";
-        };
-        im.src = src;
+    let cardsVer = 0; // 日・作品・サークルの情報が変わったら作り直す
+    let walkHall = "";
+    const hallCards = new Map<string, { mesh: THREE.Mesh; ver: number }>();
+    const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 160, CELL_H = 200;
+    const buildHallCards = (hallId: string) => {
+      const old = hallCards.get(hallId);
+      if (old) {
+        scene.remove(old.mesh);
+        old.mesh.geometry.dispose();
+        (old.mesh.material as THREE.MeshBasicMaterial).map?.dispose();
+        (old.mesh.material as THREE.MeshBasicMaterial).dispose();
+        hallCards.delete(hallId);
       }
-      return imgCache.get(src) ?? null;
-    };
-    const drawWalkCards = (w: number, h: number) => {
-      const cp = persp.position;
-      const key = [cp.x, cp.z, yaw, pitch, w, h, currentFloor].map((v) => (typeof v === "number" ? v.toFixed(3) : String(v))).join(",");
-      if (key === lastKeyWalk && codesShown) return;
-      lastKeyWalk = key;
-      codesShown = true;
-      // カメラの行列は描くとき（このあと）に更新されるので、ここで先に更新する（しないと 1 つ前の位置で札を置き、止まるとそのまま残る）
-      persp.updateMatrixWorld();
-      codeCtx.clearRect(0, 0, w, h);
-      const here = venue.halls.find((hh) => floorOf(hh.level) === currentFloor && !hh.closed && pointInPolygon([cp.x, cp.z], hh.poly));
-      if (!here) return;
+      const hall = hallById.get(hallId);
+      if (!hall) return;
       const info = cardInfo.current;
-      const cand: { d: number; x: number; z: number; c: { name: string; image: string; sub: string }; top: number }[] = [];
-      // ピンを立てた机の札は、ピンの上に出す
-      const pinTop = new Map<number, number>();
-      for (const pin of pins) if (pin.s.visible) pinTop.set(pin.booth, pin.s.position.y + pin.s.scale.y + 0.3);
+      const items: { x: number; z: number; ax: number; az: number; c: { name: string; image: string; sub: string } }[] = [];
       const seen = new Set<string>();
-      // いま乗っている線の向き（通路の向き）
-      if (!railPos) return;
-      const RA = walkRails.nodes[railPos.a].p, RB = walkRails.nodes[railPos.b].p;
-      const RL = Math.hypot(RB[0] - RA[0], RB[1] - RA[1]) || 1;
-      const ux = (RB[0] - RA[0]) / RL, uz = (RB[1] - RA[1]) / RL;
-      const beside = new Map<string, { i: number; u: number; p: number }[]>();
-      for (const i of hallBooths.get(here.id) ?? []) {
+      for (const i of hallBooths.get(hallId) ?? []) {
         const b = booths[i];
-        const dx = b.at[0] - cp.x, dz = b.at[1] - cp.z;
-        const d = Math.hypot(dx, dz);
-        const along = dx * ux + dz * uz, perp = -dx * uz + dz * ux;
-        // 通路のすぐ両側（机の中心が通路から 4.2m まで）で、列が通路と平行、机が通路の側を向いている（島の反対側の机は出さない）
-        if (Math.abs(along) > CARD_NEAR || Math.abs(perp) > 4.2 || d < 0.4) continue;
-        if (Math.abs(Math.cos(b.angle) * ux + Math.sin(b.angle) * uz) < 0.85) continue;
-        // 列の向きの位置（あとで、いる所の島のかたまりだけにする）と、通路からの距離（通路の左と右で分ける）
-        const la = lines[b.line].angle;
-        const gk = `${b.line}|${perp > 0 ? 1 : -1}`;
-        if (!beside.has(gk)) beside.set(gk, []);
-        beside.get(gk)!.push({ i, u: b.at[0] * Math.cos(la) + b.at[1] * Math.sin(la), p: Math.abs(perp) });
+        const c = info(b.code);
+        if (!c) continue;
+        const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const nb = booths[i + 1];
+        const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
+        items.push({ x: pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z: pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1], ax: Math.cos(b.angle), az: Math.sin(b.angle), c });
       }
-      // 列ごとに、机の続き（あいだが 2.5m より広い所＝横切る通路で切る）のうち、いま立っている所の横にあるかたまりだけ（ユーザーの指示：
-      // 奥の島の札はいらない）
-      for (const [gk, list] of beside) {
-        const la = lines[Number(gk.split("|")[0])].angle;
-        const uc = cp.x * Math.cos(la) + cp.z * Math.sin(la);
-        list.sort((p, q) => p.u - q.u);
-        let r0 = 0;
-        let block: { i: number; u: number; p: number }[] = [];
-        for (let k = 1; k <= list.length; k++) {
-          if (k < list.length && list[k].u - list[k - 1].u <= 2.5) continue;
-          if (uc >= list[r0].u - 2 && uc <= list[k - 1].u + 2) block = block.concat(list.slice(r0, k));
-          r0 = k;
-        }
-        // 島は 2 列の机が背中合わせ（0.45m ちがい）なので、通路にいちばん近い列（通路に向いた机）だけ（ユーザーの指摘：奥の列に出ていた）
-        const minP = Math.min(...block.map((q) => q.p));
-        const keep = block.filter((q) => q.p <= minP + 0.25).map((q) => q.i);
-        for (const i of keep) {
-          const b = booths[i];
-          const d = Math.hypot(b.at[0] - cp.x, b.at[1] - cp.z);
-          const c = info(b.code);
-          if (!c) continue;
-          const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
-          if (seen.has(id)) continue;
-          seen.add(id);
-          // 同じサークルの 2 スペース（a・b）は、2 つの間の上に 1 つ
-          const nb = booths[i + 1];
-          const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
-          let x = pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z = pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1];
-          // 机の場所（スペースのまん中）は、いすの側に寄っている。札は机の通路の側のふちの上に（奥の列の上に見えないように）
-          const pp = -(x - cp.x) * uz + (z - cp.z) * ux, mv = Math.min(1.1, Math.max(0, Math.abs(pp) - 0.8)) * Math.sign(pp);
-          x -= -uz * mv;
-          z -= ux * mv;
-          cand.push({ d, x, z, c, top: pinTop.get(i) ?? (pair ? pinTop.get(i + 1) : undefined) ?? 0 });
-        }
-      }
-      // 遠い札から描き、近い札を上に重ねる
-      cand.sort((p, q) => q.d - p.d);
-      const tanH = Math.tan((persp.fov * Math.PI) / 360);
-      // 札の下の端は机の上（机の高さ 0.7m の少し上）。目の高さに近いと、札が奥の列の上に浮いて見える（ユーザーの指摘）
-      const y = floorY(here.level) + 0.85;
-      for (const it of cand) {
-        pv.set(it.x, Math.max(y, it.top), it.z).project(persp);
-        // うしろ（画面の外）のものだけ出さない。画面のふちにかかる札も、はみ出したまま出す
-        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1.6 || Math.abs(pv.y) > 1.6) continue;
-        const sx = ((pv.x + 1) / 2) * w, sy = ((1 - pv.y) / 2) * h;
-        const ppm = h / (2 * Math.max(0.5, it.d) * tanH);
-        const scale = Math.max(0.6, Math.min(1.3, ppm / 60));
-        const imgS = it.c.image ? Math.round(56 * scale) : 0;
-        const fs = Math.round(Math.max(10, 13 * scale));
-        codeCtx.font = `700 ${fs}px system-ui, sans-serif`;
-        const name = it.c.name.length > 14 ? it.c.name.slice(0, 13) + "…" : it.c.name;
-        const sub = it.c.sub.length > 14 ? it.c.sub.slice(0, 13) + "…" : it.c.sub;
-        const tw = Math.max(name ? codeCtx.measureText(name).width : 0, sub ? codeCtx.measureText(sub).width * 0.85 : 0);
-        const bw = Math.max(imgS, tw) + 12, bh = imgS + (name ? fs + 4 : 0) + (sub ? fs * 0.85 + 4 : 0) + 10;
-        const r: [number, number, number, number] = [sx - bw / 2, sy - bh, sx + bw / 2, sy];
-        // 遠い札は少し薄く、CARD_FADE m から先はだんだん消える
-        codeCtx.globalAlpha = Math.max(0.6, 1 - it.d / (CARD_NEAR * 1.6)) * (it.d <= CARD_FADE ? 1 : Math.max(0.15, (CARD_NEAR - it.d) / (CARD_NEAR - CARD_FADE)));
-        codeCtx.fillStyle = "rgba(255,255,255,.94)";
-        codeCtx.strokeStyle = "rgba(0,0,0,.18)";
-        codeCtx.lineWidth = 1;
-        codeCtx.beginPath();
-        codeCtx.roundRect(r[0], r[1], bw, bh - 6, 6);
-        codeCtx.moveTo(sx - 5, sy - 6);
-        codeCtx.lineTo(sx, sy);
-        codeCtx.lineTo(sx + 5, sy - 6);
-        codeCtx.fill();
-        codeCtx.stroke();
-        let ty = r[1] + 5;
-        if (imgS) {
-          const im = cardImg(it.c.image);
+      if (!items.length) return;
+      // 札を並べた絵（横 cols 枚）
+      const cols = Math.max(1, Math.min(Math.floor(4096 / CELL_W), Math.ceil(Math.sqrt((items.length * CELL_H) / CELL_W))));
+      const rows = Math.ceil(items.length / cols);
+      const cv = document.createElement("canvas");
+      cv.width = cols * CELL_W;
+      cv.height = Math.min(4096, rows * CELL_H);
+      const g = cv.getContext("2d")!;
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      const drawCell = (k: number, im: HTMLImageElement | null) => {
+        const it = items[k], x0 = (k % cols) * CELL_W, y0 = Math.floor(k / cols) * CELL_H;
+        g.clearRect(x0, y0, CELL_W, CELL_H);
+        g.fillStyle = "rgba(255,255,255,.95)";
+        g.beginPath();
+        g.roundRect(x0 + 4, y0 + 4, CELL_W - 8, CELL_H - 8, 12);
+        g.fill();
+        const S = 128, ix = x0 + (CELL_W - S) / 2, iy = y0 + 10;
+        if (it.c.image) {
           if (im) {
-            const k = Math.max(imgS / im.width, imgS / im.height), iw = im.width * k, ih = im.height * k;
-            codeCtx.save();
-            codeCtx.beginPath();
-            codeCtx.rect(sx - imgS / 2, ty, imgS, imgS);
-            codeCtx.clip();
-            codeCtx.drawImage(im, sx - iw / 2, ty + (imgS - ih) / 2, iw, ih);
-            codeCtx.restore();
+            const k2 = Math.max(S / im.width, S / im.height), iw = im.width * k2, ih = im.height * k2;
+            g.save();
+            g.beginPath();
+            g.rect(ix, iy, S, S);
+            g.clip();
+            g.drawImage(im, ix + (S - iw) / 2, iy + (S - ih) / 2, iw, ih);
+            g.restore();
           } else {
-            codeCtx.fillStyle = "#e6e6e1";
-            codeCtx.fillRect(sx - imgS / 2, ty, imgS, imgS);
+            g.fillStyle = "#e6e6e1";
+            g.fillRect(ix, iy, S, S);
           }
-          ty += imgS + 2;
         }
-        codeCtx.textAlign = "center";
-        codeCtx.textBaseline = "top";
+        g.textAlign = "center";
+        g.textBaseline = "top";
+        const name = it.c.name.length > 9 ? it.c.name.slice(0, 8) + "…" : it.c.name;
+        const sub = it.c.sub.length > 10 ? it.c.sub.slice(0, 9) + "…" : it.c.sub;
+        let ty = it.c.image ? iy + S + 6 : y0 + 60;
         if (name) {
-          codeCtx.font = `700 ${fs}px system-ui, sans-serif`;
-          codeCtx.fillStyle = "#1d1d1b";
-          codeCtx.fillText(name, sx, ty);
-          ty += fs + 3;
+          g.font = "700 20px system-ui, sans-serif";
+          g.fillStyle = "#1d1d1b";
+          g.fillText(name, x0 + CELL_W / 2, ty);
+          ty += 24;
         }
         if (sub) {
-          codeCtx.font = `500 ${Math.round(fs * 0.85)}px system-ui, sans-serif`;
-          codeCtx.fillStyle = "#55554f";
-          codeCtx.fillText(sub, sx, ty);
+          g.font = "500 17px system-ui, sans-serif";
+          g.fillStyle = "#55554f";
+          g.fillText(sub, x0 + CELL_W / 2, ty);
         }
-      }
-      codeCtx.globalAlpha = 1;
+      };
+      const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+      const y0 = floorY(hall.level) + 0.72, y1 = y0 + CARD_H;
+      items.forEach((it, k) => {
+        drawCell(k, null);
+        if (it.c.image) {
+          const im = new Image();
+          im.onload = () => {
+            drawCell(k, im);
+            tex.needsUpdate = true;
+          };
+          im.src = it.c.image;
+        }
+        // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
+        const q = nearestOnRails(walkRails, [it.x, it.z], hallId);
+        let nx = q ? q.at[0] - it.x : 1, nz = q ? q.at[1] - it.z : 0;
+        const along = nx * it.ax + nz * it.az;
+        nx -= it.ax * along;
+        nz -= it.az * along;
+        const nl = Math.hypot(nx, nz);
+        if (nl < 1e-3) return;
+        nx /= nl;
+        nz /= nl;
+        // 机の通路の側のふちの上に立てる。右向き（見る人から見て）は (nz, -nx)
+        const cx = it.x + nx * 0.5, cz = it.z + nz * 0.5;
+        const rx = nz * (CARD_W / 2), rz = -nx * (CARD_W / 2);
+        const base = pos.length / 3;
+        pos.push(cx - rx, y0, cz - rz, cx + rx, y0, cz + rz, cx + rx, y1, cz + rz, cx - rx, y1, cz - rz);
+        const u0 = ((k % cols) * CELL_W) / cv.width, u1 = u0 + CELL_W / cv.width;
+        const v1 = 1 - (Math.floor(k / cols) * CELL_H) / cv.height, v0 = v1 - CELL_H / cv.height;
+        uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      });
+      tex.needsUpdate = true;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      geo.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05 }));
+      mesh.renderOrder = 2;
+      mesh.visible = false;
+      scene.add(mesh);
+      hallCards.set(hallId, { mesh, ver: cardsVer });
+    };
+    const drawWalkCards = (w: number, h: number) => {
+      if (codesShown) codeCtx.clearRect(0, 0, w, h);
+      codesShown = false;
+      const cp = persp.position;
+      const here = venue.halls.find((hh) => floorOf(hh.level) === currentFloor && !hh.closed && pointInPolygon([cp.x, cp.z], hh.poly));
+      walkHall = here?.id ?? "";
+      if (here && hallCards.get(here.id)?.ver !== cardsVer) buildHallCards(here.id);
+      for (const [id, e] of hallCards) e.mesh.visible = id === walkHall;
     };
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
       if (current === "orbit") return drawCodes3d(w, h);
       if (current === "walk") return drawWalkCards(w, h);
+      for (const e of hallCards.values()) e.mesh.visible = false;
       lastKey3d = "";
       const ppm = (h * ortho.zoom) / (2 * 160);
       // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
@@ -3378,7 +3354,6 @@ export function VenueView() {
             currentFloor = f;
             focus.y = floorY(f);
             applyVisibility();
-            lastKeyWalk = "";
             onFloor.current(f);
           }
         } else persp.position.y = eyeY();
@@ -3597,7 +3572,9 @@ export function VenueView() {
       return c.toDataURL("image/png");
     };
 
-    api.current = { redrawCards: () => (lastKeyWalk = ""), showRailsPick: (on) => {
+    api.current = { redrawCards: () => {
+      cardsVer++;
+    }, showRailsPick: (on) => {
       railsPick = on;
       applyVisibility();
     }, showRoute, showTour, walkPos: () => (current === "walk" ? [persp.position.x, persp.position.z] : null), showMe: (p, acc, fly) => {
