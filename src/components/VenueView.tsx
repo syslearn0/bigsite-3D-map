@@ -535,6 +535,8 @@ export function VenueView() {
   const api = useRef<Api | null>(null);
   // 歩いて見るときの札の中身（机の配置番号 → サークル名・画像、なければ作品名）。日を変えたら入れかえる
   const cardInfo = useRef<(code: string) => { name: string; image: string; sub: string } | null>(() => null);
+  // 印をつけたサークルの画像（端末に持つ分。電波がなくても、歩くときの札に出せる）
+  const markedImgs = useRef<Set<string>>(new Set());
   const booths = useMemo<Booth[]>(() => expandBooths(lines, venue.halls), []);
   const codeIndex = useMemo(() => new Map(booths.map((b, i) => [b.code, i])), [booths]);
   // サイトを開いた最初は、どのモードでも 3D（モードを切りかえたときは、そのモードの最初の見方）
@@ -628,6 +630,18 @@ export function VenueView() {
     setVisitedByDay(u.visited);
   });
   const marks = marksByDay[day];
+  // 印（どの日の分も）をつけたサークルの画像だけを、サービスワーカーに持ってもらう。ほかの画像は端末に残さない
+  useEffect(() => {
+    const urls = new Set<string>();
+    for (const d of DAYS)
+      for (const code of Object.keys(marksByDay[d] ?? {})) {
+        const c = circles[d][code];
+        for (const u of [c?.thumb, c?.image]) if (u?.startsWith("/data/circles/")) urls.add(u);
+      }
+    markedImgs.current = urls;
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage({ type: "keep-images", urls: [...urls] })).catch(() => {});
+  }, [marksByDay]);
   const notes = notesByDay[day];
   // 「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ（ユーザーの指示）。印を外した机の「行った」は出さない
   // （保存はそのまま残すので、同じ日にまた印をつけると戻る）
@@ -3065,10 +3079,15 @@ export function VenueView() {
     // 札の絵は、64 枚ずつの小さな絵（シート）に分ける。大きな絵を 1 度に GPU へ送ると、ホールに入ったときに 1〜2 秒止まった。
     // シートは 1 コマに 1 枚ずつ送り、送るまでは出さない。画像が読めたら、そのシートだけ（0.4 秒に 1 回まで）送り直す
     type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean };
-    const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number }>();
+    // pend：まだ画像を描いていない札（近くに来たら読む）
+    type PendCard = { x: number; z: number; src: string; draw: (im: HTMLImageElement) => void };
+    const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number }>();
+    // 画像を読むのは、立っている所から IMG_NEAR m 以内の札だけ（電波があるとき。印のサークルは端末に持っているので、電波がなくても）
+    const IMG_NEAR = 15;
     const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 120, CELL_H = 150, SHEET_COLS = 8, SHEET_ROWS = 8, PER_SHEET = SHEET_COLS * SHEET_ROWS;
     // 読みこんだ画像（ホール・日をまたいで使い回す）
     const cardImgs = new Map<string, HTMLImageElement | "loading">();
+    const cardFail = new Map<string, number>(); // 読めなかった画像（しばらくは読み直さない）
     const cardImgWait = new Map<string, (() => void)[]>();
     const withImg = (src: string, f: (im: HTMLImageElement) => void) => {
       const got = cardImgs.get(src);
@@ -3092,7 +3111,10 @@ export function VenueView() {
           if (ok) {
             cardImgs.set(src, im);
             for (const cb of cardImgWait.get(src) ?? []) cb();
-          } else cardImgs.delete(src);
+          } else {
+            cardImgs.delete(src);
+            cardFail.set(src, performance.now());
+          }
           cardImgWait.delete(src);
           setTimeout(pumpCardLoads, 0);
         };
@@ -3162,7 +3184,7 @@ export function VenueView() {
       // 近い机から（近くの札の絵・画像が先にそろう）
       const cp0 = persp.position;
       items.sort((p2, q2) => Math.hypot(p2.x - cp0.x, p2.z - cp0.z) - Math.hypot(q2.x - cp0.x, q2.z - cp0.z));
-      const entry = { sheets: [] as Sheet[], ver: cardsVer, used: performance.now() };
+      const entry = { sheets: [] as Sheet[], ver: cardsVer, used: performance.now(), pend: [] as PendCard[], wait: new Map<string, PendCard[]>(), scan: 0 };
       hallCards.set(hallId, entry);
       const y0 = floorY(hall.level) + 0.72, y1 = y0 + CARD_H;
       for (let s0 = 0; s0 < items.length; s0 += PER_SHEET) {
@@ -3219,13 +3241,17 @@ export function VenueView() {
         part.forEach((it, k) => {
           drawCell(k, null);
           if (it.c.image)
-            withImg(it.c.image, (im) =>
-              cardDrawQueue.push(() => {
-                if (!sheet.mesh.parent) return; // もう捨てたシート
-                drawCell(k, im);
-                sheet.dirty = true;
-              }),
-            );
+            entry.pend.push({
+              x: it.x,
+              z: it.z,
+              src: it.c.image,
+              draw: (im) =>
+                cardDrawQueue.push(() => {
+                  if (!sheet.mesh.parent) return; // もう捨てたシート
+                  drawCell(k, im);
+                  sheet.dirty = true;
+                }),
+            });
           // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
           const q = nearLine(it.x, it.z);
           let nx = q ? q[0] - it.x : 1, nz = q ? q[1] - it.z : 0;
@@ -3275,6 +3301,34 @@ export function VenueView() {
       if (!e) return;
       const now = performance.now();
       e.used = now;
+      // 近くの札の画像を読む（0.3 秒に 1 回見る。まだ読み始めていない分は 12 まで。離れたら、まだの分は読まない）
+      if (now - e.scan > 300 && e.pend.length) {
+        e.scan = now;
+        const online = navigator.onLine;
+        const near = e.pend
+          .map((p) => ({ p, d: Math.hypot(p.x - cp.x, p.z - cp.z) }))
+          .filter(({ p, d }) => d <= IMG_NEAR && (online || markedImgs.current.has(p.src)) && now - (cardFail.get(p.src) ?? -1e9) > 30_000)
+          .sort((a, b) => a.d - b.d);
+        for (const { p } of near) {
+          if (cardImgs.get(p.src) === undefined && cardLoadQueue.length >= 12) break;
+          e.pend.splice(e.pend.indexOf(p), 1);
+          (e.wait.get(p.src) ?? e.wait.set(p.src, []).get(p.src)!).push(p);
+          withImg(p.src, (im) => {
+            e.wait.delete(p.src);
+            p.draw(im);
+          });
+        }
+        // 離れた所の、まだ読み始めていない画像は取りやめる（その札は、また近くに来たら読む）
+        for (let qi = cardLoadQueue.length - 1; qi >= 0; qi--) {
+          const src = cardLoadQueue[qi], ws = e.wait.get(src);
+          if (!ws || ws.some((p) => Math.hypot(p.x - cp.x, p.z - cp.z) <= IMG_NEAR + 5)) continue;
+          cardLoadQueue.splice(qi, 1);
+          cardImgs.delete(src);
+          cardImgWait.delete(src);
+          e.wait.delete(src);
+          e.pend.push(...ws);
+        }
+      }
       // 1 コマに 1 枚だけ送る：まだ送っていないシート（近い順でなくてよい。64 枚ずつなので数コマで全部そろう）、なければ画像が読めたシート
       const first = e.sheets.find((sh) => !sh.sent);
       if (first) {
@@ -3731,7 +3785,8 @@ export function VenueView() {
   useEffect(() => {
     cardInfo.current = (code) => {
       const c = circles[day][code];
-      if (c) return { name: c.name, image: c.image, sub: c.works[0] ?? "" };
+      // 札には小さい画像（ないときは大きい画像）
+      if (c) return { name: c.name, image: c.thumb || c.image, sub: c.works[0] ?? "" };
       const w = dayTags?.[code]?.works?.[0];
       return w ? { name: "", image: "", sub: w } : null;
     };

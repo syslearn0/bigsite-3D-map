@@ -4,7 +4,10 @@
 // ・/_next/static：ファイル名が中身ごとに変わるので、持っていればそれを使う
 // ・アイコンなど：持っている版をすぐ返し、裏で新しくする
 
-const CACHE = "comiket3d-v2"; // 持つものを変えたら上げる（古い入れ物は消える）
+const CACHE = "comiket3d-v3"; // 持つものを変えたら上げる（古い入れ物は消える）
+// サークルの画像は、印（★ 行きたい・◆ 候補）をつけたサークルの分だけ、別の入れ物に持つ（ユーザーの指示：
+// 全部の画像を端末に持つのは多すぎる）。ほかの画像は電波があるときにその場で読む
+const IMG_CACHE = "comiket3d-imgs";
 const PAGES = ["/"];
 
 self.addEventListener("install", (e) => {
@@ -16,14 +19,23 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     (async () => {
-      for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+      for (const k of await caches.keys()) if (k !== CACHE && k !== IMG_CACHE) await caches.delete(k);
       await self.clients.claim();
     })(),
   );
 });
 
 // 画面が読み込んだファイル（JS・CSS）の一覧を受け取って持っておく。初めて開いた回は、まだサービスワーカーが働いていないため
+// 印をつけたサークルの画像の一覧を受け取り、その分だけ持つ（入っていないものは消す）
+async function keepImages(urls) {
+  const want = new Set(urls.filter((u) => typeof u === "string" && u.startsWith("/data/circles/")).map((u) => new URL(u, self.location.origin).href));
+  const c = await caches.open(IMG_CACHE);
+  for (const req of await c.keys()) if (!want.has(req.url)) await c.delete(req);
+  await Promise.all([...want].map((u) => c.match(u).then((hit) => hit || c.add(u).catch(() => {}))));
+}
+
 self.addEventListener("message", (e) => {
+  if (e.data?.type === "keep-images") return e.waitUntil(keepImages(e.data.urls ?? []));
   if (e.data?.type !== "cache-urls") return;
   const urls = (e.data.urls ?? []).filter((u) => new URL(u, self.location.origin).origin === self.location.origin);
   e.waitUntil(caches.open(CACHE).then((c) => Promise.all(urls.map((u) => c.match(u).then((hit) => hit || c.add(u).catch(() => {}))))));
@@ -73,7 +85,13 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
   if (req.mode === "navigate") return e.respondWith(networkFirst(req, url.pathname));
   if (url.pathname.startsWith("/_next/static/")) return e.respondWith(cacheFirst(req));
+  // サークルの画像：印をつけたものは持っている分を返す（電波がなくても出せる）。ほかは通信だけ（持たない）
+  if (url.pathname.startsWith("/data/circles/"))
+    return e.respondWith(
+      caches
+        .open(IMG_CACHE)
+        .then((c) => c.match(req))
+        .then((hit) => hit ?? fetch(req)),
+    );
   if (/\.(png|ico|webmanifest)$/.test(url.pathname)) return e.respondWith(staleWhileRevalidate(e, req));
-  // サークルの画像（作者が公開したもの）：電波がなくても、歩くときの札と机の欄に出せるように
-  if (url.pathname.startsWith("/data/circles/")) return e.respondWith(staleWhileRevalidate(e, req));
 });

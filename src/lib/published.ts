@@ -7,7 +7,7 @@ export const PUB_KEYS = { layout: "comiket3d:pub-layout", tags: "comiket3d:pub-t
 type Part = keyof typeof PUB_KEYS;
 const RELOAD_KEY = "comiket3d:pub-reloaded";
 
-export type Circle = { day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; image: string };
+export type Circle = { day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; image: string; thumb: string };
 export type CirclesByDay = Record<Day, Record<string, Circle>>;
 
 export function loadCircles(): CirclesByDay {
@@ -26,6 +26,8 @@ export function loadCircles(): CirclesByDay {
         x: typeof c.x === "string" ? c.x : "",
         url: typeof c.url === "string" && c.url.startsWith("https://") ? c.url : "",
         image: typeof c.image === "string" && c.image.startsWith("/data/circles/") ? c.image : "",
+        // 机の札に出す小さい画像（ないときは大きい画像を使う）
+        thumb: typeof c.thumb === "string" && c.thumb.startsWith("/data/circles/") ? c.thumb : "",
       };
       for (const code of circle.codes) out[c.day][code] = circle;
     }

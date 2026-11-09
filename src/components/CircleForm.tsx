@@ -26,9 +26,16 @@ export function normCode(raw: string): string {
 }
 const CODE_RE = /^[東西南]\S{1,4}-\d{2}[ab]$/u;
 
-// 画像を小さくする（長い辺 800px・webp。webp で書けないブラウザは jpeg）。380KB を超えるときは画質を下げる
-async function shrink(file: File): Promise<string> {
+// 画像を小さくする（長い辺 800px・webp。webp で書けないブラウザは jpeg）。380KB を超えるときは画質を下げる。
+// あわせて、歩くときの机の札に出す小さい画像（160px の正方形。1 枚 5〜10KB）も作る
+async function shrink(file: File): Promise<{ image: string; thumb: string }> {
   const bmp = await createImageBitmap(file);
+  const T = 160, t = document.createElement("canvas");
+  t.width = t.height = T;
+  const k = Math.max(T / bmp.width, T / bmp.height);
+  t.getContext("2d")!.drawImage(bmp, (T - bmp.width * k) / 2, (T - bmp.height * k) / 2, bmp.width * k, bmp.height * k);
+  let thumb = t.toDataURL("image/webp", 0.72);
+  if (!thumb.startsWith("data:image/webp")) thumb = t.toDataURL("image/jpeg", 0.72);
   const scale = Math.min(1, 800 / Math.max(bmp.width, bmp.height));
   const c = document.createElement("canvas");
   c.width = Math.round(bmp.width * scale);
@@ -37,7 +44,7 @@ async function shrink(file: File): Promise<string> {
   for (const q of [0.86, 0.75, 0.62, 0.5, 0.4]) {
     let url = c.toDataURL("image/webp", q);
     if (!url.startsWith("data:image/webp")) url = c.toDataURL("image/jpeg", q);
-    if (url.length * 0.75 < MAX_IMG) return url;
+    if (url.length * 0.75 < MAX_IMG) return { image: url, thumb };
   }
   throw new Error("画像を小さくできませんでした。別の画像を選んでください");
 }
@@ -52,7 +59,7 @@ export function CircleForm() {
   const [url, setUrl] = useState("");
   const [works, setWorks] = useState("");
   const [chars, setChars] = useState<Record<string, string>>({});
-  const [image, setImage] = useState<string | null>(null); // 新しく選んだ画像（data URL）
+  const [image, setImage] = useState<{ image: string; thumb: string } | null>(null); // 新しく選んだ画像（data URL。大・小）
   const [removeImage, setRemoveImage] = useState(false);
   const [agree, setAgree] = useState(false);
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
@@ -120,7 +127,8 @@ export function CircleForm() {
           url: url.trim(),
           works: workList,
           chars: Object.fromEntries(workList.map((w) => [w, split(chars[w] ?? "")]).filter(([, l]) => l.length)),
-          image: image ?? undefined,
+          image: image?.image,
+          thumb: image?.thumb,
           removeImage,
         },
       });
@@ -240,7 +248,7 @@ export function CircleForm() {
               <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
                 {image ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={image} alt="選んだ画像" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
+                  <img src={image.image} alt="選んだ画像" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
                 ) : current?.hasImage && !removeImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={`/api/image.php?id=${current.id}&t=${current.updatedAt}`} alt="登録した画像" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />

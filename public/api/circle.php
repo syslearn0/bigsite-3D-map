@@ -1,6 +1,7 @@
 <?php
 // サークル本人の登録（1 人 1 日 1 件）。作者が確かめて「公開」すると地図に出る。
-// GET：自分の登録の一覧。POST {day, codes[], name, works[], chars{}, x, url, image?（data:image/webp;base64,… 300KB まで）}
+// GET：自分の登録の一覧。POST {day, codes[], name, works[], chars{}, x, url, image?（data:image/webp;base64,… 400KB まで）,
+//   thumb?（机の札に出す小さい画像。40KB・400px まで）}
 // DELETE ?day=1：その日の登録を取り消す
 require __DIR__ . '/_lib.php';
 require_write();
@@ -72,6 +73,13 @@ if (!empty($b['image'])) {
   remove_circle_image($image);
   $image = bin2hex(random_bytes(12)) . '.' . $ext; // 名前は乱数だけ（だれの画像か分からないように）
   file_put_contents($dir . '/' . $image, $bin);
+  // 小さい画像（なくてもよい。そのときは地図が大きい画像を使う）。名前は大きい画像の名前に _s をつけたもの
+  if (!empty($b['thumb']) && preg_match('#^data:image/(webp|jpeg|png);base64,([A-Za-z0-9+/=]+)$#', (string)$b['thumb'], $m)) {
+    $tb = base64_decode($m[2], true);
+    $ti = $tb === false ? false : @getimagesizefromstring($tb);
+    $text = $ti ? (['image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/png' => 'png'][$ti['mime'] ?? ''] ?? null) : null;
+    if ($text && strlen($tb) <= 40000 && $ti[0] <= 400 && $ti[1] <= 400) file_put_contents($dir . '/' . thumb_name($image, $text), $tb);
+  }
 } elseif (!empty($b['removeImage']) && $image !== '') {
   remove_circle_image($image);
   $image = '';

@@ -145,14 +145,22 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
   $list = [];
   foreach ($pdo->query("SELECT * FROM circles WHERE status = 'approved' ORDER BY day, id") as $r) {
     $img = '';
+    $thumb = '';
     $src = private_dir() . '/circles/' . basename($r['image']);
     if ($r['image'] !== '' && is_file($src)) {
       $img = basename($r['image']);
       if (!is_file("$imgDir/$img")) copy($src, "$imgDir/$img");
       $keep[] = $img;
+      $ts = find_thumb(private_dir() . '/circles', $img);
+      if ($ts !== '') {
+        $thumb = basename($ts);
+        if (!is_file("$imgDir/$thumb")) copy($ts, "$imgDir/$thumb");
+        $keep[] = $thumb;
+      }
     }
     $list[] = ['day' => (int)$r['day'], 'codes' => json_decode($r['codes'], true), 'name' => $r['name'], 'works' => json_decode($r['works'], true),
-      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $img ? "/data/circles/$img" : ''];
+      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $img ? "/data/circles/$img" : '',
+      'thumb' => $thumb ? "/data/circles/$thumb" : ''];
   }
   foreach (glob("$imgDir/*") ?: [] as $f) if (!in_array(basename($f), $keep, true)) @unlink($f);
   $tmp = "$dataDir/circles.json.tmp";
@@ -160,11 +168,22 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
   rename($tmp, "$dataDir/circles.json");
 }
 
-// 1 件のサークル登録の画像を消す（手元の分と、公開した分）
+// 小さい画像（机の札に出す）の名前：大きい画像の名前に _s をつけたもの（形は別のこともある）
+function thumb_name(string $image, string $ext): string {
+  return pathinfo(basename($image), PATHINFO_FILENAME) . '_s.' . $ext;
+}
+function find_thumb(string $dir, string $image): string {
+  foreach (['webp', 'jpg', 'png'] as $e) if (is_file("$dir/" . thumb_name($image, $e))) return "$dir/" . thumb_name($image, $e);
+  return '';
+}
+
+// 1 件のサークル登録の画像を消す（手元の分と、公開した分。小さい画像も）
 function remove_circle_image(string $image): void {
   if ($image === '') return;
-  @unlink(private_dir() . '/circles/' . basename($image));
-  @unlink(site_dir() . '/data/circles/' . basename($image));
+  foreach ([private_dir() . '/circles', site_dir() . '/data/circles'] as $dir) {
+    @unlink("$dir/" . basename($image));
+    foreach (['webp', 'jpg', 'png'] as $e) @unlink("$dir/" . thumb_name($image, $e));
+  }
 }
 
 function is_admin_email(string $email): bool {
