@@ -3,10 +3,19 @@
 // 作り方：机 1 つごとに、通路側（島の机は島の外、壁ぞいの机はサークルの反対側）へ R だけ出た点を置き、列の向きに順につなぐ。
 // 向かい合う 2 つの島の線が近いときは、2 本をまん中に寄せて 1 本にする。線の端は少しのばし、近くの線の端と（机をよけて）つなぐ
 import { pointInPolygon, type XZ } from "./geo";
-import { DESK_L, type Booth, type HallLike, type Line } from "./layout";
+import {
+  DESK_L,
+  type Booth,
+  type HallLike,
+  type LayoutFeatures,
+  type Line,
+} from "./layout";
 
 // hall：ホールの中の線はそのホール、通路・階段の線は ""。level：階（1・2・4）
-export type Rails = { nodes: { p: XZ; hall: string; level: number }[]; adj: number[][] };
+export type Rails = {
+  nodes: { p: XZ; hall: string; level: number }[];
+  adj: number[][];
+};
 export type RailPos = { a: number; b: number; t: number }; // 辺 a→b の上の、a からの割合 t
 const R = 2.4; // 机の中心から線までの距離（机 0.45m＋いす 0.9m＋通路の半分ほど）
 const MERGE = 6; // 向かい合う線（通路をはさんで向かい合う机の線）がこれより近ければ、まん中で 1 本に
@@ -16,6 +25,59 @@ const WALL_JOIN = 30; // 壁ぞいの列の切れ目（搬入口など）を、�
 const CLEAR = 1.0; // 線と机（スペースの中心）のあいだにあける距離
 
 const dist = (a: XZ, b: XZ) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+// 配置図から写した、ホールの中の障害物（柱・自販機やロッカーの棟・部屋の囲み）。p がそのどれかに pad m より近いか
+export type Obstacles = Pick<LayoutFeatures, "pillars" | "structures">;
+// （となりのホールの棟が、ホールの境目の切れ目にかかっていることもあるので、同じ階のものはどのホールのものも見る）
+function obstacleTest(
+  feat: Obstacles | null | undefined,
+  halls: { id: string; level: number }[],
+) {
+  const lv = new Map(halls.map((h) => [h.id, h.level]));
+  const byLevel = new Map<
+    number,
+    {
+      pts: { at: XZ; r: number }[];
+      polys: { poly: XZ[]; box: [number, number, number, number] }[];
+    }
+  >();
+  const get = (h: string) => {
+    const l = lv.get(h) ?? 1;
+    return byLevel.get(l) ?? byLevel.set(l, { pts: [], polys: [] }).get(l)!;
+  };
+  for (const p of feat?.pillars ?? [])
+    get(p.hall).pts.push({ at: p.at, r: p.wall ? 0.5 : 0.25 });
+  for (const st of feat?.structures ?? []) {
+    const xs = st.poly.map((q) => q[0]),
+      zs = st.poly.map((q) => q[1]);
+    get(st.hall).polys.push({
+      poly: st.poly,
+      box: [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)],
+    });
+  }
+  return (p: XZ, hall: string, pad: number) => {
+    const o = byLevel.get(lv.get(hall) ?? 1);
+    if (!o) return false;
+    for (const q of o.pts)
+      if (
+        Math.abs(q.at[0] - p[0]) < q.r + pad &&
+        Math.abs(q.at[1] - p[1]) < q.r + pad &&
+        dist(q.at, p) < q.r + pad
+      )
+        return true;
+    for (const { poly, box } of o.polys) {
+      if (
+        p[0] < box[0] - pad ||
+        p[0] > box[1] + pad ||
+        p[1] < box[2] - pad ||
+        p[1] > box[3] + pad
+      )
+        continue;
+      if (pointInPolygon(p, poly) || edgeDist(p, poly) < pad) return true;
+    }
+    return false;
+  };
+}
 // 多角形のふち（辺）までの距離
 const edgeDist = (p: XZ, poly: XZ[]) => {
   let best = Infinity;
@@ -40,7 +102,9 @@ export function buildRails(
   lines: Line[],
   booths: Booth[],
   halls: HallLike[],
+  feat?: Obstacles | null,
 ): Rails {
+  const hitObstacle = obstacleTest(feat, halls);
   const hallPoly = new Map(halls.map((h) => [h.id, h.poly]));
   const hallLevel = new Map(halls.map((h) => [h.id, h.level]));
   // 机（番号）ごとの中心と通路の向き
@@ -141,20 +205,37 @@ export function buildRails(
       if (!byGroup.has(q.group)) byGroup.set(q.group, []);
       byGroup.get(q.group)!.push(i);
     });
-    const off = pts.map((q, i) => (moved[i][0] - q.p[0]) * q.n[0] + (moved[i][1] - q.p[1]) * q.n[1]);
+    const off = pts.map(
+      (q, i) =>
+        (moved[i][0] - q.p[0]) * q.n[0] + (moved[i][1] - q.p[1]) * q.n[1],
+    );
     for (const idx of byGroup.values()) {
-      idx.sort((a2, b2) => pts[a2].u - pts[b2].u);
-      const sm = idx.map((i, k) => {
-        const win: number[] = [];
-        for (let d = -2; d <= 2; d++) {
-          const j = idx[k + d];
-          // 列の切れ目（離れた机）をまたいでは、そろえない
-          if (j === undefined || Math.abs(pts[j].u - pts[i].u) > Math.abs(d) * DESK_L * 1.2 + 0.1) continue;
-          win.push(off[j]);
-        }
-        win.sort((x, y) => x - y);
-        return win[(win.length - 1) >> 1];
-      });
+      // 壁ぞいの列は番号の順（角で曲がる）、島の列は列の向きの順
+      const wallG = !!lines[pts[idx[0]].line].wall;
+      idx.sort((a2, b2) =>
+        wallG ? pts[a2].num - pts[b2].num : pts[a2].u - pts[b2].u,
+      );
+      // 切れ目のない机の続き（となりの机まで 2.3m 以内）ごとに、寄せる量を 1 つにそろえる（机ごとに少しずつちがうと、線がガタガタになる）。
+      // 続きの 3 割以上の机が向かいの線と寄せ合っていれば、その寄せる量のまん中の値、そうでなければ寄せない
+      const sm = new Array<number>(idx.length).fill(0);
+      let r0 = 0;
+      for (let k = 1; k <= idx.length; k++) {
+        if (
+          k < idx.length &&
+          dist(pts[idx[k]].p, pts[idx[k - 1]].p) <= DESK_L * 1.2 + 0.1
+        )
+          continue;
+        const run = idx.slice(r0, k).map((i) => off[i]);
+        const merged = run
+          .filter((o) => Math.abs(o) > 0.05)
+          .sort((x, y) => x - y);
+        const v =
+          merged.length >= run.length * 0.3
+            ? merged[(merged.length - 1) >> 1]
+            : 0;
+        for (let m = r0; m < k; m++) sm[m] = v;
+        r0 = k;
+      }
       idx.forEach((i, k) => {
         const q = pts[i];
         moved[i] = [q.p[0] + q.n[0] * sm[k], q.p[1] + q.n[1] * sm[k]];
@@ -182,6 +263,20 @@ export function buildRails(
       )
         for (const d of deskGrid.get(`${hall}|${gx},${gz}`) ?? [])
           if (dist(d, p) < CLEAR) return false;
+    return !hitObstacle(p, hall, 0.5);
+  };
+  // 柱や棟を突き抜けないか（机の前の線どうしを結ぶとき。机はよけなくてよい）
+  const clearOfObstacles = (a: XZ, b: XZ, hall: string) => {
+    const n = Math.max(1, Math.ceil(dist(a, b) / 0.3));
+    for (let i = 0; i <= n; i++)
+      if (
+        hitObstacle(
+          [a[0] + ((b[0] - a[0]) * i) / n, a[1] + ((b[1] - a[1]) * i) / n],
+          hall,
+          0.4,
+        )
+      )
+        return false;
     return true;
   };
   const clearSeg = (a: XZ, b: XZ, hall: string) => {
@@ -239,9 +334,18 @@ export function buildRails(
     const k = `${hall}|${Math.round(p[0] * 3)}|${Math.round(p[1] * 3)}`;
     const got = nodeKey.get(k);
     if (got !== undefined) return got;
-    for (let gx = Math.floor((p[0] - SNAP) / cell); gx <= Math.floor((p[0] + SNAP) / cell); gx++)
-      for (let gz = Math.floor((p[1] - SNAP) / cell); gz <= Math.floor((p[1] + SNAP) / cell); gz++)
-        for (const j of nodeGrid.get(`${gx},${gz}`) ?? []) if (nodes[j].hall === hall && dist(nodes[j].p, p) < SNAP) return j;
+    for (
+      let gx = Math.floor((p[0] - SNAP) / cell);
+      gx <= Math.floor((p[0] + SNAP) / cell);
+      gx++
+    )
+      for (
+        let gz = Math.floor((p[1] - SNAP) / cell);
+        gz <= Math.floor((p[1] + SNAP) / cell);
+        gz++
+      )
+        for (const j of nodeGrid.get(`${gx},${gz}`) ?? [])
+          if (nodes[j].hall === hall && dist(nodes[j].p, p) < SNAP) return j;
     nodes.push({ p, hall, level: hallLevel.get(hall) ?? 1 });
     const i = nodes.length - 1;
     nodeKey.set(k, i);
@@ -252,6 +356,7 @@ export function buildRails(
   };
   // 島の列ごとに、線の端をそろえる所（u）：島の両端の少し先と、列の切れ目（横切る通路）のまん中
   const cutsOf = new Map<number, number[]>();
+  const cutRange = new Map<number, [number, number][]>();
   lines.forEach((line, li) => {
     if (line.wall) return;
     const us = [
@@ -267,11 +372,88 @@ export function buildRails(
       li,
       cuts.sort((a, b) => a - b),
     );
+    // 動かしてよい範囲（端の机から 1.6m・切れ目の両側の机から 1.3m 以上、島の端からは 4m まで。机に近すぎると横切る線が引けない）
+    cutRange.set(li, [
+      [us[0] - 4, us[0] - 1.6],
+      [us[us.length - 1] + 1.6, us[us.length - 1] + 4],
+      ...us
+        .slice(1)
+        .flatMap((u2, k) =>
+          u2 - us[k] > DESK_L * 1.9
+            ? [[us[k] + 1.3, u2 - 1.3] as [number, number]]
+            : [],
+        ),
+    ]);
   });
+  // となり合う島の端・切れ目の横切る線が、少しずつずれて並ぶとジグザグになるので、同じ向きの島どうしで
+  // 2.5m より近い所は 1 本の線にそろえる（ユーザーの指示：島の端のあたりが気持ち悪い）
+  {
+    type C = {
+      li: number;
+      k: number;
+      g: number;
+      lo: number;
+      hi: number;
+      sg: number;
+      base: number;
+    };
+    const byDir = new Map<string, C[]>();
+    for (const [li, cuts] of cutsOf) {
+      const line = lines[li];
+      const hall = pts.find((q) => q.line === li)?.hall ?? "";
+      // 向き（π ちがいは同じ向き）
+      let th = ((line.angle % Math.PI) + Math.PI) % Math.PI;
+      if (th > Math.PI - 0.01) th -= Math.PI;
+      const sg = Math.cos(line.angle - th) > 0 ? 1 : -1;
+      const key2 = `${hall}|${Math.round(th * 50)}`;
+      const d: XZ = [Math.cos(th), Math.sin(th)];
+      const base = line.start[0] * d[0] + line.start[1] * d[1];
+      const ranges = cutRange.get(li)!;
+      cuts.forEach((u, k) => {
+        const r0 = ranges.find(
+          ([lo, hi]) => u >= lo - 0.01 && u <= hi + 0.01,
+        ) ?? [u, u];
+        const g1 = base + sg * r0[0],
+          g2 = base + sg * r0[1];
+        if (!byDir.has(key2)) byDir.set(key2, []);
+        byDir
+          .get(key2)!
+          .push({
+            li,
+            k,
+            g: base + sg * u,
+            lo: Math.min(g1, g2),
+            hi: Math.max(g1, g2),
+            sg,
+            base,
+          });
+      });
+    }
+    for (const list of byDir.values()) {
+      list.sort((x, y) => x.g - y.g);
+      let k0 = 0;
+      for (let k = 1; k <= list.length; k++) {
+        if (k < list.length && list[k].g - list[k - 1].g < 2.5) continue;
+        const cl = list.slice(k0, k);
+        k0 = k;
+        if (cl.length < 2 || new Set(cl.map((c) => c.li)).size < cl.length)
+          continue;
+        const lo = Math.max(...cl.map((c) => c.lo)),
+          hi = Math.min(...cl.map((c) => c.hi));
+        if (lo > hi) continue;
+        const mean = cl.reduce((a2, c) => a2 + c.g, 0) / cl.length;
+        const v = Math.max(lo, Math.min(hi, mean));
+        for (const c of cl) cutsOf.get(c.li)![c.k] = (v - c.base) * c.sg;
+      }
+    }
+    for (const cuts of cutsOf.values()) cuts.sort((a2, b2) => a2 - b2);
+  }
   for (const idx of groups.values()) {
     // 壁ぞいの列は、番号の順（壁にそって角も曲がる）。島の列は、列の向きの順
     const isWall = !!lines[pts[idx[0]].line].wall;
-    idx.sort((a, b) => (isWall ? pts[a].num - pts[b].num : pts[a].u - pts[b].u));
+    idx.sort((a, b) =>
+      isWall ? pts[a].num - pts[b].num : pts[a].u - pts[b].u,
+    );
     let chain: number[] = [];
     // 壁ぞいの列が、搬入口・出入口・柱などで切れている所は、前のかたまりの端と次のかたまりの端を、まっすぐ結ぶ
     // （壁の前を 1 本の線で歩けるように。ユーザーの指示：短い線がばらばらに出ていた）
@@ -281,7 +463,15 @@ export function buildRails(
       const li = pts[chain[0]].line,
         line = lines[li];
       const ids = chain.map((i) => nodeAt(moved[i], pts[i].hall));
-      for (let k = 1; k < ids.length; k++) addEdge(ids[k - 1], ids[k]);
+      for (let k = 1; k < ids.length; k++)
+        if (
+          clearOfObstacles(
+            nodes[ids[k - 1]].p,
+            nodes[ids[k]].p,
+            nodes[ids[k]].hall,
+          )
+        )
+          addEdge(ids[k - 1], ids[k]);
       const endIds: number[] = [];
       // 両端をのばす：島の列は、列の向きにまっすぐ、端をそろえる所（cuts）まで。壁ぞいの列は、線の向きに EXT だけ
       for (const [end, prev, sgn, ue] of [
@@ -325,8 +515,10 @@ export function buildRails(
         }
       }
       if (line.wall && prevTail >= 0) {
-        const a = nodes[prevTail].p, b = nodes[endIds[0]].p;
-        if (dist(a, b) <= WALL_JOIN && clearSeg(a, b, nodes[prevTail].hall)) addEdge(prevTail, endIds[0]);
+        const a = nodes[prevTail].p,
+          b = nodes[endIds[0]].p;
+        if (dist(a, b) <= WALL_JOIN && clearSeg(a, b, nodes[prevTail].hall))
+          addEdge(prevTail, endIds[0]);
       }
       prevTail = endIds[1];
       chain = [];
@@ -732,7 +924,11 @@ export function railPath(r: Rails, from: RailPos, to: RailPos): XZ[] | null {
 
 // 通路・広場・階段の線（scripts/build-corridors.ts で作ったもの）を足し、ホールの出入口でホールの中の線とつなぐ。
 // desks：ホールごとの机（出入口からホールの中の線へまっすぐ結ぶとき、机をよける）
-export type Corridors = { lines: { level: number; pts: XZ[] }[]; stairs: { a: XZ; la: number; b: XZ; lb: number; kind: string }[] };
+export type Corridors = {
+  lines: { level: number; pts: XZ[] }[];
+  stairs: { a: XZ; la: number; b: XZ; lb: number; kind: string }[];
+  keys?: { level: number; at: XZ; kind: string }[];
+};
 export function addCorridors(
   r: Rails,
   c: Corridors,
@@ -741,18 +937,33 @@ export function addCorridors(
   halls: { id: string; level: number; poly: XZ[]; closed?: string }[],
   desks: Map<string, XZ[]>,
   gaps: { a: XZ; b: XZ }[] = [],
+  feat?: (Obstacles & { openings?: LayoutFeatures["openings"] }) | null,
 ): Rails {
+  const hitObstacle = obstacleTest(feat, halls);
+  const openings = feat?.openings ?? [];
   const nodes = r.nodes.slice();
   const edges = new Set<string>();
   r.adj.forEach((ns, a) => ns.forEach((b) => b > a && edges.add(`${a},${b}`)));
-  const addEdge = (a: number, b: number) => a !== b && edges.add(a < b ? `${a},${b}` : `${b},${a}`);
+  const addEdge = (a: number, b: number) =>
+    a !== b && edges.add(a < b ? `${a},${b}` : `${b},${a}`);
   const grid = new Map<string, number[]>();
   const gk = (p: XZ) => `${Math.floor(p[0] / 4)},${Math.floor(p[1] / 4)}`;
-  nodes.forEach((n, i) => (grid.get(gk(n.p)) ?? grid.set(gk(n.p), []).get(gk(n.p))!).push(i));
+  nodes.forEach((n, i) =>
+    (grid.get(gk(n.p)) ?? grid.set(gk(n.p), []).get(gk(n.p))!).push(i),
+  );
   const near = (p: XZ, r2: number, ok: (i: number) => boolean) => {
-    let best = -1, bd = r2;
-    for (let gx = Math.floor((p[0] - r2) / 4); gx <= Math.floor((p[0] + r2) / 4); gx++)
-      for (let gz = Math.floor((p[1] - r2) / 4); gz <= Math.floor((p[1] + r2) / 4); gz++)
+    let best = -1,
+      bd = r2;
+    for (
+      let gx = Math.floor((p[0] - r2) / 4);
+      gx <= Math.floor((p[0] + r2) / 4);
+      gx++
+    )
+      for (
+        let gz = Math.floor((p[1] - r2) / 4);
+        gz <= Math.floor((p[1] + r2) / 4);
+        gz++
+      )
         for (const j of grid.get(`${gx},${gz}`) ?? []) {
           const d = dist(nodes[j].p, p);
           if (d < bd && ok(j)) [best, bd] = [j, d];
@@ -761,7 +972,11 @@ export function addCorridors(
   };
   // 通路の点（同じ階で 0.8m 以内の点は 1 つに）
   const corridorNode = (p: XZ, level: number) => {
-    const j = near(p, 0.8, (i) => nodes[i].hall === "" && nodes[i].level === level);
+    const j = near(
+      p,
+      0.8,
+      (i) => nodes[i].hall === "" && nodes[i].level === level,
+    );
     if (j >= 0) return j;
     nodes.push({ p, hall: "", level });
     (grid.get(gk(p)) ?? grid.set(gk(p), []).get(gk(p))!).push(nodes.length - 1);
@@ -775,21 +990,39 @@ export function addCorridors(
       prev = i;
     }
   }
-  for (const s of c.stairs) addEdge(corridorNode(s.a, s.la), corridorNode(s.b, s.lb));
+  for (const s of c.stairs)
+    addEdge(corridorNode(s.a, s.la), corridorNode(s.b, s.lb));
   // 通路の線の途中に、ほかの線の端（や点）が乗っている所（T 字）は、そこで線を分けてつなぐ
   {
-    const cor = [...edges].map((e) => e.split(",").map(Number) as [number, number]).filter(([a2, b2]) => nodes[a2].hall === "" && nodes[b2].hall === "" && nodes[a2].level === nodes[b2].level);
+    const cor = [...edges]
+      .map((e) => e.split(",").map(Number) as [number, number])
+      .filter(
+        ([a2, b2]) =>
+          nodes[a2].hall === "" &&
+          nodes[b2].hall === "" &&
+          nodes[a2].level === nodes[b2].level,
+      );
     const onto = new Map<string, { t: number; n: number }[]>();
     nodes.forEach((nd, n) => {
       if (nd.hall !== "") return;
       for (const [a2, b2] of cor) {
         if (a2 === n || b2 === n || nodes[a2].level !== nd.level) continue;
-        const A = nodes[a2].p, B = nodes[b2].p;
-        if (nd.p[0] < Math.min(A[0], B[0]) - 0.6 || nd.p[0] > Math.max(A[0], B[0]) + 0.6 || nd.p[1] < Math.min(A[1], B[1]) - 0.6 || nd.p[1] > Math.max(A[1], B[1]) + 0.6) continue;
-        const dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+        const A = nodes[a2].p,
+          B = nodes[b2].p;
+        if (
+          nd.p[0] < Math.min(A[0], B[0]) - 0.6 ||
+          nd.p[0] > Math.max(A[0], B[0]) + 0.6 ||
+          nd.p[1] < Math.min(A[1], B[1]) - 0.6 ||
+          nd.p[1] > Math.max(A[1], B[1]) + 0.6
+        )
+          continue;
+        const dx = B[0] - A[0],
+          dz = B[1] - A[1],
+          L2 = dx * dx + dz * dz || 1;
         const t = ((nd.p[0] - A[0]) * dx + (nd.p[1] - A[1]) * dz) / L2;
         if (t <= 0.01 || t >= 0.99) continue;
-        if (Math.hypot(nd.p[0] - A[0] - dx * t, nd.p[1] - A[1] - dz * t) > 0.6) continue;
+        if (Math.hypot(nd.p[0] - A[0] - dx * t, nd.p[1] - A[1] - dz * t) > 0.6)
+          continue;
         const k = `${a2},${b2}`;
         (onto.get(k) ?? onto.set(k, []).get(k)!).push({ t, n });
       }
@@ -801,26 +1034,35 @@ export function addCorridors(
       for (let i = 1; i < seq.length; i++) addEdge(seq[i - 1], seq[i]);
     }
   }
-  // 出入口・出口：通路の線の近い点と、ホールの中の線の近い点を、出入口の所を通って結ぶ
-  const clearOfDesks = (a: XZ, b: XZ, hall: string) => {
-    const list = desks.get(hall) ?? [];
-    const L = dist(a, b), n = Math.max(1, Math.ceil(L / 0.5));
-    for (let k = 0; k <= n; k++) {
-      const q: XZ = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
-      for (const d of list) if (Math.abs(d[0] - q[0]) < 1 && Math.abs(d[1] - q[1]) < 1 && dist(d, q) < 0.9) return false;
-    }
-    return true;
-  };
   // at からいちばん近い線の上の点（線を分けて点を足す）。ok：その線を使うか。maxD より遠ければ -1
-  const attach = (at: XZ, maxD: number, ok: (a: number, b: number) => boolean, hall: string, level: number) => {
-    let best: { a: number; b: number; t: number; q: XZ; d: number } | null = null;
+  const attach = (
+    at: XZ,
+    maxD: number,
+    ok: (a: number, b: number) => boolean,
+    hall: string,
+    level: number,
+  ) => {
+    let best: { a: number; b: number; t: number; q: XZ; d: number } | null =
+      null;
     for (const e of edges) {
       const [a2, b2] = e.split(",").map(Number);
       if (!ok(a2, b2)) continue;
-      const A = nodes[a2].p, B = nodes[b2].p;
-      if (at[0] < Math.min(A[0], B[0]) - maxD || at[0] > Math.max(A[0], B[0]) + maxD || at[1] < Math.min(A[1], B[1]) - maxD || at[1] > Math.max(A[1], B[1]) + maxD) continue;
-      const dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0, Math.min(1, ((at[0] - A[0]) * dx + (at[1] - A[1]) * dz) / L2));
+      const A = nodes[a2].p,
+        B = nodes[b2].p;
+      if (
+        at[0] < Math.min(A[0], B[0]) - maxD ||
+        at[0] > Math.max(A[0], B[0]) + maxD ||
+        at[1] < Math.min(A[1], B[1]) - maxD ||
+        at[1] > Math.max(A[1], B[1]) + maxD
+      )
+        continue;
+      const dx = B[0] - A[0],
+        dz = B[1] - A[1],
+        L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(
+        0,
+        Math.min(1, ((at[0] - A[0]) * dx + (at[1] - A[1]) * dz) / L2),
+      );
       const q: XZ = [A[0] + dx * t, A[1] + dz * t];
       const d = dist(q, at);
       if (d > maxD || (best && d >= best.d)) continue;
@@ -831,38 +1073,414 @@ export function addCorridors(
     if (best.t > 0.95) return best.b;
     nodes.push({ p: best.q, hall, level });
     const n = nodes.length - 1;
-    edges.delete(best.a < best.b ? `${best.a},${best.b}` : `${best.b},${best.a}`);
+    edges.delete(
+      best.a < best.b ? `${best.a},${best.b}` : `${best.b},${best.a}`,
+    );
     addEdge(best.a, n);
     addEdge(n, best.b);
     return n;
   };
-  // 出入口：ホールの中の線のいちばん近い所（35m まで、机をよけて）と、外の通路の線のいちばん近い所（8m まで）を、出入口を通って結ぶ
-  const link = (at: XZ, level: number, hall: string | null) => {
-    const hallsHere = hall ? [hall] : halls.filter((h) => h.level === level && !h.closed && edgeDist(at, h.poly) < 6).map((h) => h.id);
-    for (const h of hallsHere) {
-      // （ホールの壁と島のあいだが広いホールでは 30m ほどある。いちばん近い所なので、壁からまっすぐ入る線になる）
-      const inn = attach(at, 35, (a2, b2) => nodes[a2].hall === h && nodes[b2].hall === h, h, level);
-      if (inn < 0 || !clearOfDesks(at, nodes[inn].p, h)) continue;
-      const out = attach(at, 8, (a2, b2) => nodes[a2].hall === "" && nodes[b2].hall === "" && nodes[a2].level === level && nodes[b2].level === level, "", level);
-      nodes.push({ p: at, hall: "", level });
-      const di = nodes.length - 1;
-      addEdge(di, inn);
-      if (out >= 0) addEdge(di, out);
+  // 出入口からホールの中の線へ：壁に直角に入り、そのあとは壁と平行・直角にだけ曲がって（ユーザーの指示）、
+  // 机・柱・棟をよけて、いちばん近い線まで。0.5m 角の升目で、曲がるたびに 3m 分の遠回りとして数える
+  const hallById = new Map(halls.map((h) => [h.id, h]));
+  const deskCell = new Map<string, XZ[]>();
+  for (const [h, list] of desks)
+    for (const d of list) {
+      const k = `${h}|${Math.floor(d[0] / 2)},${Math.floor(d[1] / 2)}`;
+      (deskCell.get(k) ?? deskCell.set(k, []).get(k)!).push(d);
     }
+  const nearDesk = (q: XZ, h: string, r0: number) => {
+    for (
+      let gx = Math.floor((q[0] - r0) / 2);
+      gx <= Math.floor((q[0] + r0) / 2);
+      gx++
+    )
+      for (
+        let gz = Math.floor((q[1] - r0) / 2);
+        gz <= Math.floor((q[1] + r0) / 2);
+        gz++
+      )
+        for (const d of deskCell.get(`${h}|${gx},${gz}`) ?? [])
+          if (dist(d, q) < r0) return true;
+    return false;
+  };
+  const clearPath = (a: XZ, b: XZ, h: string) => {
+    const m = Math.max(1, Math.ceil(dist(a, b) / 0.4));
+    for (let k = 2; k <= m; k++) {
+      const q: XZ = [
+        a[0] + ((b[0] - a[0]) * k) / m,
+        a[1] + ((b[1] - a[1]) * k) / m,
+      ];
+      if (nearDesk(q, h, 0.9) || hitObstacle(q, h, 0.4)) return false;
+    }
+    return true;
+  };
+  const routeIn = (
+    at: XZ,
+    h: string,
+    level: number,
+    startNode = -1,
+  ): number => {
+    const hall = hallById.get(h);
+    if (!hall) return -1;
+    const poly = hall.poly;
+    // いちばん近い壁の向き（e）と、ホールの内向き（n）
+    let e: XZ = [1, 0],
+      bd = Infinity;
+    poly.forEach((a, k) => {
+      const b = poly[(k + 1) % poly.length];
+      const dx = b[0] - a[0],
+        dz = b[1] - a[1],
+        L = Math.hypot(dx, dz) || 1;
+      const t = Math.max(
+        0,
+        Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dz) / (L * L)),
+      );
+      const d = Math.hypot(at[0] - a[0] - dx * t, at[1] - a[1] - dz * t);
+      if (d < bd) [bd, e] = [d, [dx / L, dz / L]];
+    });
+    let n: XZ = [-e[1], e[0]];
+    if (!pointInPolygon([at[0] + n[0] * 1.5, at[1] + n[1] * 1.5], poly))
+      n = [-n[0], -n[1]];
+    const S = 0.5,
+      NI = 161,
+      NJ = 101,
+      I0 = 80; // 壁ぞいに ±40m、奥へ 50m
+    const world = (i: number, j: number): XZ => [
+      at[0] + e[0] * (i - I0) * S + n[0] * j * S,
+      at[1] + e[1] * (i - I0) * S + n[1] * j * S,
+    ];
+    const cellOf = (q: XZ): [number, number] => {
+      const rx = q[0] - at[0],
+        rz = q[1] - at[1];
+      return [
+        Math.round((rx * e[0] + rz * e[1]) / S) + I0,
+        Math.round((rx * n[0] + rz * n[1]) / S),
+      ];
+    };
+    // 線のある升目（このホールの線）
+    const target = new Map<number, [number, number]>();
+    for (const ek of edges) {
+      const [a2, b2] = ek.split(",").map(Number);
+      if (nodes[a2].hall !== h || nodes[b2].hall !== h) continue;
+      const A = nodes[a2].p,
+        B = nodes[b2].p;
+      if (Math.min(dist(A, at), dist(B, at)) > 60 + dist(A, B)) continue;
+      const m = Math.max(1, Math.ceil(dist(A, B) / 0.2));
+      for (let k = 0; k <= m; k++) {
+        const [ci, cj] = cellOf([
+          A[0] + ((B[0] - A[0]) * k) / m,
+          A[1] + ((B[1] - A[1]) * k) / m,
+        ]);
+        if (ci >= 0 && ci < NI && cj >= 1 && cj < NJ)
+          target.set(ci * NJ + cj, [a2, b2]);
+      }
+    }
+    if (!target.size) return -1;
+    const freeMemo = new Int8Array(NI * NJ);
+    const free = (i: number, j: number) => {
+      const k = i * NJ + j;
+      if (!freeMemo[k]) {
+        const q = world(i, j);
+        freeMemo[k] =
+          pointInPolygon(q, poly) &&
+          !nearDesk(q, h, 0.9) &&
+          !hitObstacle(q, h, 0.45)
+            ? 1
+            : 2;
+      }
+      return freeMemo[k] === 1;
+    };
+    // 状態：升目 × 向き（0:+e 1:-e 2:+n 3:-n）
+    const DI = [1, -1, 0, 0],
+      DJ = [0, 0, 1, -1];
+    const N = NI * NJ * 4,
+      cost = new Float64Array(N).fill(Infinity),
+      from = new Int32Array(N).fill(-1);
+    const heap: [number, number][] = [];
+    const push = (c: number, st: number) => {
+      heap.push([c, st]);
+      let k = heap.length - 1;
+      while (k > 0) {
+        const pk = (k - 1) >> 1;
+        if (heap[pk][0] <= heap[k][0]) break;
+        [heap[pk], heap[k]] = [heap[k], heap[pk]];
+        k = pk;
+      }
+    };
+    const pop = () => {
+      const top = heap[0],
+        last = heap.pop()!;
+      if (heap.length) {
+        heap[0] = last;
+        let k = 0;
+        for (;;) {
+          const l = 2 * k + 1,
+            r2 = l + 1;
+          let m = k;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r2 < heap.length && heap[r2][0] < heap[m][0]) m = r2;
+          if (m === k) break;
+          [heap[m], heap[k]] = [heap[k], heap[m]];
+          k = m;
+        }
+      }
+      return top;
+    };
+    // 入ってすぐの空いている升目（壁から 5m まで。配置図の壁と会場の形が少しずれている所もある）から、奥へ向いて始める。
+    // 出入口のすぐ前に棟などがあってまっすぐ入れないときは、入ってすぐ横へよけた所（8m まで）から
+    let started = false;
+    for (let j = 1; j <= 10 && !started; j++)
+      if (free(I0, j)) {
+        const st = (I0 * NJ + j) * 4 + 2;
+        cost[st] = j * S;
+        push(j * S, st);
+        started = true;
+      }
+    if (!started)
+      for (let di = 1; di <= 16; di++)
+        for (const i of [I0 - di, I0 + di])
+          for (let j = 1; j <= 4; j++) {
+            if (!free(i, j) || !clearPath(at, world(i, j), h)) continue;
+            const st = (i * NJ + j) * 4 + 2,
+              c0 = dist(at, world(i, j)) + 3;
+            if (c0 < cost[st]) {
+              cost[st] = c0;
+              push(c0, st);
+            }
+          }
+    let goal = -1;
+    while (heap.length) {
+      const [c, st] = pop();
+      if (c > cost[st]) continue;
+      if (c > 90) break;
+      const cell = st >> 2,
+        dir = st & 3,
+        i = Math.floor(cell / NJ),
+        j = cell % NJ;
+      if (target.has(cell)) {
+        goal = st;
+        break;
+      }
+      for (let d2 = 0; d2 < 4; d2++) {
+        if (dir >> 1 === d2 >> 1 && dir !== d2) continue; // 引き返さない
+        const ni = i + DI[d2],
+          nj = j + DJ[d2];
+        if (ni < 0 || ni >= NI || nj < 1 || nj >= NJ || !free(ni, nj)) continue;
+        const nc = c + S + (d2 === dir ? 0 : 3);
+        const ns = (ni * NJ + nj) * 4 + d2;
+        if (nc < cost[ns]) {
+          cost[ns] = nc;
+          from[ns] = st;
+          push(nc, ns);
+        }
+      }
+    }
+    if (goal < 0) return -1;
+    // 升目の道を、曲がる所だけの点にする
+    const cells: [number, number, number][] = [];
+    for (let st = goal; st >= 0; st = from[st])
+      cells.push([Math.floor((st >> 2) / NJ), (st >> 2) % NJ, st & 3]);
+    cells.reverse();
+    const corners: XZ[] = [];
+    if (cells[0][0] !== I0) corners.push(world(cells[0][0], cells[0][1]));
+    for (let k = 1; k < cells.length; k++)
+      if (cells[k][2] !== cells[k - 1][2])
+        corners.push(world(cells[k - 1][0], cells[k - 1][1]));
+    // 最後：線の上へ（升目のまん中から、いちばん近い所）
+    const [ga, gb] = target.get(goal >> 2)!;
+    const ek = ga < gb ? `${ga},${gb}` : `${gb},${ga}`;
+    if (!edges.has(ek)) return -1;
+    const last = world(cells[cells.length - 1][0], cells[cells.length - 1][1]);
+    const A = nodes[ga].p,
+      B = nodes[gb].p,
+      dx = B[0] - A[0],
+      dz = B[1] - A[1],
+      L2 = dx * dx + dz * dz || 1;
+    const t = Math.max(
+      0,
+      Math.min(1, ((last[0] - A[0]) * dx + (last[1] - A[1]) * dz) / L2),
+    );
+    let end: number;
+    if (dist(A, last) < 0.4 || t < 0.02) end = ga;
+    else if (dist(B, last) < 0.4 || t > 0.98) end = gb;
+    else {
+      nodes.push({ p: [A[0] + dx * t, A[1] + dz * t], hall: h, level });
+      end = nodes.length - 1;
+      edges.delete(ek);
+      addEdge(ga, end);
+      addEdge(end, gb);
+    }
+    // 出入口の点から、曲がり角を通って線まで（出入口に通路の線の端があれば、その点から）
+    let first = startNode;
+    if (first < 0) {
+      nodes.push({ p: at, hall: "", level });
+      first = nodes.length - 1;
+    }
+    let prev = first;
+    for (const q of corners) {
+      nodes.push({ p: q, hall: h, level });
+      addEdge(prev, nodes.length - 1);
+      prev = nodes.length - 1;
+    }
+    addEdge(prev, end);
+    return first;
+  };
+  // 出入口：ホールの中の線へ（上の道）と、外の通路の線のいちばん近い所（outD m まで）を結ぶ。
+  // needOut：外の線がなければ結ばない（開いているシャッターなど、外に道がない所）
+  const link = (
+    at: XZ,
+    level: number,
+    hall: string | null,
+    outD = 8,
+    needOut = false,
+  ) => {
+    let linked = false;
+    const hallsHere = hall
+      ? [hall]
+      : halls
+          .filter(
+            (h) => h.level === level && !h.closed && edgeDist(at, h.poly) < 6,
+          )
+          .map((h) => h.id);
+    for (const h of hallsHere) {
+      const out = attach(
+        at,
+        outD,
+        (a2, b2) =>
+          nodes[a2].hall === "" &&
+          nodes[b2].hall === "" &&
+          nodes[a2].level === level &&
+          nodes[b2].level === level,
+        "",
+        level,
+      );
+      if (needOut && out < 0) continue;
+      const same = out >= 0 && dist(nodes[out].p, at) < 0.5;
+      let di = routeIn(at, h, level, same ? out : -1);
+      if (di < 0) {
+        // 升目の道が見つからない（出入口のすぐ前がふさがっている）ときは、いちばん近い所へまっすぐ（机・柱をよけられるときだけ）
+        const inn = attach(
+          at,
+          35,
+          (a2, b2) => nodes[a2].hall === h && nodes[b2].hall === h,
+          h,
+          level,
+        );
+        if (inn < 0 || !clearPath(at, nodes[inn].p, h)) continue;
+        if (same) di = out;
+        else {
+          nodes.push({ p: at, hall: "", level });
+          di = nodes.length - 1;
+        }
+        addEdge(di, inn);
+      }
+      if (out >= 0 && !same) addEdge(di, out);
+      linked = true;
+    }
+    return linked;
   };
   // 搬入口（トラック用のシャッター）は、来場者は通らないのでつながない
   for (const d of doors) if (d.kind !== "搬入口") link(d.at, d.level, d.hall);
   for (const e of exits) link(e.at, e.level, null);
+  // 配置図で開いている壁の切れ目（開いているシャッターなど）：出入口と同じように結ぶ（出入口と同じ所は除く）
+  for (const o of openings) {
+    const m: XZ = [(o.a[0] + o.b[0]) / 2, (o.a[1] + o.b[1]) / 2];
+    const hall = hallById.get(o.hall);
+    if (!hall || hall.closed) continue;
+    if (
+      doors.some(
+        (d) => d.kind !== "搬入口" && d.hall === o.hall && dist(d.at, m) < 8,
+      )
+    )
+      continue;
+    // となりのホールとの切れ目（下で結ぶ）と同じ所は除く
+    if (
+      gaps.some((g) => {
+        const gm: XZ = [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2];
+        return (
+          dist(gm, m) < 8 &&
+          halls.filter((h) => !h.closed && edgeDist(gm, h.poly) < 3).length >= 2
+        );
+      })
+    )
+      continue;
+    // 切れ目のまん中のすぐ内側に棟などがあるときは、切れ目の中で少しずつずらした所から
+    const w = dist(o.a, o.b),
+      ex: XZ = [(o.b[0] - o.a[0]) / (w || 1), (o.b[1] - o.a[1]) / (w || 1)];
+    for (let k = 0; k <= Math.floor(w / 2 - 0.5); k++) {
+      let done = false;
+      for (const sg of k ? [-1, 1] : [1]) {
+        if (
+          link(
+            [m[0] + ex[0] * k * sg, m[1] + ex[1] * k * sg],
+            hall.level,
+            o.hall,
+            25,
+            true,
+          )
+        ) {
+          done = true;
+          break;
+        }
+      }
+      if (done) break;
+    }
+  }
   // となりのホールとの壁の切れ目（東1〜3 のつなぎ目など）：両側のホールの中の線を、切れ目のまん中を通って結ぶ
   for (const g of gaps) {
     const m: XZ = [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2];
     const both = halls.filter((h) => !h.closed && edgeDist(m, h.poly) < 3);
     if (both.length < 2) continue;
-    const ends = both.map((h) => attach(m, 35, (a2, b2) => nodes[a2].hall === h.id && nodes[b2].hall === h.id, h.id, h.level));
-    if (ends.some((e) => e < 0)) continue;
-    nodes.push({ p: m, hall: "", level: both[0].level });
-    const mi = nodes.length - 1;
-    for (const e of ends) addEdge(mi, e);
+    const keepN = nodes.length,
+      keepE = new Set(edges);
+    const ends = both.map((h) => routeIn(m, h.id, h.level));
+    if (ends.some((e) => e < 0)) {
+      // 片方のホールへ入れないときは、つながない（もう片方へ引いた線も消す）
+      nodes.length = keepN;
+      edges.clear();
+      for (const e of keepE) edges.add(e);
+      continue;
+    }
+    addEdge(ends[0], ends[1]);
+  }
+  // 行き先のない枝（通路の線の行き止まりで、出入口・出口・階段の端・救護室のどれでもない所）は、つけ根まで消す（ユーザーの指示）
+  {
+    const goal = (p: XZ, level: number) =>
+      (c.keys ?? []).some((k) => k.level === level && dist(k.at, p) < 2.5) ||
+      doors.some(
+        (d) => d.kind !== "搬入口" && d.level === level && dist(d.at, p) < 2.5,
+      ) ||
+      exits.some((e) => e.level === level && dist(e.at, p) < 2.5) ||
+      c.stairs.some(
+        (st) =>
+          (st.la === level && dist(st.a, p) < 1) ||
+          (st.lb === level && dist(st.b, p) < 1),
+      );
+    const am = new Map<number, Set<number>>();
+    for (const e of edges) {
+      const [a2, b2] = e.split(",").map(Number);
+      (am.get(a2) ?? am.set(a2, new Set()).get(a2)!).add(b2);
+      (am.get(b2) ?? am.set(b2, new Set()).get(b2)!).add(a2);
+    }
+    const queue = [...am.keys()];
+    while (queue.length) {
+      const i = queue.pop()!;
+      const ns = am.get(i);
+      if (
+        !ns ||
+        ns.size !== 1 ||
+        nodes[i].hall !== "" ||
+        goal(nodes[i].p, nodes[i].level)
+      )
+        continue;
+      const j = [...ns][0];
+      if (nodes[j].level !== nodes[i].level) continue; // 階段の線は消さない
+      edges.delete(i < j ? `${i},${j}` : `${j},${i}`);
+      ns.delete(j);
+      am.get(j)!.delete(i);
+      queue.push(j);
+    }
   }
   const adj: number[][] = nodes.map(() => []);
   for (const e of edges) {

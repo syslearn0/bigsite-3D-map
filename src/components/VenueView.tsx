@@ -1621,6 +1621,8 @@ export function VenueView() {
       occluders.push(g);
       partsOf(1).solid.push(g);
     }
+    // 階段の段の上の高さ（歩く線を段の上に出すため）：階段ごとに、下の端・向き・段の数・踊り場の最初の段
+    const stairProfiles: { to: XZ; dir: XZ; run: number; w: number; n: number; m0: number; y0: number; yTop: number }[] = [];
     // 階段（屋上展示場からエントランスプラザへ）。段は 0.2m ほどの高さで、どの階を見ていても出す
     for (const st of venue.stairs ?? []) {
       const y0 = floorY(st.toLevel), y1 = floorY(st.fromLevel);
@@ -1681,6 +1683,7 @@ export function VenueView() {
         m0--;
       }
       const yTop = y1 + 0.08;
+      stairProfiles.push({ to: st.to, dir: [dx / run, dz / run], run, w: st.width, n, m0, y0, yTop });
       for (let i = 0; i < n; i++) {
         // 段は 1 段ずつ、厚さ 2m の板（下まで埋めた塊にすると、下の階から壁のように見える。薄いと横から線にしか見えない：ユーザーの確認）
         const [cx, cz] = center(i);
@@ -2193,12 +2196,29 @@ export function VenueView() {
     const walkRails = (() => {
       const desksByHall = new Map<string, XZ[]>();
       for (const b of booths) (desksByHall.get(b.hall) ?? desksByHall.set(b.hall, []).get(b.hall)!).push(b.at);
-      return addCorridors(buildRails(lines, booths, venue.halls), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? []);
+      return addCorridors(buildRails(lines, booths, venue.halls, features), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? [], features);
     })();
     // 線の上の位置の高さ（階段の線では、上と下の端のあいだ）
+    // 階段の線の上の点の高さ：段の上の面（段は斜めの線より上に出ているので、線をまっすぐ結ぶと段の中に隠れる。ユーザーの指示）
+    const stepTopAt = (p: XZ, la: number, lb: number, t: number) => {
+      const lin = floorY(la) + (floorY(lb) - floorY(la)) * t;
+      let best = lin, bd = Infinity;
+      for (const s of stairProfiles) {
+        const rx = p[0] - s.to[0], rz = p[1] - s.to[1];
+        const along = rx * s.dir[0] + rz * s.dir[1], side = Math.abs(-rx * s.dir[1] + rz * s.dir[0]);
+        if (along < -1 || along > s.run + 1 || side > s.w / 2 + 1.5 || side >= bd) continue;
+        // 段の前のふち（角）を結んだ線。下から見上げても、段のうしろに隠れない
+        const k = (Math.max(0, along) / s.run) * s.n + 1;
+        const top = s.y0 + (s.yTop - s.y0) * Math.min(1, k / s.m0);
+        [best, bd] = [Math.max(lin, Math.min(top, Math.max(floorY(la), floorY(lb)) + 0.1)), side];
+      }
+      return best;
+    };
     const railY = (q: RailPos) => {
       const la = walkRails.nodes[q.a].level, lb = walkRails.nodes[q.b].level;
-      return floorY(la) + (floorY(lb) - floorY(la)) * q.t;
+      if (la === lb) return floorY(la);
+      const A = walkRails.nodes[q.a].p, B = walkRails.nodes[q.b].p;
+      return stepTopAt([A[0] + (B[0] - A[0]) * q.t, A[1] + (B[1] - A[1]) * q.t], la, lb, q.t);
     };
     // 高さからいちばん近い階（1・2・4）
     const levelAtY = (y: number) => [1, 2, 4].reduce((b, l) => (Math.abs(floorY(l) - y) < Math.abs(floorY(b) - y) ? l : b), 1);
@@ -2252,15 +2272,24 @@ export function VenueView() {
           if (!byKey.has(k)) byKey.set(k, { tri: [], seg: [] });
           const L = Math.hypot(B.p[0] - A.p[0], B.p[1] - A.p[1]) || 1;
           const nx = (-(B.p[1] - A.p[1]) / L) * W, nz = ((B.p[0] - A.p[0]) / L) * W;
-          const ya = floorY(A.level) + 0.09, yb = floorY(B.level) + 0.09; // 床（+0.05）の上
-          byKey.get(k)!.tri.push(A.p[0] + nx, ya, A.p[1] + nz, B.p[0] + nx, yb, B.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] + nx, ya, A.p[1] + nz, B.p[0] - nx, yb, B.p[1] - nz, A.p[0] - nx, ya, A.p[1] - nz);
-          byKey.get(k)!.seg.push(A.p[0], ya + 0.11, A.p[1], B.p[0], yb + 0.11, B.p[1]);
+          // 階段の線は細かく分けて、段の上の面にのせる
+          const parts = A.level === B.level ? 1 : Math.max(2, Math.ceil(L / 0.25));
+          for (let j = 0; j < parts; j++) {
+            const t0 = j / parts, t1 = (j + 1) / parts;
+            const P: XZ = [A.p[0] + (B.p[0] - A.p[0]) * t0, A.p[1] + (B.p[1] - A.p[1]) * t0];
+            const Q: XZ = [A.p[0] + (B.p[0] - A.p[0]) * t1, A.p[1] + (B.p[1] - A.p[1]) * t1];
+            const ya = (A.level === B.level ? floorY(A.level) : stepTopAt(P, A.level, B.level, t0)) + 0.09; // 床（+0.05）の上
+            const yb = (A.level === B.level ? floorY(A.level) : stepTopAt(Q, A.level, B.level, t1)) + 0.09;
+            byKey.get(k)!.tri.push(P[0] + nx, ya, P[1] + nz, Q[0] + nx, yb, Q[1] + nz, Q[0] - nx, yb, Q[1] - nz, P[0] + nx, ya, P[1] + nz, Q[0] - nx, yb, Q[1] - nz, P[0] - nx, ya, P[1] - nz);
+            byKey.get(k)!.seg.push(P[0], ya + 0.11, P[1], Q[0], yb + 0.11, Q[1]);
+          }
         }
       });
       const mat = new THREE.MeshBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
       // 上から・3D で歩き始める場所を選ぶあいだは、遠くからでも見える細い線（画面の上で 1px）。2F の線は紫で、1F の線と分ける
-      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9, depthTest: false });
-      const lineMat2F = new THREE.LineBasicMaterial({ color: 0x9b4fd0, transparent: true, opacity: 0.9, depthTest: false });
+      // 床・壁・屋根の向こうの線は隠す（透けて見えると、どこの線かわからない。ユーザーの指示）
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9 });
+      const lineMat2F = new THREE.LineBasicMaterial({ color: 0x9b4fd0, transparent: true, opacity: 0.9 });
       for (const [k, { tri, seg }] of byKey) {
         const levels = k.split("-").map(Number);
         const g = new THREE.BufferGeometry();
