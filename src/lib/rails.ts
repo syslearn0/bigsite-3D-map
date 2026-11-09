@@ -12,6 +12,7 @@ const R = 2.4; // 机の中心から線までの距離（机 0.45m＋いす 0.9m
 const MERGE = 6; // 向かい合う線（通路をはさんで向かい合う机の線）がこれより近ければ、まん中で 1 本に
 const EXT = 2.2; // 線の端を、端の机からのばす長さ
 const LINK = 10; // 線の端どうしをつなぐ距離
+const WALL_JOIN = 30; // 壁ぞいの列の切れ目（搬入口など）を、壁の前の線でつなぐ長さ
 const CLEAR = 1.0; // 線と机（スペースの中心）のあいだにあける距離
 
 const dist = (a: XZ, b: XZ) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -50,6 +51,7 @@ export function buildRails(
     line: number;
     group: string;
     u: number;
+    num: number;
   };
   const byDesk = new Map<string, Booth[]>();
   for (const b of booths) {
@@ -83,6 +85,7 @@ export function buildRails(
       line: b.line,
       group: `${b.line}|${line.wall ? 0 : k}`,
       u,
+      num: b.num,
     });
   }
   // 向かい合う線（別の列で、通路の向きが逆）が近ければ、まん中へ寄せる
@@ -266,14 +269,20 @@ export function buildRails(
     );
   });
   for (const idx of groups.values()) {
-    idx.sort((a, b) => pts[a].u - pts[b].u);
+    // 壁ぞいの列は、番号の順（壁にそって角も曲がる）。島の列は、列の向きの順
+    const isWall = !!lines[pts[idx[0]].line].wall;
+    idx.sort((a, b) => (isWall ? pts[a].num - pts[b].num : pts[a].u - pts[b].u));
     let chain: number[] = [];
+    // 壁ぞいの列が、搬入口・出入口・柱などで切れている所は、前のかたまりの端と次のかたまりの端を、まっすぐ結ぶ
+    // （壁の前を 1 本の線で歩けるように。ユーザーの指示：短い線がばらばらに出ていた）
+    let prevTail = -1;
     const flush = () => {
       if (!chain.length) return;
       const li = pts[chain[0]].line,
         line = lines[li];
       const ids = chain.map((i) => nodeAt(moved[i], pts[i].hall));
       for (let k = 1; k < ids.length; k++) addEdge(ids[k - 1], ids[k]);
+      const endIds: number[] = [];
       // 両端をのばす：島の列は、列の向きにまっすぐ、端をそろえる所（cuts）まで。壁ぞいの列は、線の向きに EXT だけ
       for (const [end, prev, sgn, ue] of [
         [ids[0], ids[1], -1, pts[chain[0]].u],
@@ -305,9 +314,21 @@ export function buildRails(
           const qi = nodeAt(q, hall);
           addEdge(end, qi);
           ends.push({ i: qi, dir });
-        } else ends.push({ i: end, dir });
-        if (ids.length === 1) break;
+          endIds.push(qi);
+        } else {
+          ends.push({ i: end, dir });
+          endIds.push(end);
+        }
+        if (ids.length === 1) {
+          endIds.push(endIds[0]);
+          break;
+        }
       }
+      if (line.wall && prevTail >= 0) {
+        const a = nodes[prevTail].p, b = nodes[endIds[0]].p;
+        if (dist(a, b) <= WALL_JOIN && clearSeg(a, b, nodes[prevTail].hall)) addEdge(prevTail, endIds[0]);
+      }
+      prevTail = endIds[1];
       chain = [];
     };
     for (const i of idx) {
