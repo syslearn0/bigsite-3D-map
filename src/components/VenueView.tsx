@@ -20,7 +20,7 @@ import { flatten, unflatten, useAccountSync } from "@/lib/sync";
 import { DOOR_H, DOOR_W, edgeGaps, edgeShared, type WallOpening } from "@/lib/walls";
 import { decodeChecklist, readChecklist, type Checklist } from "@/lib/checklist";
 import { EVENT } from "@/lib/event";
-import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos } from "@/lib/rails";
+import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos, type Rails } from "@/lib/rails";
 import corridorsJson from "@/data/corridors.json";
 import { search, type Hit } from "@/lib/search";
 import { hallAt, makeSteady, type Where } from "@/lib/locate";
@@ -2261,13 +2261,15 @@ export function VenueView() {
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
     // 歩くときは、机の前の通路の線（線路）の上だけを進む。線から遠い所（机のない広場など）に立ったときは、自由に歩く
     // ホールの中の線（机の前の通路）に、通路・広場・階段の線（scripts/build-corridors.ts）を足して、出入口でつなぐ
-    const walkRails = (() => {
+    // 組み立てには 0.3〜0.7 秒ほどかかるので、開いたときには作らない。最初に要ったとき（歩く・場所を選ぶ）か、
+    // 画面が出たあとの手のあいている時に作る（walkR()）
+    const buildWalkRails = () => {
       const desksByHall = new Map<string, XZ[]>();
       for (const b of booths) (desksByHall.get(b.hall) ?? desksByHall.set(b.hall, []).get(b.hall)!).push(b.at);
       // 床から立つ部屋の箱（階段室・ロッカー・部屋の帯など）は、線が通らないように
       const rooms = (venue.blocks ?? []).filter((b) => !b.base);
       return addCorridors(buildRails(lines, booths, venue.halls, features, rooms), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? [], features, rooms);
-    })();
+    };
     // 線の上の位置の高さ（階段の線では、上と下の端のあいだ）
     // 階段の線の上の点の高さ：段の上の面（段は斜めの線より上に出ているので、線をまっすぐ結ぶと段の中に隠れる。ユーザーの指示）
     const stepTopAt = (p: XZ, la: number, lb: number, t: number) => {
@@ -2285,9 +2287,9 @@ export function VenueView() {
       return best;
     };
     const railY = (q: RailPos) => {
-      const la = walkRails.nodes[q.a].level, lb = walkRails.nodes[q.b].level;
+      const la = walkR().nodes[q.a].level, lb = walkR().nodes[q.b].level;
       if (la === lb) return floorY(la);
-      const A = walkRails.nodes[q.a].p, B = walkRails.nodes[q.b].p;
+      const A = walkR().nodes[q.a].p, B = walkR().nodes[q.b].p;
       return stepTopAt([A[0] + (B[0] - A[0]) * q.t, A[1] + (B[1] - A[1]) * q.t], la, lb, q.t);
     };
     // 高さからいちばん近い階（1・2・4）
@@ -2300,14 +2302,14 @@ export function VenueView() {
       const p: XZ = [persp.position.x, persp.position.z];
       const hall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon(p, h.poly));
       // ホールの中ならそのホールの線、外なら見ている階の通路の線（1F と 2F が重なる所は、近いほう）
-      let q = hall ? nearestOnRails(walkRails, p, hall.id) : nearestOnRails(walkRails, p, undefined, railLevels(currentFloor));
+      let q = hall ? nearestOnRails(walkR(), p, hall.id) : nearestOnRails(walkR(), p, undefined, railLevels(currentFloor));
       if (!hall && currentFloor === 1) {
         // 1F と 2F の線が重なる所（2F のコンコースの下など）では、近さが 4m の差までなら 1F を選ぶ
-        const q1 = nearestOnRails(walkRails, p, undefined, [1]);
+        const q1 = nearestOnRails(walkR(), p, undefined, [1]);
         if (q1 && q && q1.d <= q.d + 4) q = q1;
       }
       // 近くに線がなければ、見ている階のいちばん近い線へ（線の外には立たない。ユーザーの指示）
-      if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkRails, p, undefined, railLevels(currentFloor)) ?? nearestOnRails(walkRails, p);
+      if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkR(), p, undefined, railLevels(currentFloor)) ?? nearestOnRails(walkR(), p);
       if (q) {
         railPos = { a: q.a, b: q.b, t: q.t };
         persp.position.x = q.at[0];
@@ -2319,9 +2321,9 @@ export function VenueView() {
         pos: [persp.position.x, persp.position.z],
         yaw,
         railPos,
-        at: railPos ? railPoint(walkRails, railPos) : null,
-        nodes: walkRails.nodes.length,
-        near: walkRails.nodes.map((n, i) => [i, n.p, walkRails.adj[i]] as const).filter(([, q]) => Math.hypot(q[0] - persp.position.x, q[1] - persp.position.z) < 6),
+        at: railPos ? railPoint(walkR(), railPos) : null,
+        nodes: walkR().nodes.length,
+        near: walkR().nodes.map((n, i) => [i, n.p, walkR().adj[i]] as const).filter(([, q]) => Math.hypot(q[0] - persp.position.x, q[1] - persp.position.z) < 6),
       });
     // 線路の絵（床の上の細い帯）。歩くときだけ、見ている階のものを出す
     const railMeshes: { mesh: THREE.Mesh; levels: number[] }[] = [];
@@ -2329,17 +2331,22 @@ export function VenueView() {
     const railLineMats: LineMaterial[] = []; // 太い線の材質（画面の大きさを教える）
     let railsPick = false; // 歩き始める場所を選んでいるあいだ
     let lastWalkLevel = 1;
-    {
+    let walkRails: Rails | null = null;
+    // 線を組み立てて、線路の絵も作る（1 回だけ）
+    const walkR = (): Rails => {
+      if (walkRails) return walkRails;
+      walkRails = buildWalkRails();
+      const wr = walkRails;
       // 階ごと（1F・2F・4F）にまとめる。階段の線は、上と下の階の組ごと（"1-2" など）。
       // 歩いているときは、いま立っている階の線と、その階につながる階段の線だけを出す（ほかの階の線が重なって見えないように）
       const keyOf = (la: number, lb: number) => (la === lb ? String(la) : `${Math.min(la, lb)}-${Math.max(la, lb)}`);
       const byKey = new Map<string, { tri: number[]; seg: number[] }>();
       const W = 0.3; // 帯の幅の半分（幅 0.6m。ユーザーの指示で太く）
-      walkRails.adj.forEach((ns, a) => {
-        const A = walkRails.nodes[a];
+      wr.adj.forEach((ns, a) => {
+        const A = wr.nodes[a];
         for (const b of ns) {
           if (b < a) continue;
-          const B = walkRails.nodes[b];
+          const B = wr.nodes[b];
           const k = keyOf(A.level, B.level);
           if (!byKey.has(k)) byKey.set(k, { tri: [], seg: [] });
           const L = Math.hypot(B.p[0] - A.p[0], B.p[1] - A.p[1]) || 1;
@@ -2381,7 +2388,10 @@ export function VenueView() {
         scene.add(line);
         railLines.push({ line, levels });
       }
-    }
+      for (const m of railLineMats) m.resolution.set(el.clientWidth, el.clientHeight);
+      applyVisibility();
+      return wr;
+    };
 
     const size = () => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -2548,8 +2558,8 @@ export function VenueView() {
         const nx = -Math.sin(b.angle) * -b.side, nz = Math.cos(b.angle) * -b.side;
         persp.position.set(b.at[0] + nx * 3, floorY(lv) + EYE, b.at[1] + nz * 3);
         // 机の前の線に乗り、机を向く
-        let q = nearestOnRails(walkRails, b.at, b.hall);
-        if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkRails, b.at, undefined, [lv]) ?? q;
+        let q = nearestOnRails(walkR(), b.at, b.hall);
+        if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkR(), b.at, undefined, [lv]) ?? q;
         if (q) {
           railPos = { a: q.a, b: q.b, t: q.t };
           persp.position.x = q.at[0];
@@ -2752,7 +2762,7 @@ export function VenueView() {
       // ダブルタップした所に、いちばん近い線の上の点へ跳ぶ（いま立っている階の線。線の外へは行かない：ユーザーの指示）。
       // 線から遠すぎる所（空・建物の外など）を押したときは動かない
       const curLevel = railPos ? (railY(railPos) > floorY(4) - 1 ? 4 : railY(railPos) > floorY(2) - 1 ? 2 : 1) : currentFloor === 4 ? 4 : 1;
-      const q = nearestOnRails(walkRails, [p.x, p.z], undefined, [curLevel]);
+      const q = nearestOnRails(walkR(), [p.x, p.z], undefined, [curLevel]);
       if (!q || q.d > JUMP_NEAR) return;
       railPos = { a: q.a, b: q.b, t: q.t };
       persp.position.x = q.at[0];
@@ -3209,11 +3219,11 @@ export function VenueView() {
       }
       // このホールの歩く線を 4m の升目に入れておく（机ごとに会場の線を全部見ると、ホールに入るたびに 1 秒近くかかった）
       const eg = new Map<string, [number, number][]>();
-      walkRails.adj.forEach((ns, a2) => {
-        if (walkRails.nodes[a2].hall !== hallId) return;
+      walkR().adj.forEach((ns, a2) => {
+        if (walkR().nodes[a2].hall !== hallId) return;
         for (const b2 of ns) {
-          if (b2 < a2 || walkRails.nodes[b2].hall !== hallId) continue;
-          const A = walkRails.nodes[a2].p, B = walkRails.nodes[b2].p;
+          if (b2 < a2 || walkR().nodes[b2].hall !== hallId) continue;
+          const A = walkR().nodes[a2].p, B = walkR().nodes[b2].p;
           for (let gx = Math.floor(Math.min(A[0], B[0]) / 4); gx <= Math.floor(Math.max(A[0], B[0]) / 4); gx++)
             for (let gz = Math.floor(Math.min(A[1], B[1]) / 4); gz <= Math.floor(Math.max(A[1], B[1]) / 4); gz++) {
               const key2 = `${gx},${gz}`;
@@ -3226,7 +3236,7 @@ export function VenueView() {
         for (let gx = Math.floor(x / 4) - 1; gx <= Math.floor(x / 4) + 1; gx++)
           for (let gz = Math.floor(z / 4) - 1; gz <= Math.floor(z / 4) + 1; gz++)
             for (const [a2, b2] of eg.get(`${gx},${gz}`) ?? []) {
-              const A = walkRails.nodes[a2].p, B = walkRails.nodes[b2].p, dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+              const A = walkR().nodes[a2].p, B = walkR().nodes[b2].p, dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
               const t = Math.max(0, Math.min(1, ((x - A[0]) * dx + (z - A[1]) * dz) / L2));
               const qx = A[0] + dx * t, qz = A[1] + dz * t, d = Math.hypot(qx - x, qz - z);
               if (d < bd) [best, bd] = [[qx, qz], d];
@@ -3537,13 +3547,13 @@ export function VenueView() {
           wx /= wl;
           wz /= wl;
           // 線と直角に近い向き（机のほうを向いて「前へ」など）のときは、さっき進んでいた向きへ
-          const A = walkRails.nodes[railPos.a].p, B = walkRails.nodes[railPos.b].p, L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+          const A = walkR().nodes[railPos.a].p, B = walkR().nodes[railPos.b].p, L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
           const along = (wx * (B[0] - A[0]) + wz * (B[1] - A[1])) / L;
           if (Math.abs(along) < 0.35 && lastRailDir) [wx, wz] = lastRailDir;
-          const m = moveOnRails(walkRails, railPos, [wx, wz], Math.min(1, Math.abs(fwd) + Math.abs(side)) * WALK_SPEED * dt);
+          const m = moveOnRails(walkR(), railPos, [wx, wz], Math.min(1, Math.abs(fwd) + Math.abs(side)) * WALK_SPEED * dt);
           railPos = m.pos;
           lastRailDir = m.dir;
-          const at = railPoint(walkRails, railPos);
+          const at = railPoint(walkR(), railPos);
           persp.position.x = at[0];
           persp.position.z = at[1];
           // 向きは変えない（進むときに勝手に向きを変えられると見にくい。ユーザーの指示）
@@ -3788,6 +3798,7 @@ export function VenueView() {
       cardsVer++;
     }, showRailsPick: (on) => {
       railsPick = on;
+      if (on) walkR(); // 線をまだ作っていなければ、ここで作る（作ると見え方もそろえる）
       applyVisibility();
     }, showRoute, showTour, walkPos: () => (current === "walk" ? [persp.position.x, persp.position.z] : null), showMe: (p, acc, fly) => {
       if (!p) {
@@ -3810,7 +3821,15 @@ export function VenueView() {
       },
     };
 
+    // 歩く線は、画面が出てから手のあいている時に作っておく（開くときを重くしない。歩きはじめたときに待たないように）
+    const idle = (cb: () => void) =>
+      "requestIdleCallback" in window ? requestIdleCallback(cb, { timeout: 6000 }) : (setTimeout(cb, 2500) as unknown as number);
+    let idleId = 0;
+    const firstWait = setTimeout(() => (idleId = idle(() => walkR())), 1500);
+
     return () => {
+      clearTimeout(firstWait);
+      if ("cancelIdleCallback" in window) cancelIdleCallback(idleId);
       cancelAnimationFrame(raf);
       ro.disconnect();
       removeEventListener("keydown", onKey);

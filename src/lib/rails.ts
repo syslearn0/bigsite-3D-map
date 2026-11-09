@@ -1019,14 +1019,6 @@ export function addCorridors(
         }
     return best;
   };
-  const edgesOf = (i: number) => {
-    let n = 0;
-    for (const e of edges) {
-      const [x, y] = e.split(",");
-      if (+x === i || +y === i) n++;
-    }
-    return n;
-  };
   // 通路の点（同じ階で 0.8m 以内の点は 1 つに）
   const corridorNode = (p: XZ, level: number) => {
     const j = near(
@@ -1179,7 +1171,25 @@ export function addCorridors(
     return true;
   };
   // 外の通路で、a から b へまっすぐ、どのホールの中も部屋も通らないか（a は出入口の壁の上）
+  const hallBox = new Map(
+    halls.map((h) => {
+      const xs = h.poly.map((q) => q[0]),
+        zs = h.poly.map((q) => q[1]);
+      return [h, [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)]] as const;
+    }),
+  );
   const outsideClear = (a: XZ, b: XZ, level: number) => {
+    // その線分の近くにある、同じ階のホールだけを調べる
+    const near = halls.filter((h) => {
+      const bx = hallBox.get(h)!;
+      return (
+        h.level === level &&
+        Math.max(a[0], b[0]) >= bx[0] &&
+        Math.min(a[0], b[0]) <= bx[1] &&
+        Math.max(a[1], b[1]) >= bx[2] &&
+        Math.min(a[1], b[1]) <= bx[3]
+      );
+    });
     const m = Math.max(1, Math.ceil(dist(a, b) / 0.25));
     for (let k = 1; k <= m; k++) {
       const q: XZ = [
@@ -1187,9 +1197,8 @@ export function addCorridors(
         a[1] + ((b[1] - a[1]) * k) / m,
       ];
       if (
-        halls.some(
+        near.some(
           (h) =>
-            h.level === level &&
             pointInPolygon(q, h.poly) &&
             edgeDist(q, h.poly) > 0.15,
         ) ||
@@ -1474,10 +1483,7 @@ export function addCorridors(
           ? near(
               at0,
               0.8,
-              (i) =>
-                nodes[i].hall === "" &&
-                nodes[i].level === level &&
-                edgesOf(i) > 0,
+              (i) => nodes[i].hall === "" && nodes[i].level === level,
             )
           : -1;
       const out = toLabel >= 0 ? toLabel : attach(
@@ -1569,21 +1575,36 @@ export function addCorridors(
     }
   }
   // となりのホールとの壁の切れ目（東1〜3 のつなぎ目など）：両側のホールの中の線を、切れ目のまん中を通って結ぶ
-  // 壁のない、となりのホールと重なる辺（南1・南2 の境など。3D でも壁を描かない）も、25m ごとに結ぶ
+  // 壁のない、となりのホールと重なる辺（南1・南2 の境など。3D でも壁を描かない）も、40m ごとに結ぶ。
+  // ただし、上の切れ目ですでに結んでいるホールどうし（東1〜3 など）は足さない（道を探すのに時間がかかるので）
   const joins: { m: XZ; level: number }[] = gaps.map((g) => ({
     m: [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2] as XZ,
     level: hallById.get(g.hall)?.level ?? 1,
   }));
+  const joined = new Set<string>();
+  for (const { m, level } of joins) {
+    const ids = halls
+      .filter((h) => !h.closed && h.level === level && edgeDist(m, h.poly) < 3)
+      .map((h) => h.id)
+      .sort();
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) joined.add(`${ids[i]}|${ids[j]}`);
+  }
   halls.forEach((h, hi) => {
     if (h.closed) return;
     const others = halls.filter(
-      (o, oi) => oi > hi && !o.closed && o.level === h.level,
+      (o, oi) =>
+        oi > hi &&
+        !o.closed &&
+        o.level === h.level &&
+        !joined.has([h.id, o.id].sort().join("|")),
     );
+    if (!others.length) return;
     h.poly.forEach((a, i) => {
       const b = h.poly[(i + 1) % h.poly.length];
       const len = dist(a, b);
       for (const [u0, u1] of edgeShared(a, b, others.map((o) => o.poly))) {
-        const n = Math.max(1, Math.round((u1 - u0) / 25));
+        const n = Math.max(1, Math.round((u1 - u0) / 40));
         for (let k = 0; k < n; k++) {
           const u = u0 + ((u1 - u0) * (k + 0.5)) / n;
           joins.push({
