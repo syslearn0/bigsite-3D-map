@@ -26,12 +26,27 @@ self.addEventListener("activate", (e) => {
 });
 
 // 画面が読み込んだファイル（JS・CSS）の一覧を受け取って持っておく。初めて開いた回は、まだサービスワーカーが働いていないため
-// 印をつけたサークルの画像の一覧を受け取り、その分だけ持つ（入っていないものは消す）
-async function keepImages(urls) {
+// 印をつけたサークルの画像の一覧を受け取り、その分だけ持つ（入っていないものは消す）。
+// 読むのは、まだ持っていない分だけを 4 つずつ（印が多いと、一度に何百も読みに行って回線をふさぐ）。
+// 印を続けて変えたときは、前の分が終わってから順に
+let keepRun = Promise.resolve();
+function keepImages(urls) {
+  keepRun = keepRun.then(() => keepNow(urls)).catch(() => {});
+  return keepRun;
+}
+async function keepNow(urls) {
   const want = new Set(urls.filter((u) => typeof u === "string" && u.startsWith("/data/circles/")).map((u) => new URL(u, self.location.origin).href));
   const c = await caches.open(IMG_CACHE);
-  for (const req of await c.keys()) if (!want.has(req.url)) await c.delete(req);
-  await Promise.all([...want].map((u) => c.match(u).then((hit) => hit || c.add(u).catch(() => {}))));
+  const have = new Set();
+  for (const req of await c.keys()) {
+    if (want.has(req.url)) have.add(req.url);
+    else await c.delete(req);
+  }
+  const todo = [...want].filter((u) => !have.has(u));
+  const worker = async () => {
+    while (todo.length) await c.add(todo.shift()).catch(() => {});
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
 }
 
 self.addEventListener("message", (e) => {

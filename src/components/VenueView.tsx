@@ -3100,18 +3100,19 @@ export function VenueView() {
     type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean };
     // pend：まだ画像を描いていない札（近くに来たら読む）
     type PendCard = { x: number; z: number; src: string; draw: (im: HTMLImageElement) => void };
-    const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number }>();
+    const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number; srcs: Set<string> }>();
     // 画像を読むのは、立っている所から IMG_NEAR m 以内の札だけ（電波があるとき。印のサークルは端末に持っているので、電波がなくても）
     const IMG_NEAR = 25;
     const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 120, CELL_H = 150, SHEET_COLS = 8, SHEET_ROWS = 8, PER_SHEET = SHEET_COLS * SHEET_ROWS;
     // 読みこんだ画像（ホール・日をまたいで使い回す）
     const cardImgs = new Map<string, HTMLImageElement | "loading">();
     const cardFail = new Map<string, number>(); // 読めなかった画像（しばらくは読み直さない）
-    const cardImgWait = new Map<string, (() => void)[]>();
-    const withImg = (src: string, f: (im: HTMLImageElement) => void) => {
+    // 読み終わるのを待つ札。読めなかったときは null で知らせる（その札は、あとで読み直す）
+    const cardImgWait = new Map<string, ((im: HTMLImageElement | null) => void)[]>();
+    const withImg = (src: string, f: (im: HTMLImageElement | null) => void) => {
       const got = cardImgs.get(src);
       if (got && got !== "loading") return f(got);
-      (cardImgWait.get(src) ?? cardImgWait.set(src, []).get(src)!).push(() => f(cardImgs.get(src) as HTMLImageElement));
+      (cardImgWait.get(src) ?? cardImgWait.set(src, []).get(src)!).push(f);
       if (got) return;
       cardImgs.set(src, "loading");
       cardLoadQueue.push(src);
@@ -3127,14 +3128,17 @@ export function VenueView() {
         const im = new Image();
         const done = (ok: boolean) => {
           cardLoading--;
+          const cbs = cardImgWait.get(src) ?? [];
+          cardImgWait.delete(src);
           if (ok) {
             cardImgs.set(src, im);
-            for (const cb of cardImgWait.get(src) ?? []) cb();
-          } else {
+            cardFail.delete(src);
+          }
+          else {
             cardImgs.delete(src);
             cardFail.set(src, performance.now());
           }
-          cardImgWait.delete(src);
+          for (const cb of cbs) cb(ok ? im : null);
           setTimeout(pumpCardLoads, 0);
         };
         im.onload = () => done(true);
@@ -3155,6 +3159,10 @@ export function VenueView() {
         (sh.mesh.material as THREE.MeshBasicMaterial).dispose();
       }
       hallCards.delete(hallId);
+      // 残っているホールの札が使わない画像は捨てる（いろいろなホールを歩くと、読んだ画像がたまっていく）
+      const used = new Set<string>();
+      for (const o of hallCards.values()) for (const s of o.srcs) used.add(s);
+      for (const [src, v] of cardImgs) if (v !== "loading" && !used.has(src)) cardImgs.delete(src);
     };
     const buildHallCards = (hallId: string) => {
       dropHallCards(hallId);
@@ -3203,7 +3211,7 @@ export function VenueView() {
       // 近い机から（近くの札の絵・画像が先にそろう）
       const cp0 = persp.position;
       items.sort((p2, q2) => Math.hypot(p2.x - cp0.x, p2.z - cp0.z) - Math.hypot(q2.x - cp0.x, q2.z - cp0.z));
-      const entry = { sheets: [] as Sheet[], ver: cardsVer, used: performance.now(), pend: [] as PendCard[], wait: new Map<string, PendCard[]>(), scan: 0 };
+      const entry = { sheets: [] as Sheet[], ver: cardsVer, used: performance.now(), pend: [] as PendCard[], wait: new Map<string, PendCard[]>(), scan: 0, srcs: new Set(items.map((it) => it.c.image).filter(Boolean)) };
       hallCards.set(hallId, entry);
       const y0 = floorY(hall.level) + 0.72, y1 = y0 + CARD_H;
       for (let s0 = 0; s0 < items.length; s0 += PER_SHEET) {
@@ -3334,18 +3342,24 @@ export function VenueView() {
           (e.wait.get(p.src) ?? e.wait.set(p.src, []).get(p.src)!).push(p);
           withImg(p.src, (im) => {
             e.wait.delete(p.src);
-            p.draw(im);
+            if (im) p.draw(im);
+            else e.pend.push(p); // 読めなかった：30 秒たったら、近くにいればまた読む
           });
         }
         // 離れた所の（会場に着いた・電波がなくなったときは、印のない）、まだ読み始めていない画像は取りやめる（その札は、また近くに来たら読む）
+        // 前にいたホール・前の日の札の分も取りやめる
         for (let qi = cardLoadQueue.length - 1; qi >= 0; qi--) {
           const src = cardLoadQueue[qi], ws = e.wait.get(src);
-          if (!ws || ((online || markedImgs.current.has(src)) && ws.some((p) => Math.hypot(p.x - cp.x, p.z - cp.z) <= IMG_NEAR + 5))) continue;
+          if (ws && (online || markedImgs.current.has(src)) && ws.some((p) => Math.hypot(p.x - cp.x, p.z - cp.z) <= IMG_NEAR + 5)) continue;
           cardLoadQueue.splice(qi, 1);
           cardImgs.delete(src);
           cardImgWait.delete(src);
-          e.wait.delete(src);
-          e.pend.push(...ws);
+          for (const o of hallCards.values()) {
+            const ows = o.wait.get(src);
+            if (!ows) continue;
+            o.wait.delete(src);
+            o.pend.push(...ows);
+          }
         }
       }
       // 1 コマに 1 枚だけ送る：まだ送っていないシート（近い順でなくてよい。64 枚ずつなので数コマで全部そろう）、なければ画像が読めたシート
@@ -3366,9 +3380,10 @@ export function VenueView() {
     };
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
+      // 歩くとき以外（3D・上から）は札の板を出さない
+      if (current !== "walk") for (const e of hallCards.values()) for (const sh of e.sheets) sh.mesh.visible = false;
       if (current === "orbit") return drawCodes3d(w, h);
       if (current === "walk") return drawWalkCards(w, h);
-      for (const e of hallCards.values()) for (const sh of e.sheets) sh.mesh.visible = false;
       lastKey3d = "";
       const ppm = (h * ortho.zoom) / (2 * 160);
       // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
@@ -3778,6 +3793,7 @@ export function VenueView() {
       controls?.dispose();
       renderer.dispose();
       printRenderer?.dispose();
+      for (const id of [...hallCards.keys()]) dropHallCards(id); // 札の絵（テクスチャ）も捨てる
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
         m.geometry?.dispose();
