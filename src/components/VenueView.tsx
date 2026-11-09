@@ -2350,7 +2350,8 @@ export function VenueView() {
       for (const m of towerMeshes) m.visible = v !== "top";
       fly = null;
       const labelSprites = new Set(labels.map((l) => l.s));
-      for (const s of sprites) s.material.depthTest = v !== "top" && !labelSprites.has(s);
+      // 歩くときは、札（WC・搬入口・エスカレーターなど）も床・壁の向こうのものは隠す（透けて見えると、どこのものかわからない。ユーザーの指示）
+      for (const s of sprites) s.material.depthTest = v !== "top" && (v === "walk" || !labelSprites.has(s));
       persp.fov = v === "walk" ? walkFov(persp.aspect) : 50;
       persp.updateProjectionMatrix();
       if (v === "top") {
@@ -2885,7 +2886,7 @@ export function VenueView() {
         s.scale.copy(base);
         if (!walk) s.scale.multiplyScalar(18 / (base.y * pxPerM(s.position)));
         // 駅の名前は建物や駅の屋根に隠さない（ほかの札と重なる所は下の重なりの処理で隠す）
-        s.material.depthTest = current !== "top" && !s.userData.station;
+        s.material.depthTest = current !== "top" && (walk || !s.userData.station);
       }
       for (const { s, level, base } of pins) {
         s.visible = shown(floorOf(level));
