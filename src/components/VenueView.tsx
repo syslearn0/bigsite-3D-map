@@ -122,10 +122,10 @@ const walkFov = (aspect: number) => (aspect < 1 ? WALK_FOV_PORTRAIT : WALK_FOV);
 const WALK_PITCH = -0.1;
 const WALK_SPEED = 3.5; // m/秒（見て回りやすいよう、ふつうに歩く速さより少し速め）
 // 歩いて見るとき、近くの机の上に出すサークルの札（画像とサークル名）。この距離までで、画面の上で重なる札は出さない
-// 歩くときの札：周り CARD_NEAR m までの机は、向きを変えても全部出す（重なりで出したり消したりしない。ユーザーの指示）。
-// CARD_FADE m から先は、だんだん薄くして、ふちでぱっと消えないように
-const CARD_NEAR = 10;
-const CARD_FADE = 7.5;
+// 歩くときの札：いま歩いている通路の両側の列（通路に向いた机）だけ、向きを変えても全部出す（ユーザーの指示：
+// 半径で決めると周りの関係ない机まで出る。重なりで出したり消したりしない）。通路の前後 CARD_NEAR m まで、CARD_FADE m から先は薄く
+const CARD_NEAR = 45;
+const CARD_FADE = 35;
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
@@ -564,6 +564,15 @@ export function VenueView() {
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; day: Day; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  // 机を押したとき、そのサークルが登録した画像があれば、画面のまん中に大きく出す（どの見方でも。ユーザーの指示）
+  const [popImg, setPopImg] = useState<{ image: string; name: string } | null>(null);
+  const onDeskTap = useRef<(i: number) => void>(() => {});
+  useEffect(() => {
+    onDeskTap.current = (i) => {
+      const c = circles[day][booths[i].code];
+      setPopImg(c?.image ? { image: c.image, name: c.name } : null);
+    };
+  });
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
   // 歩き始める場所を選ぶあいだは、上から・3D の地図に線路（青い線）を出す（ユーザーの指示）
@@ -2668,6 +2677,7 @@ export function VenueView() {
     // ---- タップで机を選ぶ（ドラッグとは分ける） ----
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
+      onDeskTap.current(i);
       setSelected(i);
       setPickLine(booths[i].line);
       setPickNum(booths[i].num);
@@ -3087,11 +3097,24 @@ export function VenueView() {
       const pinTop = new Map<number, number>();
       for (const pin of pins) if (pin.s.visible) pinTop.set(pin.booth, pin.s.position.y + pin.s.scale.y + 0.3);
       const seen = new Set<string>();
+      // いま乗っている線の向き（通路の向き）
+      if (!railPos) return;
+      const RA = walkRails.nodes[railPos.a].p, RB = walkRails.nodes[railPos.b].p;
+      const RL = Math.hypot(RB[0] - RA[0], RB[1] - RA[1]) || 1;
+      const ux = (RB[0] - RA[0]) / RL, uz = (RB[1] - RA[1]) / RL;
       for (const i of hallBooths.get(here.id) ?? []) {
         const b = booths[i];
         const dx = b.at[0] - cp.x, dz = b.at[1] - cp.z;
         const d = Math.hypot(dx, dz);
-        if (d > CARD_NEAR || d < 0.6) continue;
+        const along = dx * ux + dz * uz, perp = -dx * uz + dz * ux;
+        // 通路のすぐ両側（机の中心が通路から 4.2m まで）で、列が通路と平行、机が通路の側を向いている（島の反対側の机は出さない）
+        if (Math.abs(along) > CARD_NEAR || Math.abs(perp) > 4.2 || d < 0.4) continue;
+        if (Math.abs(Math.cos(b.angle) * ux + Math.sin(b.angle) * uz) < 0.85) continue;
+        const ln = lines[b.line];
+        const k = ln.wall ? -b.side : b.side;
+        const nx = -Math.sin(b.angle) * k, nz = Math.cos(b.angle) * k;
+        // （壁ぞいの列で、座る側の印が逆のものもあるので、通路のすぐ横（2.9m まで）の机は向きを見ない）
+        if (nx * -dx + nz * -dz <= 0 && Math.abs(perp) > 2.9) continue;
         const c = info(b.code);
         if (!c) continue;
         const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
@@ -3123,7 +3146,7 @@ export function VenueView() {
         const bw = Math.max(imgS, tw) + 12, bh = imgS + (name ? fs + 4 : 0) + (sub ? fs * 0.85 + 4 : 0) + 10;
         const r: [number, number, number, number] = [sx - bw / 2, sy - bh, sx + bw / 2, sy];
         // 遠い札は少し薄く、CARD_FADE m から先はだんだん消える
-        codeCtx.globalAlpha = Math.max(0.6, 1 - it.d / (CARD_NEAR * 1.6)) * (it.d <= CARD_FADE ? 1 : Math.max(0, (CARD_NEAR - it.d) / (CARD_NEAR - CARD_FADE)));
+        codeCtx.globalAlpha = Math.max(0.6, 1 - it.d / (CARD_NEAR * 1.6)) * (it.d <= CARD_FADE ? 1 : Math.max(0.15, (CARD_NEAR - it.d) / (CARD_NEAR - CARD_FADE)));
         codeCtx.fillStyle = "rgba(255,255,255,.94)";
         codeCtx.strokeStyle = "rgba(0,0,0,.18)";
         codeCtx.lineWidth = 1;
@@ -3892,6 +3915,21 @@ export function VenueView() {
     <>
     {/* 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app） */}
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
+      {popImg && (
+        <div
+          role="dialog"
+          aria-label={`${popImg.name} の画像`}
+          onClick={() => setPopImg(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        >
+          <div style={{ background: "var(--card)", borderRadius: 14, padding: 10, boxShadow: "0 6px 24px rgba(0,0,0,.35)", textAlign: "center", maxWidth: "min(92vw, 520px)" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={popImg.image} alt="" style={{ display: "block", width: "min(80vw, 60vh, 500px)", height: "min(80vw, 60vh, 500px)", objectFit: "contain", borderRadius: 8, background: "#eee" }} />
+            <div style={{ marginTop: 8, fontWeight: 700 }}>{popImg.name}</div>
+            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>押すと閉じます</div>
+          </div>
+        </div>
+      )}
       <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
         {/* いつも出すもの：サイドバーを開くボタン、配置番号の欄、2D・3D、歩く、周辺 */}
         <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", gap: 8, alignItems: "flex-start", pointerEvents: "none" }}>
