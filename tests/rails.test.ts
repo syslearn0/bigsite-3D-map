@@ -96,9 +96,9 @@ test("通路・階段の線を足すと、ホールの中から出入口・階�
   const layout = (await import("../src/data/layout-sample.json")).default as unknown as { lines: Line[] };
   const venue = (await import("../src/data/venue.json")).default as unknown as {
     halls: (HallLike & { id: string })[];
-    doors: { at: [number, number]; level: number; hall: string }[];
+    doors: { at: [number, number]; level: number; hall: string; kind?: string }[];
     exits: { at: [number, number]; level: number }[];
-    wallGaps: { a: [number, number]; b: [number, number] }[];
+    wallGaps: { hall: string; a: [number, number]; b: [number, number] }[];
   };
   const corridors = (await import("../src/data/corridors.json")).default as unknown as Corridors;
   const bs = expandBooths(layout.lines, venue.halls);

@@ -17,6 +17,7 @@ import { fillSampleCircles, imgUrl } from "@/lib/sample-circles";
 import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
+import { DOOR_H, DOOR_W, edgeGaps, edgeShared, type WallOpening } from "@/lib/walls";
 import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos } from "@/lib/rails";
 import corridorsJson from "@/data/corridors.json";
 import { search, type Hit } from "@/lib/search";
@@ -381,10 +382,8 @@ function ribbons(list: { pts: XZ[]; y: number; w: number; ys?: number[] }[], ski
 
 // ホールの壁。doors（出入口の位置と幅）に近い辺は、そこに幅 DOOR_W（幅があればその幅）・高さ DOOR_H の戸口を開け、上は梁（はり）で残す。
 // 扉より広い開口（ホールとリンクスペースのあいだのシャッターなど）は、シャッターと同じ高さ
-const DOOR_W = 4.5;
-const DOOR_H = 3.6;
 // others：同じ階のほかのホールの形。となりのホールと重なる辺（東1〜3 の境など）は、つながっているので壁を描かない
-type Opening = { at: XZ; width?: number; height?: number };
+type Opening = WallOpening;
 function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, doors: Opening[] = [], spans: [XZ, XZ, number?][] = [], others: XZ[][] = [], edgeHeight?: (i: number) => number, shutters: Opening[] = []) {
   const g = new THREE.Group();
   let open: [number, number][] = [];
@@ -410,48 +409,9 @@ function walls(poly: XZ[], y: number, height0: number, mat: THREE.Material, door
     if (len < 0.5) continue;
     const c = (bx - ax) / len, s = (bz - az) / len;
     const height = edgeHeight ? edgeHeight(i) : height0;
-    // この辺の近く（5m 以内）にある出入口を、辺の上の位置 u にして、戸口の範囲にする（重なれば1つに）
-    // [始め, 終わり, 戸口の高さ]
-    const gaps: [number, number, number][] = [];
-    for (const [list, h] of [
-      [doors, DOOR_H],
-      [shutters, DOOR_H * 2], // 搬入口のシャッターは出入口の 2 倍の高さ
-    ] as [Opening[], number][])
-      for (const { at: [dx, dz], width, height: oh } of list) {
-        const u = (dx - ax) * c + (dz - az) * s, v = -(dx - ax) * s + (dz - az) * c;
-        // 図面の「出入口」の文字は、壁から 5〜12m 離れて書かれていることが多い。幅のある開口は壁の上に置いてあるので、その辺だけ
-        if (Math.abs(v) > (width ? 1 : 15) || u < 0 || u > len) continue;
-        const w = width ?? DOOR_W;
-        gaps.push([Math.max(0.3, u - w / 2), Math.min(len - 0.3, u + w / 2), oh ?? (w > DOOR_W ? Math.max(h, DOOR_H * 2) : h)]);
-      }
-    // 配置図の壁の切れ目：両端がこの辺の近く（5m 以内）にあれば、その間を開ける
-    for (const [p, q, sh] of spans) {
-      const up = (p[0] - ax) * c + (p[1] - az) * s, vp = -(p[0] - ax) * s + (p[1] - az) * c;
-      const uq = (q[0] - ax) * c + (q[1] - az) * s, vq = -(q[0] - ax) * s + (q[1] - az) * c;
-      if (Math.abs(vp) > 5 || Math.abs(vq) > 5) continue;
-      const g0 = Math.max(0.3, Math.min(up, uq)), g1 = Math.min(len - 0.3, Math.max(up, uq));
-      if (g1 - g0 > 0.5) gaps.push([g0, g1, sh ?? DOOR_H]);
-    }
-    gaps.sort((p, q) => p[0] - q[0]);
-    const merged: [number, number, number][] = [];
-    for (const gp of gaps) {
-      const last = merged[merged.length - 1];
-      if (last && gp[0] <= last[1]) {
-        last[1] = Math.max(last[1], gp[1]);
-        last[2] = Math.max(last[2], gp[2]);
-      } else merged.push([...gp]);
-    }
-    // となりのホールと重なる所（辺がほぼ同じ線の上にあり、3m 以内）は、上まで開ける
-    open = [];
-    for (const o of others)
-      o.forEach((p, j) => {
-        const q = o[(j + 1) % o.length];
-        const vp = -(p[0] - ax) * s + (p[1] - az) * c, vq = -(q[0] - ax) * s + (q[1] - az) * c;
-        if (Math.abs(vp) > 3 || Math.abs(vq) > 3) return;
-        const up = (p[0] - ax) * c + (p[1] - az) * s, uq = (q[0] - ax) * c + (q[1] - az) * s;
-        const o0 = Math.max(0, Math.min(up, uq)), o1 = Math.min(len, Math.max(up, uq));
-        if (o1 - o0 > 1) open.push([o0, o1]);
-      });
+    // 出入口・搬入口・配置図の切れ目の穴（[始め, 終わり, 戸口の高さ]）と、となりのホールと重なる所（上まで開ける）。歩く線と同じ計算（lib/walls.ts）
+    const merged = edgeGaps(poly[i], poly[(i + 1) % poly.length], doors, spans, shutters);
+    open = edgeShared(poly[i], poly[(i + 1) % poly.length], others);
     // 辺の先に、となりのホールの角が 3m 以内でつづいていれば、そこまで壁をのばす（ホールの形のあいだのすき間をふさぐ）
     let uStart = 0, uEnd = len;
     for (const o of others)
@@ -2241,7 +2201,9 @@ export function VenueView() {
     const walkRails = (() => {
       const desksByHall = new Map<string, XZ[]>();
       for (const b of booths) (desksByHall.get(b.hall) ?? desksByHall.set(b.hall, []).get(b.hall)!).push(b.at);
-      return addCorridors(buildRails(lines, booths, venue.halls, features), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? [], features);
+      // 床から立つ部屋の箱（階段室・ロッカー・部屋の帯など）は、線が通らないように
+      const rooms = (venue.blocks ?? []).filter((b) => !b.base);
+      return addCorridors(buildRails(lines, booths, venue.halls, features, rooms), corridorsJson as unknown as Corridors, venue.doors, venue.exits ?? [], venue.halls, desksByHall, venue.wallGaps ?? [], features, rooms);
     })();
     // 線の上の位置の高さ（階段の線では、上と下の端のあいだ）
     // 階段の線の上の点の高さ：段の上の面（段は斜めの線より上に出ているので、線をまっすぐ結ぶと段の中に隠れる。ユーザーの指示）
