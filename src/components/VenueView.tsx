@@ -13,6 +13,7 @@ import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "@/lib/g
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { sampleTags } from "@/lib/sample-tags";
+import { fillSampleCircles } from "@/lib/sample-circles";
 import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
@@ -103,6 +104,8 @@ const savedTags = (() => {
 })();
 // 本当の配置・作品（公開されたもの）があるか。ないときは見本（架空の作品）
 const realData = !!(pubLines || savedLines);
+// 見本の配置のときは、見本のサークル情報（架空のサークル名とカット）も入れる（公開されたサークル情報があればそちら）
+if (!realData && DAYS.every((d) => !Object.keys(circles[d]).length)) fillSampleCircles(circles, expandBooths(lines, venue.halls));
 const hallById = new Map(venue.halls.map((h) => [h.id, h]));
 
 type View = "top" | "orbit" | "walk";
