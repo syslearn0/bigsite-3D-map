@@ -3102,6 +3102,7 @@ export function VenueView() {
       const RA = walkRails.nodes[railPos.a].p, RB = walkRails.nodes[railPos.b].p;
       const RL = Math.hypot(RB[0] - RA[0], RB[1] - RA[1]) || 1;
       const ux = (RB[0] - RA[0]) / RL, uz = (RB[1] - RA[1]) / RL;
+      const beside = new Map<number, { i: number; u: number }[]>();
       for (const i of hallBooths.get(here.id) ?? []) {
         const b = booths[i];
         const dx = b.at[0] - cp.x, dz = b.at[1] - cp.z;
@@ -3111,25 +3112,50 @@ export function VenueView() {
         if (Math.abs(along) > CARD_NEAR || Math.abs(perp) > 4.2 || d < 0.4) continue;
         if (Math.abs(Math.cos(b.angle) * ux + Math.sin(b.angle) * uz) < 0.85) continue;
         const ln = lines[b.line];
-        const k = ln.wall ? -b.side : b.side;
+        let k = ln.wall ? -b.side : b.side;
+        // 壁ぞいの列で、座る側の印が逆のもの（通路の側がホールの外になる）は、反対側が通路（歩く線と同じ決め方）
+        if (ln.wall && !pointInPolygon([b.at[0] - Math.sin(b.angle) * k * 2.4, b.at[1] + Math.cos(b.angle) * k * 2.4], here.poly)) k = -k;
         const nx = -Math.sin(b.angle) * k, nz = Math.cos(b.angle) * k;
-        // （壁ぞいの列で、座る側の印が逆のものもあるので、通路のすぐ横（2.9m まで）の机は向きを見ない）
-        if (nx * -dx + nz * -dz <= 0 && Math.abs(perp) > 2.9) continue;
-        const c = info(b.code);
-        if (!c) continue;
-        const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        // 同じサークルの 2 スペース（a・b）は、2 つの間の上に 1 つ
-        const nb = booths[i + 1];
-        const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
-        const x = pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z = pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1];
-        cand.push({ d, x, z, c, top: pinTop.get(i) ?? (pair ? pinTop.get(i + 1) : undefined) ?? 0 });
+        // 通路の側を向いている机だけ（島の背中合わせの反対側の机は、通路から 0.45m しか違わないので、向きで分ける）
+        if (nx * -dx + nz * -dz <= 0) continue;
+        // 列の向きの位置（あとで、いる所の島のかたまりだけにする）
+        const la = lines[b.line].angle;
+        if (!beside.has(b.line)) beside.set(b.line, []);
+        beside.get(b.line)!.push({ i, u: b.at[0] * Math.cos(la) + b.at[1] * Math.sin(la) });
+      }
+      // 列ごとに、机の続き（あいだが 2.5m より広い所＝横切る通路で切る）のうち、いま立っている所の横にあるかたまりだけ（ユーザーの指示：
+      // 奥の島の札はいらない）
+      for (const [li, list] of beside) {
+        const la = lines[li].angle;
+        const uc = cp.x * Math.cos(la) + cp.z * Math.sin(la);
+        list.sort((p, q) => p.u - q.u);
+        let r0 = 0;
+        const keep: number[] = [];
+        for (let k = 1; k <= list.length; k++) {
+          if (k < list.length && list[k].u - list[k - 1].u <= 2.5) continue;
+          if (uc >= list[r0].u - 2 && uc <= list[k - 1].u + 2) for (let m = r0; m < k; m++) keep.push(list[m].i);
+          r0 = k;
+        }
+        for (const i of keep) {
+          const b = booths[i];
+          const d = Math.hypot(b.at[0] - cp.x, b.at[1] - cp.z);
+          const c = info(b.code);
+          if (!c) continue;
+          const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          // 同じサークルの 2 スペース（a・b）は、2 つの間の上に 1 つ
+          const nb = booths[i + 1];
+          const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
+          const x = pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z = pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1];
+          cand.push({ d, x, z, c, top: pinTop.get(i) ?? (pair ? pinTop.get(i + 1) : undefined) ?? 0 });
+        }
       }
       // 遠い札から描き、近い札を上に重ねる
       cand.sort((p, q) => q.d - p.d);
       const tanH = Math.tan((persp.fov * Math.PI) / 360);
-      const y = floorY(here.level) + 1.25;
+      // 札の下の端は机の上（机の高さ 0.7m の少し上）。目の高さに近いと、札が奥の列の上に浮いて見える（ユーザーの指摘）
+      const y = floorY(here.level) + 0.85;
       for (const it of cand) {
         pv.set(it.x, Math.max(y, it.top), it.z).project(persp);
         // うしろ（画面の外）のものだけ出さない。画面のふちにかかる札も、はみ出したまま出す
