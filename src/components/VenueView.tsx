@@ -504,6 +504,19 @@ type Api = {
 };
 
 // 選んだ机の、サークル本人が登録した情報（作者が公開したもの）
+// ホールぜんぶを囲む四角（会場にいるかどうかを見る）
+const VENUE_BOX = (() => {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const h of venue.halls)
+    for (const [x, z] of h.poly) {
+      b[0] = Math.min(b[0], x);
+      b[1] = Math.min(b[1], z);
+      b[2] = Math.max(b[2], x);
+      b[3] = Math.max(b[3], z);
+    }
+  return b;
+})();
+
 function CircleCard({ c }: { c: Circle }) {
   return (
     <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
@@ -636,11 +649,12 @@ export function VenueView() {
     for (const d of DAYS)
       for (const code of Object.keys(marksByDay[d] ?? {})) {
         const c = circles[d][code];
-        for (const u of [c?.thumb, c?.image]) if (u?.startsWith("/data/circles/")) urls.add(u);
+        for (const u of [c?.thumb, c?.image]) if (u) urls.add(u);
       }
-    markedImgs.current = urls;
+    markedImgs.current = urls; // 見本の画像（sample:）は端末で作るので、通信なしで出せる
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage({ type: "keep-images", urls: [...urls] })).catch(() => {});
+    const keep = [...urls].filter((u) => u.startsWith("/data/circles/"));
+    navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage({ type: "keep-images", urls: keep })).catch(() => {});
   }, [marksByDay]);
   const notes = notesByDay[day];
   // 「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ（ユーザーの指示）。印を外した机の「行った」は出さない
@@ -677,6 +691,9 @@ export function VenueView() {
   const [routeMenu, setRouteMenu] = useState(false);
   const navGrids = useRef(new Map<number, Grid>());
   const lastMe = useRef<XZ | null>(null);
+  // 会場にいる（「現在地」をオンにしていて、どこかのホールから 300m 以内）。会場では、歩くときの札の画像を読まない
+  // （ユーザーの指示：目の前に本物の机があるので要らない。混んだ電波も使わない）。印のサークルの画像は端末にあるので出す
+  const atVenue = useRef(false);
   const findRoute = (to: "toilet" | "aid") => {
     setRouteMenu(false);
     let from: XZ | null = null, level = 1, fromName = "";
@@ -811,6 +828,7 @@ export function VenueView() {
   }, [floor, both]);
   useEffect(() => {
     if (!locOn) {
+      atVenue.current = false;
       api.current?.showMe(null, 0, false);
       return;
     }
@@ -826,6 +844,7 @@ export function VenueView() {
         setLocErr("");
         // 会場から遠い（1km より先）ときは、地図を動かさない
         const far = Math.hypot(p[0], p[1]) > 1000;
+        atVenue.current = p[0] > VENUE_BOX[0] - 300 && p[0] < VENUE_BOX[2] + 300 && p[1] > VENUE_BOX[1] - 300 && p[1] < VENUE_BOX[3] + 300;
         api.current?.showMe(far ? null : p, pos.coords.accuracy, first && !far);
         lastMe.current = far ? null : p;
         first = false;
@@ -3304,7 +3323,7 @@ export function VenueView() {
       // 近くの札の画像を読む（0.3 秒に 1 回見る。まだ読み始めていない分は 12 まで。離れたら、まだの分は読まない）
       if (now - e.scan > 300 && e.pend.length) {
         e.scan = now;
-        const online = navigator.onLine;
+        const online = navigator.onLine && !atVenue.current; // 会場では、印のないサークルの画像は読まない
         const near = e.pend
           .map((p) => ({ p, d: Math.hypot(p.x - cp.x, p.z - cp.z) }))
           .filter(({ p, d }) => d <= IMG_NEAR && (online || markedImgs.current.has(p.src)) && now - (cardFail.get(p.src) ?? -1e9) > 30_000)
@@ -3318,10 +3337,10 @@ export function VenueView() {
             p.draw(im);
           });
         }
-        // 離れた所の、まだ読み始めていない画像は取りやめる（その札は、また近くに来たら読む）
+        // 離れた所の（会場に着いた・電波がなくなったときは、印のない）、まだ読み始めていない画像は取りやめる（その札は、また近くに来たら読む）
         for (let qi = cardLoadQueue.length - 1; qi >= 0; qi--) {
           const src = cardLoadQueue[qi], ws = e.wait.get(src);
-          if (!ws || ws.some((p) => Math.hypot(p.x - cp.x, p.z - cp.z) <= IMG_NEAR + 5)) continue;
+          if (!ws || ((online || markedImgs.current.has(src)) && ws.some((p) => Math.hypot(p.x - cp.x, p.z - cp.z) <= IMG_NEAR + 5))) continue;
           cardLoadQueue.splice(qi, 1);
           cardImgs.delete(src);
           cardImgWait.delete(src);
