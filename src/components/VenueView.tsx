@@ -3083,7 +3083,7 @@ export function VenueView() {
     type PendCard = { x: number; z: number; src: string; draw: (im: HTMLImageElement) => void };
     const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number }>();
     // 画像を読むのは、立っている所から IMG_NEAR m 以内の札だけ（電波があるとき。印のサークルは端末に持っているので、電波がなくても）
-    const IMG_NEAR = 15;
+    const IMG_NEAR = 8;
     const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 120, CELL_H = 150, SHEET_COLS = 8, SHEET_ROWS = 8, PER_SHEET = SHEET_COLS * SHEET_ROWS;
     // 読みこんだ画像（ホール・日をまたいで使い回す）
     const cardImgs = new Map<string, HTMLImageElement | "loading">();
