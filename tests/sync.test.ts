@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { noteLocal, syncWith } from "../src/lib/sync";
+import { flatten, noteLocal, syncWith, unflatten } from "../src/lib/sync";
 
 // 端末の保存とサーバー（sync.php と同じ決まり：時刻の新しいほうが勝つ）のまね
 const store = new Map<string, string>();
@@ -44,4 +44,11 @@ test("ちがうアカウントでログインしたら、手元の印は送ら�
   server = {};
   await syncWith({ "m|1|東A-01a": "want" }, 8);
   assert.deepEqual(server, {});
+});
+
+test("使う金額（p）も行き来する。0 円は送らない", () => {
+  const e = () => ({ 1: {}, 2: {}, 3: {} });
+  const f = flatten(e(), e(), e(), { 1: { "東A-01a": 1500, "東B-02b": 0 }, 2: {}, 3: { "西あ-03a": 800 } });
+  assert.deepEqual(f, { "p|1|東A-01a": "1500", "p|3|西あ-03a": "800" });
+  assert.deepEqual(unflatten(f).budgets, { 1: { "東A-01a": 1500 }, 2: {}, 3: { "西あ-03a": 800 } });
 });

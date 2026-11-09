@@ -45,7 +45,7 @@ export function AccountBox({ compact }: { compact?: boolean }) {
         <>
           {!compact && (
             <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "0 0 6px" }}>
-              任意です。Google でログインすると、★・◆ の印・メモ・「行った」を、スマホとパソコンなどほかの端末と合わせられます。
+              任意です。Google でログインすると、★・◆ の印・メモ・使う金額・「行った」を、スマホとパソコンなどほかの端末と合わせられます。
             </p>
           )}
           <div ref={btn} style={{ minHeight: 44 }} />

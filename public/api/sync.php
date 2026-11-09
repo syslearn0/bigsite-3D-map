@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $pdo->beginTransaction();
   $now = (int)(microtime(true) * 1000) + 60000;
   foreach ($entries as $k => $e) {
-    if (!is_string($k) || !preg_match('/^[mnv]\|[123]\|[^|]{3,40}$/u', $k) || !is_array($e)) continue;
+    if (!is_string($k) || !preg_match('/^[mnvp]\|[123]\|[^|]{3,40}$/u', $k) || !is_array($e)) continue;
     $t = (int)($e['t'] ?? 0);
     if ($t <= 0) continue;
     $t = min($t, $now); // 端末の時計が進んでいても捨てない（サーバーの時刻にそろえる）

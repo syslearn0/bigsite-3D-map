@@ -1,5 +1,5 @@
 // 印・メモ・「行った」を、ログインした人の端末のあいだで合わせる。
-// 項目ごと（「m|1|東A-01a」= 1 日目のその机の印、n = メモ、v = 行った）に、この端末で最後に変えた時刻を覚えておき、
+// 項目ごと（「m|1|東A-01a」= 1 日目のその机の印、n = メモ、v = 行った、p = 使う金額（円））に、この端末で最後に変えた時刻を覚えておき、
 // サーバーと比べて新しいほうを残す。端末の保存がいつも先（電波がなくても使える）。サーバーへは少し待ってからまとめて送る
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { accountStore, api } from "./account";
@@ -11,19 +11,20 @@ type ByDay<T> = Record<Day, Record<string, T>>;
 type Meta = { t: Record<string, number>; last: Flat; user?: number };
 const META_KEY = "comiket3d:sync";
 
-export function flatten(marks: ByDay<string>, notes: ByDay<string>, visited: ByDay<number>): Flat {
+export function flatten(marks: ByDay<string>, notes: ByDay<string>, visited: ByDay<number>, budgets?: ByDay<number>): Flat {
   const f: Flat = {};
   for (const d of DAYS) {
     for (const [c, v] of Object.entries(marks[d])) f[`m|${d}|${c}`] = v;
     for (const [c, v] of Object.entries(notes[d])) if (v) f[`n|${d}|${c}`] = v;
     for (const [c, v] of Object.entries(visited[d])) f[`v|${d}|${c}`] = String(v);
+    for (const [c, v] of Object.entries(budgets?.[d] ?? {})) if (v > 0) f[`p|${d}|${c}`] = String(v);
   }
   return f;
 }
 
 export function unflatten(f: Flat) {
   const e = <T,>(): ByDay<T> => ({ 1: {}, 2: {}, 3: {} });
-  const marks = e<"want" | "maybe">(), notes = e<string>(), visited = e<number>();
+  const marks = e<"want" | "maybe">(), notes = e<string>(), visited = e<number>(), budgets = e<number>();
   for (const [k, v] of Object.entries(f)) {
     const [kind, ds, code] = k.split("|");
     const d = Number(ds) as Day;
@@ -31,8 +32,9 @@ export function unflatten(f: Flat) {
     if (kind === "m" && (v === "want" || v === "maybe")) marks[d][code] = v;
     else if (kind === "n") notes[d][code] = v;
     else if (kind === "v" && Number(v) > 0) visited[d][code] = Number(v);
+    else if (kind === "p" && Number(v) > 0) budgets[d][code] = Math.round(Number(v));
   }
-  return { marks, notes, visited };
+  return { marks, notes, visited, budgets };
 }
 
 function readMeta(): Meta | null {

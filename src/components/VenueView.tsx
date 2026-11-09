@@ -18,6 +18,8 @@ import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
 import { DOOR_H, DOOR_W, edgeGaps, edgeShared, type WallOpening } from "@/lib/walls";
+import { decodeChecklist, readChecklist, type Checklist } from "@/lib/checklist";
+import { EVENT } from "@/lib/event";
 import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos } from "@/lib/rails";
 import corridorsJson from "@/data/corridors.json";
 import { search, type Hit } from "@/lib/search";
@@ -170,6 +172,9 @@ const OLD_MARKS_KEY = "comiket3d:marks"; // 日を分けていなかったころ
 const OLD_NOTES_KEY = "comiket3d:notes";
 // 当日・計画のモードでつける「行った」（日 → 配置番号 → つけた時刻）。行った机とピンは灰色にする
 const VISITED_KEY = "comiket3d:visited-by-day";
+// 机ごとに使うつもりの金額（円。日 → 配置番号 → 金額）。一覧で日ごとの合計を出す
+const BUDGET_KEY = "comiket3d:budget-by-day";
+const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
 const VISITED_COLOR = 0x8e8e93;
 const OLD_WISH_KEY = "comiket3d:wish"; // 「行きたい」だけだったころの保存
 const PINS_KEY = "comiket3d:pins";
@@ -211,6 +216,9 @@ function loadMarks(): ByDay<Mark> {
     const old = JSON.parse(localStorage.getItem(OLD_WISH_KEY) ?? "[]");
     return Object.fromEntries((Array.isArray(old) ? old : []).map((c: string) => [c, "want" as Mark]));
   });
+}
+function loadBudgets(): ByDay<number> {
+  return readByDay<number>(BUDGET_KEY, () => ({}));
 }
 function loadVisited(): ByDay<number> {
   return readByDay<number>(VISITED_KEY, () => ({}));
@@ -533,7 +541,7 @@ export function VenueView() {
   const dayWorks = useMemo(() => worksOf(tags, day), [tags, day]);
   const [surround, setSurround] = useState(true); // 周辺の建物も立体で出す（開いた最初は出す）
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
-  const [print, setPrint] = useState<{ made: string; day: Day; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string }[] }[] } | null>(null);
+  const [print, setPrint] = useState<{ made: string; day: Day; total: number; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string; budget: number }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // 机を押したとき、そのサークルが登録した画像があれば、画面のまん中に大きく出す（どの見方でも。ユーザーの指示）
   const [popImg, setPopImg] = useState<{ image: string; name: string } | null>(null);
@@ -594,13 +602,15 @@ export function VenueView() {
   const [pinsOn, setPinsOn] = useState<Record<Mark, boolean>>(loadPins);
   const [notesByDay, setNotesByDay] = useState<ByDay<string>>(loadNotes);
   const [visitedByDay, setVisitedByDay] = useState<ByDay<number>>(loadVisited);
+  const [budgetsByDay, setBudgetsByDay] = useState<ByDay<number>>(loadBudgets);
   // ログインしているときは、ほかの端末と合わせる（サーバーの方が新しい所は、端末の保存を入れかえる）
-  const syncFlat = useMemo(() => flatten(marksByDay, notesByDay, visitedByDay), [marksByDay, notesByDay, visitedByDay]);
+  const syncFlat = useMemo(() => flatten(marksByDay, notesByDay, visitedByDay, budgetsByDay), [marksByDay, notesByDay, visitedByDay, budgetsByDay]);
   useAccountSync(syncFlat, (f) => {
     const u = unflatten(f);
     setMarksByDay(u.marks);
     setNotesByDay(u.notes);
     setVisitedByDay(u.visited);
+    setBudgetsByDay(u.budgets);
   });
   const marks = marksByDay[day];
   // 印（どの日の分も）をつけたサークルの画像だけを、サービスワーカーに持ってもらう。ほかの画像は端末に残さない
@@ -632,6 +642,54 @@ export function VenueView() {
   };
   const setMarks = (f: (m: Record<string, Mark>) => Record<string, Mark>) => setMarksByDay((all) => ({ ...all, [day]: f(all[day]) }));
   const setNotes = (f: (n: Record<string, string>) => Record<string, string>) => setNotesByDay((all) => ({ ...all, [day]: f(all[day]) }));
+  // コミケ Web カタログのチェックリスト（CSV）を読みこむ：読んだ中身と、チェックの色ごとにつける印
+  const [imp, setImp] = useState<{ file: string; list: Checklist; colorMark: Record<number, Mark | "">; memo: boolean; done?: string } | null>(null);
+  const openChecklist = async (f: File) => {
+    try {
+      const list = readChecklist(decodeChecklist(await f.arrayBuffer()), EVENT.weekdays);
+      if (!list.circles.length) throw new Error("サークルが入っていません");
+      // いちばん小さい番号の色を ★ 行きたい、ほかを ◆ 候補に（あとで選びなおせる）
+      const colors = [...new Set(list.circles.map((c) => c.color))].sort((a, b) => a - b);
+      setImp({ file: f.name, list, colorMark: Object.fromEntries(colors.map((c, i) => [c, i === 0 ? "want" : "maybe"])), memo: true });
+    } catch (e) {
+      setImp({ file: f.name, list: { event: "", colors: {}, circles: [], skipped: 0 }, colorMark: {}, memo: false, done: `読めませんでした（${e instanceof Error ? e.message : "形がちがいます"}）。コミケ Web カタログの「チェックリストのエクスポート」で書き出した CSV を選んでください` });
+    }
+  };
+  const applyChecklist = () => {
+    if (!imp) return;
+    let added = 0,
+      kept = 0,
+      memos = 0;
+    const nextMarks = { 1: { ...marksByDay[1] }, 2: { ...marksByDay[2] }, 3: { ...marksByDay[3] } } as ByDay<Mark>;
+    const nextNotes = { 1: { ...notesByDay[1] }, 2: { ...notesByDay[2] }, 3: { ...notesByDay[3] } } as ByDay<string>;
+    for (const c of imp.list.circles) {
+      const m = imp.colorMark[c.color];
+      if (!c.day || !codeIndex.has(c.code)) continue;
+      if (m) {
+        // すでに印のある机は、そのまま（この地図でつけた印を消さない）
+        if (nextMarks[c.day][c.code]) kept++;
+        else {
+          nextMarks[c.day][c.code] = m;
+          added++;
+        }
+      }
+      if (imp.memo && c.memo && !nextNotes[c.day][c.code]) {
+        nextNotes[c.day][c.code] = c.memo.replace(/\s+/g, " ").slice(0, 200);
+        memos++;
+      }
+    }
+    setMarksByDay(nextMarks);
+    setNotesByDay(nextNotes);
+    setImp({ ...imp, done: `${added} 件に印をつけました${kept ? `（${kept} 件は前から印があったので、そのまま）` : ""}${memos ? `。メモを ${memos} 件入れました` : ""}。` });
+  };
+  const budgets = budgetsByDay[day];
+  const setBudget = (code: string, n: number) =>
+    setBudgetsByDay((all) => {
+      const m = { ...all[day] };
+      if (n > 0) m[code] = n;
+      else delete m[code];
+      return { ...all, [day]: m };
+    });
   const [tour, setTour] = useState(() => !tourDone()); // 使い方の案内（初めての人だけ。開いたときの案内を閉じてから）
   const tourFrom = useRef<Mode>("plan"); // 案内を始めたときのモード（閉じたら戻す）
   const endTour = () => {
@@ -772,6 +830,11 @@ export function VenueView() {
       localStorage.setItem(VISITED_KEY, JSON.stringify(visitedByDay));
     } catch {}
   }, [visitedByDay]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(BUDGET_KEY, JSON.stringify(budgetsByDay));
+    } catch {}
+  }, [budgetsByDay]);
   useEffect(() => {
     try {
       localStorage.setItem(PINS_KEY, JSON.stringify(pinsOn));
@@ -3884,9 +3947,19 @@ export function VenueView() {
   const marked = lists.want.length + lists.maybe.length;
   const markedDone = [...lists.want, ...lists.maybe].filter((c) => visited[c]).length;
   // 印はつけずにメモだけ書いた机（「行った」の机は上に出すので除く）
-  const memoOnly = Object.keys(notes)
+  const memoOnly = [...new Set([...Object.keys(notes), ...Object.keys(budgets)])]
     .filter((c) => !marks[c] && !visited[c] && codeIndex.has(c))
     .sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+  // 使う金額の合計（その日。地図の配置にある机だけ）：★・◆・印なし（メモだけ）に分けて、当日は行った分と残りも
+  const sumOf = (codes: string[]) => codes.reduce((a, c) => a + (budgets[c] ?? 0), 0);
+  const budgetCodes = Object.keys(budgets).filter((c) => codeIndex.has(c));
+  const money = {
+    total: sumOf(budgetCodes),
+    want: sumOf(lists.want),
+    maybe: sumOf(lists.maybe),
+    done: sumOf(budgetCodes.filter((c) => visited[c])),
+    allDays: DAYS.reduce((a, d) => a + Object.entries(budgetsByDay[d]).reduce((x, [c, v]) => x + (codeIndex.has(c) ? v : 0), 0), 0),
+  };
   const openHalls = venue.halls.filter((h) => !h.closed);
   // 作品のドロップダウン：入れた作品（なければ見本の作品）。キャラのドロップダウン：選んだ作品に入っているキャラ
   // ジャンルの一覧と、選んだジャンルの作品の一覧
@@ -4059,12 +4132,12 @@ export function VenueView() {
           title: `${hs[0].building}${nums}ホール（${hs[0].level}F）`,
           img: api.current?.snapshot(ids, mine) ?? "",
           codes: [...mine, ...memos]
-            .map(({ booth, mark }) => ({ code: booths[booth].code, mark, hall: hallById.get(booths[booth].hall)!.name, note: notes[booths[booth].code] ?? "" }))
+            .map(({ booth, mark }) => ({ code: booths[booth].code, mark, hall: hallById.get(booths[booth].hall)!.name, note: notes[booths[booth].code] ?? "", budget: budgets[booths[booth].code] ?? 0 }))
             .sort((a, b) => a.code.localeCompare(b.code, "ja", { numeric: true })),
         };
       });
     setListOpen(false);
-    setPrint({ made: new Date().toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" }), day, sections });
+    setPrint({ made: new Date().toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" }), day, total: money.total, sections });
   };
   useEffect(() => {
     if (!print) return;
@@ -4268,6 +4341,21 @@ export function VenueView() {
             {marked + memoOnly.length === 0 && (
               <p style={{ color: "var(--muted)", margin: "8px 0 0" }}>{day}日目の印はまだありません。机を押して「★ 行きたい」か「◆ 候補」をつけられます。印とメモは日ごとに別で、この端末に保存します（ログインすると、ほかの端末とも合わせます）。</p>
             )}
+            {money.total > 0 && (
+              <div style={{ marginTop: 8, fontSize: ".9rem" }}>
+                <strong>使う金額 {yen(money.total)}</strong>
+                <span style={{ color: "var(--muted)" }}>
+                  （★ {yen(money.want)}・◆ {yen(money.maybe)}
+                  {money.total - money.want - money.maybe > 0 ? `・印なし ${yen(money.total - money.want - money.maybe)}` : ""}）
+                </span>
+                {mode === "plan" && (
+                  <span style={{ marginLeft: 6, whiteSpace: "nowrap" }}>
+                    行った分 {yen(money.done)}・残り {yen(money.total - money.done)}
+                  </span>
+                )}
+                {money.allDays !== money.total && <div style={{ color: "var(--muted)", fontSize: ".8rem" }}>3 日の合計 {yen(money.allDays)}</div>}
+              </div>
+            )}
             {marked > 0 && (
               <section style={{ marginTop: 8, padding: 8, borderRadius: 8 }} className="soft">
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -4311,6 +4399,7 @@ export function VenueView() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <strong style={{ color: hexCss(MARK[m].color) }}>
                     {MARK[m].icon} {MARK[m].label} {lists[m].length}
+                    {money[m] > 0 && <span style={{ fontWeight: 400, fontSize: ".85rem", marginLeft: 6 }}>{yen(money[m])}</span>}
                   </strong>
                   <label style={{ fontSize: ".85rem", display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <input type="checkbox" checked={pinsOn[m]} onChange={() => setPinsOn((p) => ({ ...p, [m]: !p[m] }))} />
@@ -4328,6 +4417,7 @@ export function VenueView() {
                           onClick={() => select(codeIndex.get(c)!)}
                         >
                           {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
+                          {budgets[c] > 0 && <span style={{ float: "right", fontWeight: 700 }}>{yen(budgets[c])}</span>}
                           {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
                         </button>
                         {mode === "plan" ? (
@@ -4352,21 +4442,88 @@ export function VenueView() {
             ))}
             {memoOnly.length > 0 && (
               <section style={{ marginTop: 8 }}>
-                <strong>📝 メモだけ {memoOnly.length}</strong>
+                <strong>📝 印なし（メモ・金額だけ） {memoOnly.length}</strong>
                 <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
                   {memoOnly.map((c) => (
                     <li key={c} style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 0", borderTop: "1px solid var(--line)" }}>
                       <button className="chip small" style={{ flex: 1, textAlign: "left" }} onClick={() => select(codeIndex.get(c)!)}>
                         {c}　{hallById.get(booths[codeIndex.get(c)!].hall)!.name}
-                        <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>
+                        {budgets[c] > 0 && <span style={{ float: "right", fontWeight: 700 }}>{yen(budgets[c])}</span>}
+                        {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
                       </button>
-                      <button className="chip small" onClick={() => setNote(c, "")} aria-label={`${c} のメモを消す`}>
+                      <button
+                        className="chip small"
+                        onClick={() => {
+                          setNote(c, "");
+                          setBudget(c, 0);
+                        }}
+                        aria-label={`${c} のメモと金額を消す`}
+                      >
                         消す
                       </button>
                     </li>
                   ))}
                 </ul>
               </section>
+            )}
+          </div>
+        )}
+
+        {imp && (
+          <div style={{ ...SHEET, top: 8, bottom: "auto", maxHeight: "70%", overflowY: "auto", zIndex: 5 }} role="dialog" aria-label="チェックリストの読みこみ">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <strong>Web カタログのチェックリストを読む</strong>
+              <button className="chip small" onClick={() => setImp(null)}>
+                閉じる
+              </button>
+            </div>
+            <p style={{ fontSize: ".85rem", color: "var(--muted)", margin: "4px 0" }}>{imp.file}{imp.list.event ? `（${imp.list.event}）` : ""}</p>
+            {imp.done ? (
+              <p style={{ margin: "6px 0" }}>{imp.done}</p>
+            ) : (
+              (() => {
+                const cs = imp.list.circles;
+                const onMap = cs.filter((c) => c.day && codeIndex.has(c.code));
+                const noDay = [...new Set(cs.filter((c) => !c.day).map((c) => c.dayText || "（空）"))];
+                const offMap = cs.filter((c) => c.day && !codeIndex.has(c.code)).length;
+                const colors = Object.keys(imp.colorMark).map(Number);
+                return (
+                  <>
+                    <p style={{ margin: "6px 0", fontSize: ".9rem" }}>
+                      サークル {cs.length} 件（{([1, 2, 3] as Day[]).map((d) => `${d}日目 ${cs.filter((c) => c.day === d).length}`).join("・")}）
+                      {offMap > 0 && <span style={{ display: "block", color: "var(--muted)" }}>いまの地図の配置にない番号が {offMap} 件あります（入れません{realData ? "" : "。地図の配置は見本です"}）</span>}
+                      {noDay.length > 0 && (
+                        <span style={{ display: "block", color: "var(--muted)" }}>
+                          参加日が {EVENT.name} の日（{EVENT.weekdays.join("・")}）でない行は入れません：{noDay.join("・")}
+                        </span>
+                      )}
+                      {imp.list.skipped > 0 && <span style={{ display: "block", color: "var(--muted)" }}>配置番号のない行 {imp.list.skipped} 件は入れません</span>}
+                    </p>
+                    <div style={{ fontSize: ".9rem" }}>チェックの色ごとに、つける印を選んでください</div>
+                    {colors.map((col) => (
+                      <label key={col} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+                        <span style={{ flex: 1 }}>
+                          色 {col}
+                          {imp.list.colors[col] ? `「${imp.list.colors[col]}」` : ""}　{onMap.filter((c) => c.color === col).length} 件
+                        </span>
+                        <select value={imp.colorMark[col]} onChange={(e) => setImp({ ...imp, colorMark: { ...imp.colorMark, [col]: e.target.value as Mark | "" } })}>
+                          <option value="want">★ 行きたい</option>
+                          <option value="maybe">◆ 候補</option>
+                          <option value="">入れない</option>
+                        </select>
+                      </label>
+                    ))}
+                    <label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, fontSize: ".9rem" }}>
+                      <input type="checkbox" checked={imp.memo} onChange={(e) => setImp({ ...imp, memo: e.target.checked })} />
+                      カタログのメモも入れる（メモを書いていない机だけ）
+                    </label>
+                    <p style={{ fontSize: ".8rem", color: "var(--muted)", margin: "6px 0" }}>すでに印のある机は、そのままにします。</p>
+                    <button className="primary" style={{ minHeight: 44, padding: "0 18px" }} disabled={!onMap.length} onClick={applyChecklist}>
+                      {onMap.length} 件を読みこむ
+                    </button>
+                  </>
+                );
+              })()
             )}
           </div>
         )}
@@ -4440,15 +4597,33 @@ export function VenueView() {
               </button>
             </div>
             {/* メモは印をつけなくても書ける（ユーザーの指示） */}
-            <input
-              type="text"
-              aria-label="メモ（任意）"
-              placeholder="メモ（任意）　例：新刊 2 冊・午前中に"
-              maxLength={200}
-              value={notes[sel.code] ?? ""}
-              onChange={(e) => setNote(sel.code, e.target.value)}
-              style={{ width: "100%", marginTop: 8, minHeight: 40, boxSizing: "border-box" }}
-            />
+            {/* 使うつもりの金額（円）。一覧で日ごとの合計を出す */}
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <input
+                type="text"
+                aria-label="メモ（任意）"
+                placeholder="メモ（任意）　例：新刊 2 冊・午前中に"
+                maxLength={200}
+                value={notes[sel.code] ?? ""}
+                onChange={(e) => setNote(sel.code, e.target.value)}
+                style={{ flex: 1, minWidth: 0, minHeight: 40, boxSizing: "border-box" }}
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: 2, flex: "0 0 auto" }}>
+                ¥
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="使う金額（円・任意）"
+                  placeholder="金額"
+                  value={budgets[sel.code] ? String(budgets[sel.code]) : ""}
+                  onChange={(e) => {
+                    const n = Number(e.target.value.normalize("NFKC").replace(/[^0-9]/g, "").slice(0, 7));
+                    setBudget(sel.code, n);
+                  }}
+                  style={{ width: 84, minHeight: 40, boxSizing: "border-box", textAlign: "right" }}
+                />
+              </label>
+            </div>
           </div>
         )}
       </div>
@@ -4642,11 +4817,28 @@ export function VenueView() {
               setMenu(false);
             }}
           >
-            {day}日目 ★ {lists.want.length}・◆ {lists.maybe.length} の一覧
+            {day}日目 ★ {lists.want.length}・◆ {lists.maybe.length}
+            {money.total > 0 ? `・${yen(money.total)}` : ""} の一覧
           </button>
           <button className="chip" onClick={startPrint}>
             配置図を印刷
           </button>
+          {/* コミケ Web カタログで書き出したチェックリスト（CSV）から、印をつける */}
+          <label className="chip" style={{ cursor: "pointer" }}>
+            Web カタログの CSV を読む
+            <input
+              type="file"
+              accept=".csv,text/csv,text/plain"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                setMenu(false);
+                openChecklist(f);
+              }}
+            />
+          </label>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
           <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>地図にピン：</span>
@@ -4740,6 +4932,7 @@ export function VenueView() {
               <p className="print-note">
                 配置図（{print.day}日目の印）　{print.made} 作成。コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式の試作です。島の配置は見本で、C109 の本当の配置ではありません。○の文字が列の名前、島の端の数字がその列の端の机の番号。緑が出入口、灰が搬入口（シャッター）、青がトイレ、赤が救護室（図面を参考にした目安の位置で、数m ずれることがあります。当日の出入口は運営の案内に従ってください）。地図：
                 {venue.attribution}
+                {print.total > 0 && <strong style={{ display: "block", marginTop: 4 }}>{print.day}日目に使う金額の合計 {yen(print.total)}</strong>}
               </p>
             )}
             <h2>{sec.title}</h2>
@@ -4749,7 +4942,8 @@ export function VenueView() {
               <p className="print-marks">
                 {sec.codes.map((c) => (
                   <span key={c.code} style={c.mark ? { color: hexCss(MARK[c.mark].color) } : undefined}>
-                    {c.mark ? MARK[c.mark].icon : "📝"} {c.code}（{c.hall}）{c.note ? `　${c.note}` : ""}
+                    {c.mark ? MARK[c.mark].icon : "📝"} {c.code}（{c.hall}）{c.budget > 0 ? `　${yen(c.budget)}` : ""}
+                    {c.note ? `　${c.note}` : ""}
                   </span>
                 ))}
               </p>
