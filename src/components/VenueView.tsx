@@ -3062,17 +3062,61 @@ export function VenueView() {
     });
     let cardsVer = 0; // 日・作品・サークルの情報が変わったら作り直す
     let walkHall = "";
-    const hallCards = new Map<string, { mesh: THREE.Mesh; ver: number }>();
-    const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 160, CELL_H = 200;
-    const buildHallCards = (hallId: string) => {
-      const old = hallCards.get(hallId);
-      if (old) {
-        scene.remove(old.mesh);
-        old.mesh.geometry.dispose();
-        (old.mesh.material as THREE.MeshBasicMaterial).map?.dispose();
-        (old.mesh.material as THREE.MeshBasicMaterial).dispose();
-        hallCards.delete(hallId);
+    // 札の絵は、64 枚ずつの小さな絵（シート）に分ける。大きな絵を 1 度に GPU へ送ると、ホールに入ったときに 1〜2 秒止まった。
+    // シートは 1 コマに 1 枚ずつ送り、送るまでは出さない。画像が読めたら、そのシートだけ（0.4 秒に 1 回まで）送り直す
+    type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean };
+    const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number }>();
+    const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 120, CELL_H = 150, SHEET_COLS = 8, SHEET_ROWS = 8, PER_SHEET = SHEET_COLS * SHEET_ROWS;
+    // 読みこんだ画像（ホール・日をまたいで使い回す）
+    const cardImgs = new Map<string, HTMLImageElement | "loading">();
+    const cardImgWait = new Map<string, (() => void)[]>();
+    const withImg = (src: string, f: (im: HTMLImageElement) => void) => {
+      const got = cardImgs.get(src);
+      if (got && got !== "loading") return f(got);
+      (cardImgWait.get(src) ?? cardImgWait.set(src, []).get(src)!).push(() => f(cardImgs.get(src) as HTMLImageElement));
+      if (got) return;
+      cardImgs.set(src, "loading");
+      cardLoadQueue.push(src);
+      pumpCardLoads();
+    };
+    // 画像は 3 つずつ読む（一度に何百も読みはじめると、読みこみの処理でしばらく止まる）
+    const cardLoadQueue: string[] = [];
+    let cardLoading = 0;
+    const pumpCardLoads = () => {
+      while (cardLoading < 3 && cardLoadQueue.length) {
+        const src = cardLoadQueue.shift()!;
+        cardLoading++;
+        const im = new Image();
+        const done = (ok: boolean) => {
+          cardLoading--;
+          if (ok) {
+            cardImgs.set(src, im);
+            for (const cb of cardImgWait.get(src) ?? []) cb();
+          } else cardImgs.delete(src);
+          cardImgWait.delete(src);
+          setTimeout(pumpCardLoads, 0);
+        };
+        im.onload = () => done(true);
+        im.onerror = () => done(false);
+        im.src = src;
       }
+    };
+    let lastCardUpload = 0;
+    // 読めた画像を札の絵に描く仕事。1 コマに数ミリ秒ぶんずつ（一度に何百枚も描くと、しばらく止まる）
+    const cardDrawQueue: (() => void)[] = [];
+    const dropHallCards = (hallId: string) => {
+      const e = hallCards.get(hallId);
+      if (!e) return;
+      for (const sh of e.sheets) {
+        scene.remove(sh.mesh);
+        sh.mesh.geometry.dispose();
+        sh.tex.dispose();
+        (sh.mesh.material as THREE.MeshBasicMaterial).dispose();
+      }
+      hallCards.delete(hallId);
+    };
+    const buildHallCards = (hallId: string) => {
+      dropHallCards(hallId);
       const hall = hallById.get(hallId);
       if (!hall) return;
       const info = cardInfo.current;
@@ -3089,99 +3133,133 @@ export function VenueView() {
         const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
         items.push({ x: pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z: pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1], ax: Math.cos(b.angle), az: Math.sin(b.angle), c });
       }
-      if (!items.length) return;
-      // 札を並べた絵（横 cols 枚）
-      const cols = Math.max(1, Math.min(Math.floor(4096 / CELL_W), Math.ceil(Math.sqrt((items.length * CELL_H) / CELL_W))));
-      const rows = Math.ceil(items.length / cols);
-      const cv = document.createElement("canvas");
-      cv.width = cols * CELL_W;
-      cv.height = Math.min(4096, rows * CELL_H);
-      const g = cv.getContext("2d")!;
-      const tex = new THREE.CanvasTexture(cv);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 4;
-      const drawCell = (k: number, im: HTMLImageElement | null) => {
-        const it = items[k], x0 = (k % cols) * CELL_W, y0 = Math.floor(k / cols) * CELL_H;
-        g.clearRect(x0, y0, CELL_W, CELL_H);
-        g.fillStyle = "rgba(255,255,255,.95)";
-        g.beginPath();
-        g.roundRect(x0 + 4, y0 + 4, CELL_W - 8, CELL_H - 8, 12);
-        g.fill();
-        const S = 128, ix = x0 + (CELL_W - S) / 2, iy = y0 + 10;
-        if (it.c.image) {
-          if (im) {
-            const k2 = Math.max(S / im.width, S / im.height), iw = im.width * k2, ih = im.height * k2;
-            g.save();
-            g.beginPath();
-            g.rect(ix, iy, S, S);
-            g.clip();
-            g.drawImage(im, ix + (S - iw) / 2, iy + (S - ih) / 2, iw, ih);
-            g.restore();
-          } else {
-            g.fillStyle = "#e6e6e1";
-            g.fillRect(ix, iy, S, S);
-          }
+      // このホールの歩く線を 4m の升目に入れておく（机ごとに会場の線を全部見ると、ホールに入るたびに 1 秒近くかかった）
+      const eg = new Map<string, [number, number][]>();
+      walkRails.adj.forEach((ns, a2) => {
+        if (walkRails.nodes[a2].hall !== hallId) return;
+        for (const b2 of ns) {
+          if (b2 < a2 || walkRails.nodes[b2].hall !== hallId) continue;
+          const A = walkRails.nodes[a2].p, B = walkRails.nodes[b2].p;
+          for (let gx = Math.floor(Math.min(A[0], B[0]) / 4); gx <= Math.floor(Math.max(A[0], B[0]) / 4); gx++)
+            for (let gz = Math.floor(Math.min(A[1], B[1]) / 4); gz <= Math.floor(Math.max(A[1], B[1]) / 4); gz++) {
+              const key2 = `${gx},${gz}`;
+              (eg.get(key2) ?? eg.set(key2, []).get(key2)!).push([a2, b2]);
+            }
         }
-        g.textAlign = "center";
-        g.textBaseline = "top";
-        const name = it.c.name.length > 9 ? it.c.name.slice(0, 8) + "…" : it.c.name;
-        const sub = it.c.sub.length > 10 ? it.c.sub.slice(0, 9) + "…" : it.c.sub;
-        let ty = it.c.image ? iy + S + 6 : y0 + 60;
-        if (name) {
-          g.font = "700 20px system-ui, sans-serif";
-          g.fillStyle = "#1d1d1b";
-          g.fillText(name, x0 + CELL_W / 2, ty);
-          ty += 24;
-        }
-        if (sub) {
-          g.font = "500 17px system-ui, sans-serif";
-          g.fillStyle = "#55554f";
-          g.fillText(sub, x0 + CELL_W / 2, ty);
-        }
-      };
-      const pos: number[] = [], uv: number[] = [], idx: number[] = [];
-      const y0 = floorY(hall.level) + 0.72, y1 = y0 + CARD_H;
-      items.forEach((it, k) => {
-        drawCell(k, null);
-        if (it.c.image) {
-          const im = new Image();
-          im.onload = () => {
-            drawCell(k, im);
-            tex.needsUpdate = true;
-          };
-          im.src = it.c.image;
-        }
-        // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
-        const q = nearestOnRails(walkRails, [it.x, it.z], hallId);
-        let nx = q ? q.at[0] - it.x : 1, nz = q ? q.at[1] - it.z : 0;
-        const along = nx * it.ax + nz * it.az;
-        nx -= it.ax * along;
-        nz -= it.az * along;
-        const nl = Math.hypot(nx, nz);
-        if (nl < 1e-3) return;
-        nx /= nl;
-        nz /= nl;
-        // 机の通路の側のふちの上に立てる。右向き（見る人から見て）は (nz, -nx)
-        const cx = it.x + nx * 0.5, cz = it.z + nz * 0.5;
-        const rx = nz * (CARD_W / 2), rz = -nx * (CARD_W / 2);
-        const base = pos.length / 3;
-        pos.push(cx - rx, y0, cz - rz, cx + rx, y0, cz + rz, cx + rx, y1, cz + rz, cx - rx, y1, cz - rz);
-        const u0 = ((k % cols) * CELL_W) / cv.width, u1 = u0 + CELL_W / cv.width;
-        const v1 = 1 - (Math.floor(k / cols) * CELL_H) / cv.height, v0 = v1 - CELL_H / cv.height;
-        uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       });
-      tex.needsUpdate = true;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
-      geo.setIndex(idx);
-      geo.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05 }));
-      mesh.renderOrder = 2;
-      mesh.visible = false;
-      scene.add(mesh);
-      hallCards.set(hallId, { mesh, ver: cardsVer });
+      const nearLine = (x: number, z: number): XZ | null => {
+        let best: XZ | null = null, bd = Infinity;
+        for (let gx = Math.floor(x / 4) - 1; gx <= Math.floor(x / 4) + 1; gx++)
+          for (let gz = Math.floor(z / 4) - 1; gz <= Math.floor(z / 4) + 1; gz++)
+            for (const [a2, b2] of eg.get(`${gx},${gz}`) ?? []) {
+              const A = walkRails.nodes[a2].p, B = walkRails.nodes[b2].p, dx = B[0] - A[0], dz = B[1] - A[1], L2 = dx * dx + dz * dz || 1;
+              const t = Math.max(0, Math.min(1, ((x - A[0]) * dx + (z - A[1]) * dz) / L2));
+              const qx = A[0] + dx * t, qz = A[1] + dz * t, d = Math.hypot(qx - x, qz - z);
+              if (d < bd) [best, bd] = [[qx, qz], d];
+            }
+        return best;
+      };
+      // 近い机から（近くの札の絵・画像が先にそろう）
+      const cp0 = persp.position;
+      items.sort((p2, q2) => Math.hypot(p2.x - cp0.x, p2.z - cp0.z) - Math.hypot(q2.x - cp0.x, q2.z - cp0.z));
+      const entry = { sheets: [] as Sheet[], ver: cardsVer, used: performance.now() };
+      hallCards.set(hallId, entry);
+      const y0 = floorY(hall.level) + 0.72, y1 = y0 + CARD_H;
+      for (let s0 = 0; s0 < items.length; s0 += PER_SHEET) {
+        const part = items.slice(s0, s0 + PER_SHEET);
+        const rows = Math.ceil(part.length / SHEET_COLS);
+        const cv = document.createElement("canvas");
+        cv.width = SHEET_COLS * CELL_W;
+        cv.height = rows * CELL_H;
+        const g = cv.getContext("2d")!;
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        const drawCell = (k: number, im: HTMLImageElement | null) => {
+          const it = part[k], x0 = (k % SHEET_COLS) * CELL_W, yy = Math.floor(k / SHEET_COLS) * CELL_H;
+          g.clearRect(x0, yy, CELL_W, CELL_H);
+          g.fillStyle = "rgba(255,255,255,.95)";
+          g.beginPath();
+          g.roundRect(x0 + 3, yy + 3, CELL_W - 6, CELL_H - 6, 9);
+          g.fill();
+          const S = 96, ix = x0 + (CELL_W - S) / 2, iy = yy + 8;
+          if (it.c.image) {
+            if (im) {
+              const k2 = Math.max(S / im.width, S / im.height), iw = im.width * k2, ih = im.height * k2;
+              g.save();
+              g.beginPath();
+              g.rect(ix, iy, S, S);
+              g.clip();
+              g.drawImage(im, ix + (S - iw) / 2, iy + (S - ih) / 2, iw, ih);
+              g.restore();
+            } else {
+              g.fillStyle = "#e6e6e1";
+              g.fillRect(ix, iy, S, S);
+            }
+          }
+          g.textAlign = "center";
+          g.textBaseline = "top";
+          const name = it.c.name.length > 9 ? it.c.name.slice(0, 8) + "…" : it.c.name;
+          const sub = it.c.sub.length > 10 ? it.c.sub.slice(0, 9) + "…" : it.c.sub;
+          let ty = it.c.image ? iy + S + 5 : yy + 45;
+          if (name) {
+            g.font = "700 15px system-ui, sans-serif";
+            g.fillStyle = "#1d1d1b";
+            g.fillText(name, x0 + CELL_W / 2, ty);
+            ty += 18;
+          }
+          if (sub) {
+            g.font = "500 13px system-ui, sans-serif";
+            g.fillStyle = "#55554f";
+            g.fillText(sub, x0 + CELL_W / 2, ty);
+          }
+        };
+        const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+        const sheet: Sheet = { mesh: null as unknown as THREE.Mesh, tex, sent: false, dirty: false };
+        part.forEach((it, k) => {
+          drawCell(k, null);
+          if (it.c.image)
+            withImg(it.c.image, (im) =>
+              cardDrawQueue.push(() => {
+                if (!sheet.mesh.parent) return; // もう捨てたシート
+                drawCell(k, im);
+                sheet.dirty = true;
+              }),
+            );
+          // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
+          const q = nearLine(it.x, it.z);
+          let nx = q ? q[0] - it.x : 1, nz = q ? q[1] - it.z : 0;
+          const along = nx * it.ax + nz * it.az;
+          nx -= it.ax * along;
+          nz -= it.az * along;
+          const nl = Math.hypot(nx, nz);
+          if (nl < 1e-3) return;
+          nx /= nl;
+          nz /= nl;
+          // 机の通路の側のふちの上に立てる。右向き（見る人から見て）は (nz, -nx)
+          const cx = it.x + nx * 0.5, cz = it.z + nz * 0.5;
+          const rx = nz * (CARD_W / 2), rz = -nx * (CARD_W / 2);
+          const base = pos.length / 3;
+          pos.push(cx - rx, y0, cz - rz, cx + rx, y0, cz + rz, cx + rx, y1, cz + rz, cx - rx, y1, cz - rz);
+          const u0 = ((k % SHEET_COLS) * CELL_W) / cv.width, u1 = u0 + CELL_W / cv.width;
+          const v1 = 1 - (Math.floor(k / SHEET_COLS) * CELL_H) / cv.height, v0 = v1 - CELL_H / cv.height;
+          uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
+          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        });
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+        geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+        geo.setIndex(idx);
+        geo.computeBoundingSphere();
+        sheet.mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05 }));
+        sheet.mesh.renderOrder = 2;
+        sheet.mesh.visible = false;
+        sheet.dirty = false; // はじめて送るときに、それまでに読めた画像もいっしょに送る
+        scene.add(sheet.mesh);
+        entry.sheets.push(sheet);
+      }
+      // 作ったホールのうち、しばらく行っていない所は捨てる（いま・前のホールの 2 つだけ残す）
+      for (const [id] of [...hallCards.entries()].sort((a, b) => b[1].used - a[1].used).slice(2)) dropHallCards(id);
     };
     const drawWalkCards = (w: number, h: number) => {
       if (codesShown) codeCtx.clearRect(0, 0, w, h);
@@ -3190,13 +3268,34 @@ export function VenueView() {
       const here = venue.halls.find((hh) => floorOf(hh.level) === currentFloor && !hh.closed && pointInPolygon([cp.x, cp.z], hh.poly));
       walkHall = here?.id ?? "";
       if (here && hallCards.get(here.id)?.ver !== cardsVer) buildHallCards(here.id);
-      for (const [id, e] of hallCards) e.mesh.visible = id === walkHall;
+      for (const [id, e] of hallCards) for (const sh of e.sheets) sh.mesh.visible = id === walkHall && sh.sent;
+      const t0 = performance.now();
+      while (cardDrawQueue.length && performance.now() - t0 < 8) cardDrawQueue.shift()!();
+      const e = here ? hallCards.get(here.id) : undefined;
+      if (!e) return;
+      const now = performance.now();
+      e.used = now;
+      // 1 コマに 1 枚だけ送る：まだ送っていないシート（近い順でなくてよい。64 枚ずつなので数コマで全部そろう）、なければ画像が読めたシート
+      const first = e.sheets.find((sh) => !sh.sent);
+      if (first) {
+        first.tex.needsUpdate = true;
+        first.sent = true;
+        first.dirty = false;
+        first.mesh.visible = true;
+      }
+      if (now - lastCardUpload < 400) return;
+      const d = e.sheets.find((sh) => sh.dirty && sh.sent && sh !== first);
+      if (d) {
+        d.tex.needsUpdate = true;
+        d.dirty = false;
+        lastCardUpload = now;
+      }
     };
     const drawCodes = () => {
       const w = el.clientWidth, h = el.clientHeight;
       if (current === "orbit") return drawCodes3d(w, h);
       if (current === "walk") return drawWalkCards(w, h);
-      for (const e of hallCards.values()) e.mesh.visible = false;
+      for (const e of hallCards.values()) for (const sh of e.sheets) sh.mesh.visible = false;
       lastKey3d = "";
       const ppm = (h * ortho.zoom) / (2 * 160);
       // スペースごとの番号（05a）：1スペースが 16px 以上。机ごとの番号（05）：机1つが 14px 以上。島の端の番号だけ：島どうしの間（7m）が 20px 以上
