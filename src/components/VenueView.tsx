@@ -122,8 +122,10 @@ const walkFov = (aspect: number) => (aspect < 1 ? WALK_FOV_PORTRAIT : WALK_FOV);
 const WALK_PITCH = -0.1;
 const WALK_SPEED = 3.5; // m/秒（見て回りやすいよう、ふつうに歩く速さより少し速め）
 // 歩いて見るとき、近くの机の上に出すサークルの札（画像とサークル名）。この距離までで、画面の上で重なる札は出さない
-const CARD_NEAR = 16;
-const CARD_MAX = 12;
+// 歩くときの札：周り CARD_NEAR m までの机は、向きを変えても全部出す（重なりで出したり消したりしない。ユーザーの指示）。
+// CARD_FADE m から先は、だんだん薄くして、ふちでぱっと消えないように
+const CARD_NEAR = 10;
+const CARD_FADE = 7.5;
 const BUILDING_COLOR = { 東: 0xd6e4f7, 西: 0xd9efdd, 南: 0xf6e3cc };
 const GENRE_COLOR = [0x2f6fd6, 0xd64545, 0x2f9e5b, 0xc2851b, 0x8a4fc7, 0x1b9aa8, 0xd4559a, 0x6b7a2a];
 const DESK_COLOR = 0xf2f1ea;
@@ -3080,7 +3082,6 @@ export function VenueView() {
       const here = venue.halls.find((hh) => floorOf(hh.level) === currentFloor && !hh.closed && pointInPolygon([cp.x, cp.z], hh.poly));
       if (!here) return;
       const info = cardInfo.current;
-      const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
       const cand: { d: number; x: number; z: number; c: { name: string; image: string; sub: string }; top: number }[] = [];
       // ピンを立てた机の札は、ピンの上に出す
       const pinTop = new Map<number, number>();
@@ -3090,7 +3091,7 @@ export function VenueView() {
         const b = booths[i];
         const dx = b.at[0] - cp.x, dz = b.at[1] - cp.z;
         const d = Math.hypot(dx, dz);
-        if (d > CARD_NEAR || d < 1.2 || dx * fx + dz * fz < d * 0.35) continue; // 前の、だいたい ±70° の中だけ
+        if (d > CARD_NEAR || d < 0.6) continue;
         const c = info(b.code);
         if (!c) continue;
         const id = c.name ? `${c.name}|${b.line}|${b.num}` : b.code;
@@ -3102,39 +3103,14 @@ export function VenueView() {
         const x = pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z = pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1];
         cand.push({ d, x, z, c, top: pinTop.get(i) ?? (pair ? pinTop.get(i + 1) : undefined) ?? 0 });
       }
-      cand.sort((p, q) => p.d - q.d);
-      const placed: [number, number, number, number][] = [];
-      // 印のピンと重ならないように、ピンの場所を先にふさいでおく
-      for (const pin of pins) {
-        if (!pin.s.visible || floorOf(pin.level) !== currentFloor) continue;
-        pv.copy(pin.s.position).project(persp);
-        if (pv.z < -1 || pv.z > 1) continue;
-        const bx = ((pv.x + 1) / 2) * w, by = ((1 - pv.y) / 2) * h;
-        pv.copy(pin.s.position).y += pin.s.scale.y;
-        pv.project(persp);
-        const ty = ((1 - pv.y) / 2) * h, hw = ((by - ty) * 64) / 88 / 2;
-        placed.push([bx - hw, ty, bx + hw, by]);
-      }
+      // 遠い札から描き、近い札を上に重ねる
+      cand.sort((p, q) => q.d - p.d);
       const tanH = Math.tan((persp.fov * Math.PI) / 360);
-      // 列の名前・WC・出入口などの札とも重ならないように（90m まで）
-      for (const { s: sp } of labels) {
-        if (!sp.visible) continue;
-        const dist = sp.position.distanceTo(cp);
-        if (dist > 90) continue;
-        pv.copy(sp.position).project(persp);
-        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) continue;
-        const sx = ((pv.x + 1) / 2) * w, sy = ((1 - pv.y) / 2) * h;
-        const ppm = h / (2 * Math.max(0.5, dist) * tanH);
-        const W = sp.scale.x * ppm, H = sp.scale.y * ppm;
-        if (W > w * 0.3) continue; // 大きく写る札（ホールの名前など）は、札を出すのをあきらめるほどではない
-        placed.push([sx - sp.center.x * W, sy - (1 - sp.center.y) * H, sx + (1 - sp.center.x) * W, sy + sp.center.y * H]);
-      }
       const y = floorY(here.level) + 1.25;
-      let n = 0;
       for (const it of cand) {
-        if (n >= CARD_MAX) break;
         pv.set(it.x, Math.max(y, it.top), it.z).project(persp);
-        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1 || Math.abs(pv.y) > 1) continue;
+        // うしろ（画面の外）のものだけ出さない。画面のふちにかかる札も、はみ出したまま出す
+        if (pv.z < -1 || pv.z > 1 || Math.abs(pv.x) > 1.6 || Math.abs(pv.y) > 1.6) continue;
         const sx = ((pv.x + 1) / 2) * w, sy = ((1 - pv.y) / 2) * h;
         const ppm = h / (2 * Math.max(0.5, it.d) * tanH);
         const scale = Math.max(0.6, Math.min(1.3, ppm / 60));
@@ -3146,12 +3122,8 @@ export function VenueView() {
         const tw = Math.max(name ? codeCtx.measureText(name).width : 0, sub ? codeCtx.measureText(sub).width * 0.85 : 0);
         const bw = Math.max(imgS, tw) + 12, bh = imgS + (name ? fs + 4 : 0) + (sub ? fs * 0.85 + 4 : 0) + 10;
         const r: [number, number, number, number] = [sx - bw / 2, sy - bh, sx + bw / 2, sy];
-        if (r[0] < 0 || r[2] > w || r[1] < 0) continue;
-        if (placed.some((q) => r[0] < q[2] + 4 && r[2] > q[0] - 4 && r[1] < q[3] + 4 && r[3] > q[1] - 4)) continue;
-        placed.push(r);
-        n++;
-        // 遠い札は少し薄く
-        codeCtx.globalAlpha = Math.max(0.55, 1 - it.d / (CARD_NEAR * 1.6));
+        // 遠い札は少し薄く、CARD_FADE m から先はだんだん消える
+        codeCtx.globalAlpha = Math.max(0.6, 1 - it.d / (CARD_NEAR * 1.6)) * (it.d <= CARD_FADE ? 1 : Math.max(0, (CARD_NEAR - it.d) / (CARD_NEAR - CARD_FADE)));
         codeCtx.fillStyle = "rgba(255,255,255,.94)";
         codeCtx.strokeStyle = "rgba(0,0,0,.18)";
         codeCtx.lineWidth = 1;
