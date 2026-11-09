@@ -167,7 +167,7 @@ export function CircleForm() {
       new URLSearchParams({
         text: `即売会 3D マップに「${shown[0].name}」を登録しました！\n${shown.map((c) => `${c.day}日目 ${c.codes.join("・")}`).join(" / ")}\n`,
         url: `https://sokubai3d.textetc.net/?day=${shown[0].day}&code=${encodeURIComponent(shown[0].codes[0])}`,
-        hashtags: "即売会3Dマップ",
+        hashtags: "即売会3Dマップ,C109,コミケ",
       })
         .toString()
         .replace(/\+/g, "%20") // 空白は %20 に（+ のままだと、そのまま出ることがある）
