@@ -3867,6 +3867,18 @@ export function VenueView() {
     setFindOpen(false);
     select(i);
   };
+  // リンクで開いたとき（?day=1&code=東A-01a）：その日にして、その机を選ぶ（サークルが X で知らせたリンクなど）
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const d = Number(q.get("day"));
+    const i = codeIndex.get(q.get("code") ?? "");
+    requestAnimationFrame(() => {
+      if ((DAYS as readonly number[]).includes(d)) setDay(d as Day);
+      if (i !== undefined) select(i);
+    });
+    // 開いたときに 1 回だけ
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const filterBy = (h: Hit) => {
     setByGenre(true);
     setGenre(h.kind === "genre" ? h.label : null);

@@ -159,6 +159,20 @@ export function CircleForm() {
     setBusy(false);
   };
 
+  // 登録したことを X で知らせる（登録してある内容から作る。作者が止めた日は書かない）。
+  // リンクは、地図をその日・その机を選んだ状態で開く
+  const shown = mine.filter((c) => c.status !== "rejected");
+  const shareUrl = shown.length
+    ? "https://x.com/intent/tweet?" +
+      new URLSearchParams({
+        text: `即売会 3D マップに「${shown[0].name}」を登録しました！\n${shown.map((c) => `${c.day}日目 ${c.codes.join("・")}`).join(" / ")}\n`,
+        url: `https://sokubai3d.textetc.net/?day=${shown[0].day}&code=${encodeURIComponent(shown[0].codes[0])}`,
+        hashtags: "即売会3Dマップ",
+      })
+        .toString()
+        .replace(/\+/g, "%20") // 空白は %20 に（+ のままだと、そのまま出ることがある）
+    : "";
+
   const remove = async () => {
     if (!confirm(`登録（${mine.map((c) => c.day).join("・")}日目）をすべて取り消しますか？`)) return;
     setBusy(true);
@@ -340,6 +354,14 @@ export function CircleForm() {
                   </button>
                 )}
               </div>
+              {shareUrl && (
+                <div className="soft" style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8 }}>
+                  <div style={{ fontSize: ".9rem", marginBottom: 8 }}>登録したことを X（旧 Twitter）で知らせる（文は、送る前に書きかえられます）</div>
+                  <a className="primary" href={shareUrl} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", minHeight: 42, padding: "0 18px", borderRadius: 8, fontWeight: 700, textDecoration: "none" }}>
+                    X でポストする
+                  </a>
+                </div>
+              )}
             </>
           )}
         </>
