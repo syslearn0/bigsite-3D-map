@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 // サークルの方が、自分のサークルを登録する画面（Google でログイン → 日・配置番号・サークル名・作品・キャラ・画像）。
-// 作者が確かめて公開すると、地図の机に出る（歩いて見るときは、近くの机の上に画像とサークル名が出る）
+// 送るとすぐに地図の机に出る（歩いて見るときは、近くの机の上に画像とサークル名が出る）。いくつかの日に出るときは、まとめて登録できる
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
@@ -14,7 +14,7 @@ import { DAYS, type Day } from "@/lib/tags";
 import { AccountBox } from "./AccountBox";
 
 type Mine = { id: number; day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; hasImage: boolean; status: "pending" | "approved" | "rejected"; note: string; updatedAt: number };
-const STATUS = { pending: "作者の確認待ち", approved: "確認ずみ（公開されると地図に出ます）", rejected: "公開できませんでした" };
+const STATUS = { pending: "地図に出ています", approved: "地図に出ています", rejected: "作者が止めています（地図に出ていません）" };
 const MAX_IMG = 380_000;
 const split = (s: string) => [...new Set(s.split(/[,、，\n]+/).map((x) => x.trim()).filter(Boolean))];
 
@@ -52,8 +52,9 @@ async function shrink(file: File): Promise<{ image: string; thumb: string }> {
 export function CircleForm() {
   const acct = useSyncExternalStore(accountStore.subscribe, accountStore.get, accountStore.get);
   const [mine, setMine] = useState<Mine[]>([]);
-  const [day, setDay] = useState<Day>(1);
-  const [codes, setCodes] = useState("");
+  // 出る日と、日ごとの配置番号（サークル名・作品・画像などは、どの日も同じ）
+  const [days, setDays] = useState<Day[]>([1]);
+  const [codesBy, setCodesBy] = useState<Record<Day, string>>({ 1: "", 2: "", 3: "" });
   const [name, setName] = useState("");
   const [x, setX] = useState("");
   const [url, setUrl] = useState("");
@@ -80,9 +81,10 @@ export function CircleForm() {
     return { set: new Set(expandBooths(lines, (venueJson as unknown as { halls: HallLike[] }).halls).map((b) => b.code)), real: !!pubLines, tick: pubTick };
   }, [pubTick]);
 
-  const fill = (list: Mine[], d: Day) => {
-    const m = list.find((c) => c.day === d);
-    setCodes(m ? m.codes.join("、") : "");
+  const fill = (list: Mine[]) => {
+    const m = list[0];
+    setDays(list.length ? list.map((c) => c.day) : [1]);
+    setCodesBy({ 1: "", 2: "", 3: "", ...Object.fromEntries(list.map((c) => [c.day, c.codes.join("、")])) });
     setName(m?.name ?? "");
     setX(m?.x ? "@" + m.x : "");
     setUrl(m?.url ?? "");
@@ -96,32 +98,38 @@ export function CircleForm() {
     api<{ circles: Mine[] }>("circle.php")
       .then((r) => {
         setMine(r.circles);
-        const first = r.circles[0]?.day ?? 1;
-        setDay(first);
-        fill(r.circles, first);
+        fill(r.circles);
       })
       .catch((e) => setMsg({ text: e.message, err: true }));
   }, [acct.me]);
 
-  const current = mine.find((c) => c.day === day);
-  const codeList = split(codes.replace(/\s+/g, "、")).map(normCode);
-  const badCodes = codeList.filter((c) => !CODE_RE.test(c));
-  const unknownCodes = codeList.filter((c) => CODE_RE.test(c) && !known.set.has(c));
+  const sortedDays = [...days].sort();
+  const parse = (d: Day) => {
+    const list = split(codesBy[d].replace(/\s+/g, "、")).map(normCode);
+    return { list, bad: list.filter((c) => !CODE_RE.test(c)), unknown: list.filter((c) => CODE_RE.test(c) && !known.set.has(c)) };
+  };
+  // 画像を見せる登録（どの日も同じ画像なので、画像のある最初の日）
+  const current = mine.find((c) => c.hasImage) ?? mine[0];
+  const dropped = mine.filter((c) => !days.includes(c.day)); // 前は出ると登録していたが、外した日
   const workList = split(works);
 
   const submit = async () => {
     setMsg(null);
-    if (!codeList.length || badCodes.length) return setMsg({ text: "配置番号を「東A-01a」の形で入れてください", err: true });
-    if (codeList.length > 4) return setMsg({ text: "配置番号は 4 つまでです", err: true });
+    if (!days.length) return setMsg({ text: "出る日を選んでください", err: true });
+    for (const d of sortedDays) {
+      const { list, bad } = parse(d);
+      if (!list.length || bad.length) return setMsg({ text: `${d}日目の配置番号を「東A-01a」の形で入れてください`, err: true });
+      if (list.length > 4) return setMsg({ text: `${d}日目の配置番号は 4 つまでです`, err: true });
+    }
     if (!name.trim()) return setMsg({ text: "サークル名を入れてください", err: true });
     if (url && !/^https:\/\//.test(url.trim())) return setMsg({ text: "URL は https:// から始まるものを入れてください", err: true });
     if (!agree) return setMsg({ text: "下の確認にチェックを入れてください", err: true });
+    if (dropped.length && !confirm(`${dropped.map((c) => c.day).join("・")}日目の登録を取り消します。よいですか？`)) return;
     setBusy(true);
     try {
-      const r = await api<{ circles: Mine[] }>("circle.php", {
+      let r = await api<{ circles: Mine[] }>("circle.php", {
         body: {
-          day,
-          codes: codeList,
+          days: sortedDays.map((d) => ({ day: d, codes: parse(d).list })),
           name: name.trim(),
           x: x.trim(),
           url: url.trim(),
@@ -132,9 +140,11 @@ export function CircleForm() {
           removeImage,
         },
       });
+      // 外した日の登録を取り消す
+      for (const c of dropped) r = await api<{ circles: Mine[] }>(`circle.php?day=${c.day}`, { method: "DELETE" });
       setMine(r.circles);
-      fill(r.circles, day);
-      setMsg({ text: "登録しました。作者が確かめてから地図に出ます（数日かかることがあります）" });
+      fill(r.circles);
+      setMsg({ text: `${sortedDays.join("・")}日目を登録しました。地図に出ています（開いている地図は、開き直すと出ます）` });
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : "登録できませんでした", err: true });
     }
@@ -142,12 +152,13 @@ export function CircleForm() {
   };
 
   const remove = async () => {
-    if (!confirm(`${day}日目の登録を取り消しますか？`)) return;
+    if (!confirm(`登録（${mine.map((c) => c.day).join("・")}日目）をすべて取り消しますか？`)) return;
     setBusy(true);
     try {
-      const r = await api<{ circles: Mine[] }>(`circle.php?day=${day}`, { method: "DELETE" });
+      let r: { circles: Mine[] } = { circles: mine };
+      for (const c of mine) r = await api<{ circles: Mine[] }>(`circle.php?day=${c.day}`, { method: "DELETE" });
       setMine(r.circles);
-      fill(r.circles, day);
+      fill(r.circles);
       setMsg({ text: "取り消しました" });
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : "取り消せませんでした", err: true });
@@ -162,8 +173,8 @@ export function CircleForm() {
         <Link href="/">地図へ</Link>
       </p>
       <p>
-        サークルの方が、配置番号・サークル名・作品・画像を入れると、作者が確かめたあと、この 3D マップの机に出ます（机を押したときと、歩いて見るときに近くの机の上）。
-        登録は 1 日につき 1 件です（いくつかの日に出る方は、日ごとに登録してください）。
+        サークルの方が、配置番号・サークル名・作品・画像を入れると、すぐにこの 3D マップの机に出ます（机を押したときと、歩いて見るときに近くの机の上）。
+        いくつかの日に出る方は、出る日をすべて選んで、日ごとの配置番号を入れてください（まとめて 1 回で登録できます）。
       </p>
       <p style={{ color: "var(--muted)", fontSize: ".85rem" }}>
         この地図は、コミックマーケット準備会・株式会社東京ビッグサイトとは関係のない非公式のものです。
@@ -182,42 +193,56 @@ export function CircleForm() {
           ) : (
             <>
               <h2>2. 登録の内容</h2>
-              <div className="seg" role="group" aria-label="日" style={{ display: "flex" }}>
+              <div className="field" style={{ marginTop: 6 }}>
+                出る日 <small>必須・いくつでも</small>
+              </div>
+              <div className="seg" role="group" aria-label="出る日" style={{ display: "flex" }}>
                 {DAYS.map((d) => (
                   <button
                     key={d}
                     style={{ flex: 1 }}
-                    aria-pressed={day === d}
+                    aria-pressed={days.includes(d)}
                     onClick={() => {
-                      setDay(d);
-                      fill(mine, d);
+                      setDays((l) => (l.includes(d) ? l.filter((x) => x !== d) : [...l, d]));
                       setMsg(null);
                     }}
                   >
-                    {d}日目{mine.some((c) => c.day === d) ? " ✓" : ""}
+                    {days.includes(d) ? "✓ " : ""}
+                    {d}日目
                   </button>
                 ))}
               </div>
-              {current && (
-                <p className={current.status === "rejected" ? "warn" : "soft"} style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem" }}>
-                  {day}日目の登録：{STATUS[current.status]}
-                  {current.note && `（作者から：${current.note}）`}
-                  <br />
-                  <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>内容を変えて送ると、もう一度確認待ちになります</span>
-                </p>
-              )}
-
-              <label className="field">
-                配置番号 <small>必須・「東A-01a」の形。2 スペースのときは「東A-01a、東A-01b」</small>
-                <input type="text" value={codes} onChange={(e) => setCodes(e.target.value)} placeholder="東A-01a" autoComplete="off" />
-              </label>
-              {codeList.length > 0 && (
-                <div style={{ fontSize: ".85rem", marginTop: 4 }}>
-                  読みとった番号：{codeList.join("・")}
-                  {badCodes.length > 0 && <div className="err">形が違います：{badCodes.join("・")}（「東A-01a」のように、館・列・番号・a か b）</div>}
-                  {unknownCodes.length > 0 && known.real && <div style={{ color: "var(--muted)" }}>地図の配置にない番号です：{unknownCodes.join("・")}（このまま送れます。作者が確かめます）</div>}
+              {mine.length > 0 && (
+                <div className="soft" style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem", marginTop: 8 }}>
+                  {mine.map((c) => (
+                    <div key={c.id} className={c.status === "rejected" ? "warn" : undefined}>
+                      {c.day}日目の登録：{STATUS[c.status]}
+                      {c.note && `（作者から：${c.note}）`}
+                    </div>
+                  ))}
+                  <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>変えて送ると、すぐ地図に出ます</span>
                 </div>
               )}
+              {dropped.length > 0 && <p className="warn" style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem" }}>送ると、{dropped.map((c) => c.day).join("・")}日目の登録は取り消されます</p>}
+
+              {sortedDays.map((d) => {
+                const { list, bad, unknown } = parse(d);
+                return (
+                  <div key={d}>
+                    <label className="field">
+                      {sortedDays.length > 1 ? `${d}日目の配置番号` : "配置番号"} <small>必須・「東A-01a」の形。2 スペースのときは「東A-01a、東A-01b」</small>
+                      <input type="text" value={codesBy[d]} onChange={(e) => setCodesBy((c) => ({ ...c, [d]: e.target.value }))} placeholder="東A-01a" autoComplete="off" />
+                    </label>
+                    {list.length > 0 && (
+                      <div style={{ fontSize: ".85rem", marginTop: 4 }}>
+                        読みとった番号：{list.join("・")}
+                        {bad.length > 0 && <div className="err">形が違います：{bad.join("・")}（「東A-01a」のように、館・列・番号・a か b）</div>}
+                        {unknown.length > 0 && known.real && <div style={{ color: "var(--muted)" }}>地図の配置にない番号です：{unknown.join("・")}（このまま送れますが、地図には出ません）</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               <label className="field">
                 サークル名 <small>必須</small>
@@ -299,11 +324,11 @@ export function CircleForm() {
               )}
               <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
                 <button className="primary" disabled={busy} onClick={submit} style={{ minHeight: 46, padding: "0 22px", fontWeight: 700 }}>
-                  {current ? "変更を送る" : "登録する"}
+                  {mine.length ? "変更を送る" : "登録する"}
                 </button>
-                {current && (
+                {mine.length > 0 && (
                   <button disabled={busy} onClick={remove} style={{ minHeight: 46 }}>
-                    {day}日目の登録を取り消す
+                    登録をすべて取り消す
                   </button>
                 )}
               </div>
@@ -314,13 +339,13 @@ export function CircleForm() {
 
       <h2>よくある質問</h2>
       <p style={{ fontSize: ".9rem" }}>
-        <b>すぐに地図に出ますか？</b> 作者が内容を確かめてから出します。<br />
+        <b>すぐに地図に出ますか？</b> はい、送るとすぐに出ます（開いている地図は、開き直すと出ます）。いたずらなどの登録は、作者が止めることがあります。<br />
         <b>同じ配置番号を、ほかの人がもう登録していると出ます。</b> なりすましのおそれがあるので、作者に知らせてください（メール：<a href="mailto:syslearn0@gmail.com">syslearn0@gmail.com</a>・X：
         <a href="https://x.com/riku819979" target="_blank" rel="noopener noreferrer">
           @riku819979
         </a>
         ）。<br />
-        <b>消したいときは？</b> この画面の「登録を取り消す」で消せます。地図からは、次に作者が公開しなおしたときに消えます。
+        <b>消したいときは？</b> この画面の「登録をすべて取り消す」で消せます。1 日だけ消すときは、その日の選択を外して「変更を送る」を押してください。地図からもすぐに消えます。
       </p>
       <p style={{ fontSize: ".85rem" }}>
         <Link href="/privacy/">プライバシーポリシー</Link>

@@ -65,7 +65,7 @@ export function AdminView() {
   };
 
   const publish = (part: "tags" | "circles" | "layout", on: boolean) => {
-    const name = { tags: "作品・キャラ", circles: "サークルの登録（承認したもの）", layout: "配置" }[part];
+    const name = { tags: "作品・キャラ", circles: "サークルの登録", layout: "配置" }[part];
     if (!confirm(on ? `${name}を公開しますか？だれでも見られるようになります（準備会の許可が要るデータは、許可が出てから）` : `${name}の公開をやめますか？`)) return;
     post({ action: "publish", parts: { [part]: on } }, on ? `${name}を公開しました` : `${name}の公開をやめました`);
   };
@@ -188,7 +188,7 @@ export function AdminView() {
                     <div>
                       <strong>{c.name}</strong>　{c.day}日目　{c.codes.join("・")}
                       <span className="tag" style={{ marginLeft: 6 }}>
-                        {{ pending: "確認待ち", approved: "承認", rejected: "却下" }[c.status]}
+                        {{ pending: "出ている", approved: "出ている", rejected: "止めた" }[c.status]}
                       </span>
                     </div>
                     <div>作品：{c.works.join("・") || "—"}</div>
@@ -211,8 +211,8 @@ export function AdminView() {
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       {c.status !== "approved" && (
-                        <button className="chip small" onClick={() => post({ action: "circle", id: c.id, status: "approved" }, `${c.name} を承認しました（地図に出すには「公開」でサークルを公開）`)}>
-                          承認
+                        <button className="chip small" onClick={() => post({ action: "circle", id: c.id, status: "approved" }, `${c.name} を地図に出しました（サークルの登録を公開中のとき）`)}>
+                          出す
                         </button>
                       )}
                       <button
@@ -228,11 +228,11 @@ export function AdminView() {
                         <button
                           className="chip small"
                           onClick={() => {
-                            const note = prompt("却下の理由（本人に見えます。空でもよい）", "");
-                            if (note !== null) post({ action: "circle", id: c.id, status: "rejected", note }, `${c.name} を却下しました`);
+                            const note = prompt("止める理由（本人に見えます。空でもよい）", "");
+                            if (note !== null) post({ action: "circle", id: c.id, status: "rejected", note }, `${c.name} を止めました（地図から外しました）`);
                           }}
                         >
-                          却下
+                          止める
                         </button>
                       )}
                     </div>
@@ -284,12 +284,12 @@ export function AdminView() {
           {tab === "publish" && pub && (
             <div style={{ display: "grid", gap: 10 }}>
               <p style={{ color: "var(--muted)", fontSize: ".85rem", margin: 0 }}>
-                公開すると、地図（だれでも見られる）が読むファイルを書き出します。協力者やサークルがあとで変えた分は、もう一度「公開」を押すまで地図に出ません。
+                公開すると、地図（だれでも見られる）が読むファイルを書き出します。協力者があとで変えた分は、もう一度「公開」を押すまで地図に出ません。サークルの登録は、公開中なら、送られるとすぐに地図に出ます（止めたものをのぞく）。
               </p>
               {(
                 [
                   ["tags", "作品・キャラ（協力者が入れたもの）"],
-                  ["circles", "サークルの登録（承認したものだけ）"],
+                  ["circles", "サークルの登録（止めたものをのぞく）"],
                   ["layout", "配置（エディタの「配置をサーバーに置く」で置いたもの）"],
                 ] as const
               ).map(([p, label]) => (

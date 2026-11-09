@@ -134,7 +134,8 @@ function require_write(): void {
   if ($origin !== '' && !in_array($origin, $ok, true)) fail('bad origin', 403);
 }
 
-// 地図が読むサークルの一覧（data/circles.json）と、その画像を書き出す（承認したものだけ）。
+// 地図が読むサークルの一覧（data/circles.json）と、その画像を書き出す（作者が止めたものをのぞく。
+// 確認なしで出すようにする前の「確認待ち」の登録も出す）。
 // 公開をやめていた（circles.json がない）ときは、$force でなければ何もしない
 function write_circles_json(PDO $pdo, bool $force = false): void {
   $dataDir = site_dir() . '/data';
@@ -143,7 +144,7 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
   if (!is_dir($imgDir)) mkdir($imgDir, 0755, true);
   $keep = [];
   $list = [];
-  foreach ($pdo->query("SELECT * FROM circles WHERE status = 'approved' ORDER BY day, id") as $r) {
+  foreach ($pdo->query("SELECT * FROM circles WHERE status <> 'rejected' ORDER BY day, id") as $r) {
     $img = '';
     $thumb = '';
     $src = private_dir() . '/circles/' . basename($r['image']);

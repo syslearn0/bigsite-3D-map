@@ -84,8 +84,8 @@ if ($action === 'circle') {
   $status = $b['status'] ?? '';
   if (!in_array($status, ['pending', 'approved', 'rejected'], true)) fail('status');
   $pdo->prepare('UPDATE circles SET status = ?, note = ? WHERE id = ?')->execute([$status, mb_substr((string)($b['note'] ?? ''), 0, 300), (int)($b['id'] ?? 0)]);
-  // 承認を取り消したものは、公開中の一覧からすぐ外す（新しく承認したものは「公開」を押したときに出す）
-  if ($status !== 'approved') write_circles_json($pdo);
+  // 止めたものはすぐ外し、戻したものはすぐ出す（サークルの登録は確認なしで出るので、公開中の一覧をいつも書きなおす）
+  write_circles_json($pdo);
   out(['ok' => true]);
 }
 
