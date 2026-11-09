@@ -49,6 +49,14 @@ function cut(name: string, h: number): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+// 見本の画像は「sample:番号」とだけ入れておき、出すときに絵を作る（1 万机×3 日ぶんを先に作ると、
+// 開いたときに 0.4 秒（スマホではその数倍）かかり、文字だけで 40MB を超えた）
+export function imgUrl(src: string): string {
+  if (!src.startsWith("sample:")) return src;
+  const h = Number(src.slice(7)) >>> 0;
+  return cut(HEAD[h % HEAD.length] + TAIL[(h >>> 8) % TAIL.length], h);
+}
+
 // 配置番号ごとに 1 つのサークル（日ごとに別のサークル）。1 割ほどは「まだ登録されていない」机として空けておく
 export function fillSampleCircles(out: CirclesByDay, booths: { code: string }[]) {
   for (const day of DAYS)
@@ -56,6 +64,6 @@ export function fillSampleCircles(out: CirclesByDay, booths: { code: string }[])
       const h = hash(`${day}:${b.code}:circle`);
       if (h % 10 === 0) continue;
       const name = HEAD[h % HEAD.length] + TAIL[(h >>> 8) % TAIL.length];
-      out[day][b.code] = { day, codes: [b.code], name, works: [], chars: {}, x: "", url: "", image: cut(name, h), thumb: "" };
+      out[day][b.code] = { day, codes: [b.code], name, works: [], chars: {}, x: "", url: "", image: `sample:${h}`, thumb: "" };
     }
 }

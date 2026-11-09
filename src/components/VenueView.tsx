@@ -13,7 +13,7 @@ import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "@/lib/g
 import { clearLayout, LAYOUT_KEY, loadLayout, loadLayoutFeatures } from "@/lib/saved-layout";
 import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type SpaceTag } from "@/lib/tags";
 import { sampleTags } from "@/lib/sample-tags";
-import { fillSampleCircles } from "@/lib/sample-circles";
+import { fillSampleCircles, imgUrl } from "@/lib/sample-circles";
 import Tour, { type TourStep } from "./Tour";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
@@ -509,7 +509,7 @@ function CircleCard({ c }: { c: Circle }) {
     <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
       {c.image && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={c.image} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
+        <img src={imgUrl(c.image)} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
       )}
       <div style={{ minWidth: 0, fontSize: ".9rem" }}>
         <div style={{ fontWeight: 700 }}>{c.name}</div>
@@ -568,7 +568,7 @@ export function VenueView() {
   useEffect(() => {
     onDeskTap.current = (i) => {
       const c = circles[day][booths[i].code];
-      setPopImg(c?.image ? { image: c.image, name: c.name } : null);
+      setPopImg(c?.image ? { image: imgUrl(c.image), name: c.name } : null);
     };
   });
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
@@ -3083,7 +3083,7 @@ export function VenueView() {
     type PendCard = { x: number; z: number; src: string; draw: (im: HTMLImageElement) => void };
     const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number }>();
     // 画像を読むのは、立っている所から IMG_NEAR m 以内の札だけ（電波があるとき。印のサークルは端末に持っているので、電波がなくても）
-    const IMG_NEAR = 8;
+    const IMG_NEAR = 12;
     const CARD_W = 0.8, CARD_H = 1.0, CELL_W = 120, CELL_H = 150, SHEET_COLS = 8, SHEET_ROWS = 8, PER_SHEET = SHEET_COLS * SHEET_ROWS;
     // 読みこんだ画像（ホール・日をまたいで使い回す）
     const cardImgs = new Map<string, HTMLImageElement | "loading">();
@@ -3120,7 +3120,7 @@ export function VenueView() {
         };
         im.onload = () => done(true);
         im.onerror = () => done(false);
-        im.src = src;
+        im.src = imgUrl(src);
       }
     };
     let lastCardUpload = 0;
