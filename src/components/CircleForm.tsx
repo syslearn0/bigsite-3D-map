@@ -144,7 +144,15 @@ export function CircleForm() {
       for (const c of dropped) r = await api<{ circles: Mine[] }>(`circle.php?day=${c.day}`, { method: "DELETE" });
       setMine(r.circles);
       fill(r.circles);
-      setMsg({ text: `${sortedDays.join("・")}日目を登録しました。地図に出ています（開いている地図は、開き直すと出ます）` });
+      // 作者が止めた日は、送りなおしても地図に出ない（そう書く）
+      const shown = r.circles.filter((c) => c.status !== "rejected").map((c) => c.day);
+      const stopped = r.circles.filter((c) => c.status === "rejected").map((c) => c.day);
+      setMsg({
+        text:
+          `${sortedDays.join("・")}日目を登録しました。` +
+          (shown.length ? `${shown.join("・")}日目は地図に出ています（開いている地図は、開き直すと出ます）。` : "") +
+          (stopped.length ? `${stopped.join("・")}日目は作者が止めているので、地図に出ません。` : ""),
+      });
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : "登録できませんでした", err: true });
     }
