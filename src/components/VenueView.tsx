@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { centroid, minAreaRect, pointInPolygon, project, type XZ } from "@/lib/geo";
@@ -2254,7 +2257,8 @@ export function VenueView() {
       });
     // 線路の絵（床の上の細い帯）。歩くときだけ、見ている階のものを出す
     const railMeshes: { mesh: THREE.Mesh; levels: number[] }[] = [];
-    const railLines: { line: THREE.LineSegments; levels: number[] }[] = [];
+    const railLines: { line: LineSegments2; levels: number[] }[] = [];
+    const railLineMats: LineMaterial[] = []; // 太い線の材質（画面の大きさを教える）
     let railsPick = false; // 歩き始める場所を選んでいるあいだ
     let lastWalkLevel = 1;
     {
@@ -2262,7 +2266,7 @@ export function VenueView() {
       // 歩いているときは、いま立っている階の線と、その階につながる階段の線だけを出す（ほかの階の線が重なって見えないように）
       const keyOf = (la: number, lb: number) => (la === lb ? String(la) : `${Math.min(la, lb)}-${Math.max(la, lb)}`);
       const byKey = new Map<string, { tri: number[]; seg: number[] }>();
-      const W = 0.14;
+      const W = 0.3; // 帯の幅の半分（幅 0.6m。ユーザーの指示で太く）
       walkRails.adj.forEach((ns, a) => {
         const A = walkRails.nodes[a];
         for (const b of ns) {
@@ -2288,8 +2292,10 @@ export function VenueView() {
       const mat = new THREE.MeshBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
       // 上から・3D で歩き始める場所を選ぶあいだは、遠くからでも見える細い線（画面の上で 1px）。2F の線は紫で、1F の線と分ける
       // 床・壁・屋根の向こうの線は隠す（透けて見えると、どこの線かわからない。ユーザーの指示）
-      const lineMat = new THREE.LineBasicMaterial({ color: 0x2f6fd6, transparent: true, opacity: 0.9 });
-      const lineMat2F = new THREE.LineBasicMaterial({ color: 0x9b4fd0, transparent: true, opacity: 0.9 });
+      // 線の太さは画面の上で 3.5px（遠くからでも見えるよう。ユーザーの指示で太く）
+      const lineMat = new LineMaterial({ color: 0x2f6fd6, linewidth: 3.5, transparent: true, opacity: 0.9 });
+      const lineMat2F = new LineMaterial({ color: 0x9b4fd0, linewidth: 3.5, transparent: true, opacity: 0.9 });
+      railLineMats.push(lineMat, lineMat2F);
       for (const [k, { tri, seg }] of byKey) {
         const levels = k.split("-").map(Number);
         const g = new THREE.BufferGeometry();
@@ -2299,9 +2305,9 @@ export function VenueView() {
         mesh.renderOrder = 1;
         scene.add(mesh);
         railMeshes.push({ mesh, levels });
-        const g2 = new THREE.BufferGeometry();
-        g2.setAttribute("position", new THREE.Float32BufferAttribute(seg, 3));
-        const line = new THREE.LineSegments(g2, levels.includes(2) ? lineMat2F : lineMat);
+        const g2 = new LineSegmentsGeometry();
+        g2.setPositions(seg);
+        const line = new LineSegments2(g2, levels.includes(2) ? lineMat2F : lineMat);
         line.visible = false;
         line.renderOrder = 4;
         scene.add(line);
@@ -2312,6 +2318,7 @@ export function VenueView() {
     const size = () => {
       const w = el.clientWidth, h = el.clientHeight;
       renderer.setSize(w, h);
+      for (const m of railLineMats) m.resolution.set(w, h);
       persp.aspect = w / h;
       if (current === "walk") persp.fov = walkFov(persp.aspect);
       persp.updateProjectionMatrix();
