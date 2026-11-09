@@ -2193,7 +2193,6 @@ export function VenueView() {
     let lastRailDir: XZ | null = null; // 線の上で最後に進んだ向き（横を向いて進むとき、向きを決めるため）
     const keys = new Set<string>();
     let fly: { t: number; from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3 } | null = null;
-    let walkAnim: { t: number; from: THREE.Vector3; to: THREE.Vector3; secs: number } | null = null;
     // 歩くときは、机の前の通路の線（線路）の上だけを進む。線から遠い所（机のない広場など）に立ったときは、自由に歩く
     // ホールの中の線（机の前の通路）に、通路・広場・階段の線（scripts/build-corridors.ts）を足して、出入口でつなぐ
     const walkRails = (() => {
@@ -2239,7 +2238,9 @@ export function VenueView() {
         const q1 = nearestOnRails(walkRails, p, undefined, [1]);
         if (q1 && q && q1.d <= q.d + 4) q = q1;
       }
-      if (q && q.d < RAIL_SNAP) {
+      // 近くに線がなければ、見ている階のいちばん近い線へ（線の外には立たない。ユーザーの指示）
+      if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkRails, p, undefined, railLevels(currentFloor)) ?? nearestOnRails(walkRails, p);
+      if (q) {
         railPos = { a: q.a, b: q.b, t: q.t };
         persp.position.x = q.at[0];
         persp.position.z = q.at[1];
@@ -2479,8 +2480,9 @@ export function VenueView() {
         const nx = -Math.sin(b.angle) * -b.side, nz = Math.cos(b.angle) * -b.side;
         persp.position.set(b.at[0] + nx * 3, floorY(lv) + EYE, b.at[1] + nz * 3);
         // 机の前の線に乗り、机を向く
-        const q = nearestOnRails(walkRails, b.at, b.hall);
-        if (q && q.d < RAIL_SNAP) {
+        let q = nearestOnRails(walkRails, b.at, b.hall);
+        if (!q || q.d >= RAIL_SNAP) q = nearestOnRails(walkRails, b.at, undefined, [lv]) ?? q;
+        if (q) {
           railPos = { a: q.a, b: q.b, t: q.t };
           persp.position.x = q.at[0];
           persp.position.z = q.at[1];
@@ -2676,29 +2678,17 @@ export function VenueView() {
       return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
     };
     // 青い線（線路）をダブルタップしたら、その線の上へすぐ移る（ユーザーの指示）。向きは変えない
-    const JUMP_NEAR = 2.5;
+    const JUMP_NEAR = 12; // 押した所からこの距離までに線があれば、そこへ跳ぶ
     const walkTo = (p: THREE.Vector3) => {
-      // いま立っている階の線（ホールの中も通路も）から探す
+      // ダブルタップした所に、いちばん近い線の上の点へ跳ぶ（いま立っている階の線。線の外へは行かない：ユーザーの指示）。
+      // 線から遠すぎる所（空・建物の外など）を押したときは動かない
       const curLevel = railPos ? (railY(railPos) > floorY(4) - 1 ? 4 : railY(railPos) > floorY(2) - 1 ? 2 : 1) : currentFloor === 4 ? 4 : 1;
       const q = nearestOnRails(walkRails, [p.x, p.z], undefined, [curLevel]);
-      if (q && q.d <= JUMP_NEAR) {
-        walkAnim = null;
-        railPos = { a: q.a, b: q.b, t: q.t };
-        persp.position.x = q.at[0];
-        persp.position.z = q.at[1];
-        lastKeyWalk = "";
-        return;
-      }
-      // 線から遠い所（ホールの外・広場など）：線をはなれて、まっすぐ歩いていく
-      railPos = null;
+      if (!q || q.d > JUMP_NEAR) return;
+      railPos = { a: q.a, b: q.b, t: q.t };
+      persp.position.x = q.at[0];
+      persp.position.z = q.at[1];
       lastKeyWalk = "";
-      const from = persp.position.clone();
-      const dx = p.x - from.x, dz = p.z - from.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 0.5 || dist > 80) return; // 足元すぎる・遠すぎる（空のあたり）は動かない
-      const go = Math.max(0, dist - 1.2); // 押した所の手前で止まる（机の上に立たない）
-      const to = new THREE.Vector3(from.x + (dx / dist) * go, from.y, from.z + (dz / dist) * go);
-      walkAnim = { t: 0, from, to, secs: Math.min(1.5, Math.max(0.35, go / 12)) };
     };
     const onDown = (e: PointerEvent) => {
       down = { x: e.clientX, y: e.clientY, yaw, pitch };
@@ -3326,7 +3316,6 @@ export function VenueView() {
         const fwd = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + hold;
         const side = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-        if (fwd || side) walkAnim = null; // 自分で動かしたら、ダブルタップの移動はやめる
         if (railPos && (fwd || side)) {
           // 行きたい向き：前後は見ている向き、左右は見ている向きの横（横を向いたまま、机を見ながら歩ける）
           let wx = fx * fwd - fz * side, wz = fz * fwd + fx * side;
@@ -3344,19 +3333,6 @@ export function VenueView() {
           persp.position.x = at[0];
           persp.position.z = at[1];
           // 向きは変えない（進むときに勝手に向きを変えられると見にくい。ユーザーの指示）
-        }
-        if (walkAnim) {
-          walkAnim.t = Math.min(1, walkAnim.t + dt / walkAnim.secs);
-          const k = 1 - Math.pow(1 - walkAnim.t, 2);
-          persp.position.x = walkAnim.from.x + (walkAnim.to.x - walkAnim.from.x) * k;
-          persp.position.z = walkAnim.from.z + (walkAnim.to.z - walkAnim.from.z) * k;
-          if (walkAnim.t >= 1) {
-            walkAnim = null;
-            // 着いた所のすぐ近くに線があれば、また線に乗る
-            const hereHall = venue.halls.find((h) => floorOf(h.level) === currentFloor && !h.closed && pointInPolygon([persp.position.x, persp.position.z], h.poly));
-            const q = hereHall ? nearestOnRails(walkRails, [persp.position.x, persp.position.z], hereHall.id) : null;
-            if (q && q.d < 2.5) railPos = { a: q.a, b: q.b, t: q.t };
-          }
         }
         if (!railPos) {
           persp.position.x += (fx * fwd - fz * side) * WALK_SPEED * dt;
