@@ -175,7 +175,7 @@ export function AdminView() {
             <div style={{ display: "grid", gap: 10 }}>
               {!circles.length && <p>まだ登録はありません。</p>}
               {circles.map((c) => (
-                <div key={c.id} style={{ display: "flex", gap: 12, padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: c.status === "pending" ? "color-mix(in srgb, #f2b400 16%, var(--card))" : "var(--card)" }}>
+                <div key={c.id} style={{ display: "flex", gap: 12, padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: c.status === "rejected" ? "color-mix(in srgb, #888 16%, var(--card))" : "var(--card)" }}>
                   {c.image ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={`/api/image.php?id=${c.id}`} alt="" style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 6, flex: "none", background: "#eee" }} />

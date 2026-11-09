@@ -246,6 +246,13 @@ export function sampleLayout(halls: HallLike[]): Line[] {
 }
 
 // 配置番号の書き方の揺れ（「東ア12a」「東ア-12 a」「東ア-12」）を吸収して探す
+// 配置番号を整える：全角の英数字・いろいろな横棒を半角に、空白をとる。「東A01a」のように横棒がなくても読む
+export function normCode(raw: string): string {
+  let s = raw.normalize("NFKC").replace(/[‐‑‒–—―−ー－]/g, "-").replace(/\s+/g, "");
+  s = s.replace(/^([東西南])(.+?)-?(\d{1,2})([abAB])$/, (_, b, blk, n, h) => `${b}${blk}-${n.padStart(2, "0")}${h.toLowerCase()}`);
+  return s;
+}
+
 export function parseCode(q: string): { prefix: string; block: string; num: number; half?: "a" | "b" } | null {
   const m = q.normalize("NFKC").replace(/\s/g, "").match(/^([東西南])(.+?)-?(\d{1,3})([abAB])?$/);
   if (!m) return null;

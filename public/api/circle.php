@@ -2,15 +2,19 @@
 // サークル本人の登録（1 人 1 日 1 件）。送るとすぐに地図に出る（ユーザーの指示：確認なし。作者が止めた登録は止めたまま）。
 // サークルの登録の公開（管理の画面）をやめているあいだは、地図には出ない。
 // GET：自分の登録の一覧。
-// POST {days: [{day, codes[]}]（いくつかの日をまとめて。前の形の day・codes も読む）, name, works[], chars{}, x, url,
+// 同じ人は短い間に何度も送れない（rate_limit）。新しい登録・変更は作者にメールで知らせる。
+// POST {days: [{day, codes[]}]（いくつかの日をまとめて。前の形の day・codes も読む）, drop?: [day]（取り消す日）, name, works[], chars{}, x, url,
 //   image?（data:image/webp;base64,… 400KB まで）, thumb?（机の札に出す小さい画像。40KB・400px まで）, removeImage?}
 //   サークル名・作品・画像などは、送った日すべてに同じものを入れる
-// DELETE ?day=1：その日の登録を取り消す
+// DELETE ?day=1：その日の登録を取り消す（?day=all：すべて）。作者が止めた登録は取り消せない（取り消して出しなおすのを防ぐ）
 require __DIR__ . '/_lib.php';
 require_write();
 $u = require_user();
 $pdo = db();
 $now = time();
+// 1 分に 3 回・1 時間に 15 回・1 日に 40 回まで（取り消しも数える）
+const CIRCLE_LIMITS = [[60, 3], [3600, 15], [86400, 40]];
+$published = fn(): bool => is_file(site_dir() . '/data/circles.json'); // 作者がサークルの登録を公開しているか
 
 function mine(PDO $pdo, int $uid): array {
   $st = $pdo->prepare('SELECT id, day, codes, name, works, chars, x_account, url, image, status, note, updated_at FROM circles WHERE user_id = ? ORDER BY day');
@@ -23,18 +27,30 @@ function mine(PDO $pdo, int $uid): array {
   return $out;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET') out(['circles' => mine($pdo, (int)$u['id'])]);
+if ($_SERVER['REQUEST_METHOD'] === 'GET') out(['circles' => mine($pdo, (int)$u['id']), 'published' => $published()]);
 
-if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
-  $day = (int)($_GET['day'] ?? 0);
-  $st = $pdo->prepare('SELECT id, image FROM circles WHERE user_id = ? AND day = ?');
-  $st->execute([$u['id'], $day]);
-  if ($r = $st->fetch()) {
-    remove_circle_image($r['image']);
+// その人のその日の登録を消す（作者が止めた登録は消さずに断る）。消した登録の画像の名前を返す（$keepImages のときは、画像はまだ消さない）
+function drop_days(PDO $pdo, int $uid, array $days, bool $keepImages = false): array {
+  $st = $pdo->prepare('SELECT id, day, image, status FROM circles WHERE user_id = ?');
+  $st->execute([$uid]);
+  $rows = array_filter($st->fetchAll(), fn($r) => in_array((int)$r['day'], $days, true));
+  foreach ($rows as $r) if ($r['status'] === 'rejected') fail("{$r['day']}日目の登録は作者が止めているので、取り消せません。作者に連絡してください", 403);
+  $images = [];
+  foreach ($rows as $r) {
+    if ($keepImages) $images[] = $r['image'];
+    else remove_circle_image($r['image']);
     $pdo->prepare('DELETE FROM circles WHERE id = ?')->execute([$r['id']]);
-    write_circles_json($pdo); // 公開中の一覧からも、すぐに消す
   }
-  out(['circles' => mine($pdo, (int)$u['id'])]);
+  return $images;
+}
+
+circles_lock($pdo);
+if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
+  rate_limit($pdo, (int)$u['id'], 'circle', CIRCLE_LIMITS);
+  $q = (string)($_GET['day'] ?? '');
+  drop_days($pdo, (int)$u['id'], $q === 'all' ? [1, 2, 3] : [(int)$q]);
+  write_circles_json($pdo); // 公開中の一覧からも、すぐに消す
+  out(['circles' => mine($pdo, (int)$u['id']), 'published' => $published()]);
 }
 
 $b = body();
@@ -52,6 +68,9 @@ foreach ($daysIn as $d) {
 }
 if (!$days) fail('日を選んでください');
 ksort($days);
+// いっしょに取り消す日（送った日は除く）
+$drop = array_map('intval', is_array($b['drop'] ?? null) ? $b['drop'] : []);
+$drop = array_values(array_unique(array_filter($drop, fn($d) => in_array($d, [1, 2, 3], true) && !isset($days[$d]))));
 $name = trim(mb_substr((string)($b['name'] ?? ''), 0, 60));
 if ($name === '') fail('サークル名を入れてください');
 $works = clean_list($b['works'] ?? [], 10);
@@ -63,8 +82,11 @@ $x = substr($x, 0, 30);
 $url = trim((string)($b['url'] ?? ''));
 if ($url !== '' && !preg_match('#^https://[^\s<>"]{3,280}$#', $url)) fail('URL は https:// から始めてください');
 
+rate_limit($pdo, (int)$u['id'], 'circle', CIRCLE_LIMITS);
+
 // 同じ日・同じ配置番号を、ほかの人がもう登録していれば断る（なりすまし防止）。どの日もそろって大丈夫なときだけ書く
-$st = $pdo->prepare("SELECT codes FROM circles WHERE day = ? AND user_id <> ? AND status <> 'rejected'");
+// （circles_lock で、ほかの人の書きこみと重ならない）
+$st = $pdo->prepare("SELECT c.codes FROM circles c JOIN users u ON u.id = c.user_id WHERE c.day = ? AND c.user_id <> ? AND c.status <> 'rejected' AND u.role <> 'banned'");
 foreach ($days as $day => $codes) {
   $st->execute([$day, $u['id']]);
   foreach ($st as $r) foreach (json_decode($r['codes'], true) ?: [] as $c) if (in_array($c, $codes, true)) fail("{$day}日目の {$c} は、ほかの人が登録しています。間違いのときは作者に連絡してください", 409);
@@ -97,13 +119,22 @@ if (!is_dir($dir)) mkdir($dir, 0700, true);
 // 名前は乱数だけ（だれの画像か分からないように）
 $newName = fn(string $e): string => bin2hex(random_bytes(12)) . '.' . $e;
 
+// 画像を選びなおさずに新しい日を足したときは、ほかの日の画像を写す（取り消す日の画像からも写せるよう、取り消す前に選ぶ）
+$st = $pdo->prepare('SELECT image FROM circles WHERE user_id = ? ORDER BY day');
+$st->execute([$u['id']]);
+$copyFrom = '';
+foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $img) if ($img !== '' && is_file("$dir/" . basename($img))) { $copyFrom = basename($img); break; }
+// 取り消す日（止めた登録なら、ここで断る。まだ何も書いていない）。画像は、写し終わってから消す
+$pdo->beginTransaction();
+$droppedImages = drop_days($pdo, (int)$u['id'], $drop, true);
 $st = $pdo->prepare('SELECT id, day, image, status FROM circles WHERE user_id = ?');
 $st->execute([$u['id']]);
 $olds = [];
 foreach ($st as $r) $olds[(int)$r['day']] = $r;
-// 画像を選びなおさずに新しい日を足したときは、ほかの日の画像を写す
-$copyFrom = '';
-foreach ($olds as $r) if ($r['image'] !== '' && is_file("$dir/" . basename($r['image']))) { $copyFrom = basename($r['image']); break; }
+// 作者がこの人の登録を止めたことがあれば（アカウントを作りなおしていても）、新しい日も止めたまま
+$st = $pdo->prepare('SELECT 1 FROM circle_stops WHERE sub_hash = ?');
+$st->execute([sub_hash((string)$u['sub'])]);
+$stopped = (bool)$st->fetchColumn();
 
 foreach ($days as $day => $codes) {
   $old = $olds[$day] ?? null;
@@ -123,7 +154,7 @@ foreach ($days as $day => $codes) {
     if ($ts !== '') copy($ts, "$dir/" . thumb_name($image, pathinfo($ts, PATHINFO_EXTENSION)));
   }
   // 確認なしで地図に出す。作者が止めた（rejected）登録は、送りなおしても止めたまま
-  $status = ($old['status'] ?? '') === 'rejected' ? 'rejected' : 'approved';
+  $status = ($old['status'] ?? '') === 'rejected' || (!$old && $stopped) ? 'rejected' : 'approved';
   $vals = [json_encode($codes, JSON_UNESCAPED_UNICODE), $name, json_encode($works, JSON_UNESCAPED_UNICODE), json_encode((object)$chars, JSON_UNESCAPED_UNICODE), $x, $url, $image, $now, $status];
   if ($old) {
     $pdo->prepare('UPDATE circles SET codes = ?, name = ?, works = ?, chars = ?, x_account = ?, url = ?, image = ?, updated_at = ?, status = ? WHERE id = ?')->execute([...$vals, $old['id']]);
@@ -131,5 +162,26 @@ foreach ($days as $day => $codes) {
     $pdo->prepare('INSERT INTO circles (codes, name, works, chars, x_account, url, image, updated_at, status, user_id, day, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([...$vals, $u['id'], $day, $now]);
   }
 }
+$pdo->commit();
+foreach ($droppedImages as $img) remove_circle_image($img);
 write_circles_json($pdo); // 公開中なら、すぐ地図に出す
-out(['circles' => mine($pdo, (int)$u['id'])]);
+
+// 作者に知らせる
+$isNew = array_diff(array_keys($days), array_keys($olds));
+$lines = [];
+foreach ($days as $day => $codes) $lines[] = "  {$day}日目 " . implode('・', $codes) . (in_array($day, $isNew, true) ? '（新しい）' : '');
+foreach ($drop as $day) $lines[] = "  {$day}日目 取り消し";
+notify_admin(
+  ($isNew ? '[即売会3Dマップ] 新しいサークル登録：' : '[即売会3Dマップ] サークル登録の変更：') . $name,
+  "サークル名：{$name}\n" .
+  "登録した人：{$u['name']}（{$u['email']}）\n" .
+  implode("\n", $lines) . "\n" .
+  ($works ? '作品：' . implode('・', $works) . "\n" : '') .
+  ($x !== '' ? "X：@{$x}\n" : '') .
+  ($url !== '' ? "URL：{$url}\n" : '') .
+  ($bin !== null ? "画像：新しい画像あり\n" : '') .
+  ($stopped ? "（この人は前に止めたことがあるので、止めたままにしました）\n" : '') .
+  ($published() ? '地図にすぐ出ています。' : 'サークルの登録の公開が止まっているので、地図にはまだ出ていません。') . "\n" .
+  "確認・止める：https://sokubai3d.textetc.net/admin/\n"
+);
+out(['circles' => mine($pdo, (int)$u['id']), 'published' => $published()]);

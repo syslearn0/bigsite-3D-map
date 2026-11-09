@@ -12,6 +12,16 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
+// 思わぬ失敗（DB のエラーなど）も、中身（パスや設定）を見せずに JSON で返す
+set_exception_handler(function (Throwable $e): void {
+  error_log('sokubai3d: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+  if (!headers_sent()) {
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+  }
+  echo json_encode(['error' => 'サーバーで失敗しました。少し待ってからやりなおしてください'], JSON_UNESCAPED_UNICODE);
+});
+
 function cfg(): array {
   static $c = null;
   if ($c === null) $c = require dirname(__DIR__, 3) . '/sokubai3d-config.php';
@@ -41,7 +51,7 @@ function db(): PDO {
 
 // 表がなければ作る（はじめての呼び出しのとき）
 function migrate(PDO $pdo): void {
-  $v = 3;
+  $v = 4;
   $f = private_dir() . '/schema-version';
   if (is_file($f) && (int)file_get_contents($f) >= $v) return;
   $pdo->exec("CREATE TABLE IF NOT EXISTS users (
@@ -107,6 +117,20 @@ function migrate(PDO $pdo): void {
     v MEDIUMTEXT NOT NULL,
     updated_at INT NOT NULL
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  // 送った回数（同じ人が短い間に何度も送れないように）
+  $pdo->exec("CREATE TABLE IF NOT EXISTS rate_log (
+    user_id INT NOT NULL,
+    action VARCHAR(20) NOT NULL,
+    t INT NOT NULL,
+    INDEX (user_id, action, t)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  // 作者がサークルの登録を止めた人（Google のアカウントの番号のハッシュ）。アカウントを消して作りなおしても、止めたまま
+  $pdo->exec("CREATE TABLE IF NOT EXISTS circle_stops (
+    sub_hash CHAR(64) PRIMARY KEY,
+    created_at INT NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  // 作品 10 × キャラ 30 が入るように（TEXT の 64KB をこえることがある）
+  $pdo->exec("ALTER TABLE circles MODIFY chars MEDIUMTEXT NOT NULL");
   file_put_contents($f, (string)$v);
 }
 
@@ -134,6 +158,61 @@ function require_write(): void {
   if ($origin !== '' && !in_array($origin, $ok, true)) fail('bad origin', 403);
 }
 
+// サークルの登録を書きかえるあいだ、ほかの書きこみを待たせる（同じ配置番号の取り合い・同じ人の二重送信・一覧の書き出しが重ならないように）。
+// 同じ接続の中では何度呼んでもよい。接続が終わると外れる
+function circles_lock(PDO $pdo): void {
+  if (!$pdo->query("SELECT GET_LOCK('s3d_circles', 15)")->fetchColumn()) fail('混みあっています。少し待ってからやりなおしてください', 503);
+}
+
+// 同じ人が短い間に何度も送れないようにする。$limits：[秒, 回数] のならび（その秒数のあいだに、その回数まで）
+function rate_limit(PDO $pdo, int $uid, string $action, array $limits): void {
+  $now = time();
+  $longest = max(array_map(fn($l) => $l[0], $limits));
+  $pdo->prepare('DELETE FROM rate_log WHERE t < ?')->execute([$now - 86400 * 2]);
+  $st = $pdo->prepare('SELECT t FROM rate_log WHERE user_id = ? AND action = ? AND t > ? ORDER BY t DESC');
+  $st->execute([$uid, $action, $now - $longest]);
+  $ts = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+  foreach ($limits as [$sec, $max]) {
+    $inside = array_values(array_filter($ts, fn($t) => $t > $now - $sec));
+    if (count($inside) >= $max) {
+      $wait = $inside[$max - 1] + $sec - $now; // いちばん古い分が外れるまで
+      $when = $wait < 90 ? max(1, $wait) . ' 秒' : (int)ceil($wait / 60) . ' 分';
+      fail("短いあいだに何度も送られています。{$when}ほど待ってから送ってください", 429);
+    }
+  }
+  $pdo->prepare('INSERT INTO rate_log (user_id, action, t) VALUES (?, ?, ?)')->execute([$uid, $action, $now]);
+}
+
+// 作者に知らせる（メール）。送り先は設定の notify_emails（なければ admin_emails）。送れなくても登録は止めない
+function notify_admin(string $subject, string $text): void {
+  $to = cfg()['notify_emails'] ?? cfg()['admin_emails'] ?? [];
+  if (!$to) return;
+  mb_language('Japanese');
+  mb_internal_encoding('UTF-8');
+  $from = cfg()['mail_from'] ?? 'noreply@sokubai3d.textetc.net';
+  foreach ($to as $addr) {
+    if (!filter_var($addr, FILTER_VALIDATE_EMAIL)) continue;
+    if (!@mb_send_mail($addr, $subject, $text, 'From: ' . mb_encode_mimeheader('即売会 3D マップ') . " <$from>")) error_log("sokubai3d: mail to admin failed");
+  }
+}
+
+// Google のアカウントの番号（sub）のハッシュ（止めた人を覚えておくのに使う。番号そのものは残さない）
+function sub_hash(string $sub): string { return hash('sha256', 'sokubai3d-stop:' . $sub); }
+function user_sub(PDO $pdo, int $uid): string {
+  $st = $pdo->prepare('SELECT sub FROM users WHERE id = ?');
+  $st->execute([$uid]);
+  $sub = (string)$st->fetchColumn();
+  return strpos($sub, 'deleted-') === 0 ? '' : $sub;
+}
+function remember_circle_stop(PDO $pdo, int $uid): void {
+  $sub = user_sub($pdo, $uid);
+  if ($sub !== '') $pdo->prepare('INSERT IGNORE INTO circle_stops (sub_hash, created_at) VALUES (?, ?)')->execute([sub_hash($sub), time()]);
+}
+function forget_circle_stop(PDO $pdo, int $uid): void {
+  $sub = user_sub($pdo, $uid);
+  if ($sub !== '') $pdo->prepare('DELETE FROM circle_stops WHERE sub_hash = ?')->execute([sub_hash($sub)]);
+}
+
 // 地図が読むサークルの一覧（data/circles.json）と、その画像を書き出す（作者が止めたものをのぞく。
 // 確認なしで出すようにする前の「確認待ち」の登録も出す）。
 // 公開をやめていた（circles.json がない）ときは、$force でなければ何もしない
@@ -141,10 +220,12 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
   $dataDir = site_dir() . '/data';
   $imgDir = "$dataDir/circles";
   if (!$force && !is_file("$dataDir/circles.json")) return;
+  circles_lock($pdo);
   if (!is_dir($imgDir)) mkdir($imgDir, 0755, true);
   $keep = [];
   $list = [];
-  foreach ($pdo->query("SELECT * FROM circles WHERE status <> 'rejected' ORDER BY day, id") as $r) {
+  // 止めた登録と、止めた人（banned）の登録は出さない
+  foreach ($pdo->query("SELECT c.* FROM circles c JOIN users u ON u.id = c.user_id WHERE c.status <> 'rejected' AND u.role <> 'banned' ORDER BY c.day, c.id") as $r) {
     $img = '';
     $thumb = '';
     $src = private_dir() . '/circles/' . basename($r['image']);
@@ -164,7 +245,7 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
       'thumb' => $thumb ? "/data/circles/$thumb" : ''];
   }
   foreach (glob("$imgDir/*") ?: [] as $f) if (!in_array(basename($f), $keep, true)) @unlink($f);
-  $tmp = "$dataDir/circles.json.tmp";
+  $tmp = "$dataDir/circles.json." . bin2hex(random_bytes(4)) . '.tmp';
   file_put_contents($tmp, json_encode(['format' => 'comiket3d-circles', 'updated' => gmdate('c'), 'circles' => $list], JSON_UNESCAPED_UNICODE));
   rename($tmp, "$dataDir/circles.json");
 }

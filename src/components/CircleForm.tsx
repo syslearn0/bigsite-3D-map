@@ -7,23 +7,21 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import layoutJson from "@/data/layout-sample.json";
 import venueJson from "@/data/venue.json";
 import { accountStore, api, initAccount } from "@/lib/account";
-import { expandBooths, type HallLike, type Line } from "@/lib/layout";
+import { expandBooths, normCode, type HallLike, type Line } from "@/lib/layout";
 import { PUB_KEYS, refreshPublished } from "@/lib/published";
 import { loadLayout } from "@/lib/saved-layout";
 import { DAYS, type Day } from "@/lib/tags";
+import { EVENT } from "@/lib/event";
 import { AccountBox } from "./AccountBox";
 
 type Mine = { id: number; day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; hasImage: boolean; status: "pending" | "approved" | "rejected"; note: string; updatedAt: number };
-const STATUS = { pending: "地図に出ています", approved: "地図に出ています", rejected: "作者が止めています（地図に出ていません）" };
+// published：作者がサークルの登録を公開しているか（していないあいだは、受け付けても地図に出ない）
+const statusText = (s: Mine["status"], published: boolean) =>
+  s === "rejected" ? "作者が止めています（地図に出ていません）" : published ? "地図に出ています" : "受け付けました（地図に出るのは、作者がサークルの登録の公開を始めてから）";
+type Res = { circles: Mine[]; published: boolean };
 const MAX_IMG = 380_000;
 const split = (s: string) => [...new Set(s.split(/[,、，\n]+/).map((x) => x.trim()).filter(Boolean))];
 
-// 配置番号を整える：全角の英数字・いろいろな横棒を半角に、空白をとる。「東A01a」のように横棒がなくても読む
-export function normCode(raw: string): string {
-  let s = raw.normalize("NFKC").replace(/[‐‑‒–—―−ー－]/g, "-").replace(/\s+/g, "");
-  s = s.replace(/^([東西南])(.+?)-?(\d{1,2})([abAB])$/, (_, b, blk, n, h) => `${b}${blk}-${n.padStart(2, "0")}${h.toLowerCase()}`);
-  return s;
-}
 const CODE_RE = /^[東西南]\S{1,4}-\d{2}[ab]$/u;
 
 // 画像を小さくする（長い辺 800px・webp。webp で書けないブラウザは jpeg）。380KB を超えるときは画質を下げる。
@@ -52,6 +50,7 @@ async function shrink(file: File): Promise<{ image: string; thumb: string }> {
 export function CircleForm() {
   const acct = useSyncExternalStore(accountStore.subscribe, accountStore.get, accountStore.get);
   const [mine, setMine] = useState<Mine[]>([]);
+  const [published, setPublished] = useState(false);
   // 出る日と、日ごとの配置番号（サークル名・作品・画像などは、どの日も同じ）
   const [days, setDays] = useState<Day[]>([1]);
   const [codesBy, setCodesBy] = useState<Record<Day, string>>({ 1: "", 2: "", 3: "" });
@@ -95,9 +94,10 @@ export function CircleForm() {
   };
   useEffect(() => {
     if (!acct.me) return;
-    api<{ circles: Mine[] }>("circle.php")
+    api<Res>("circle.php")
       .then((r) => {
         setMine(r.circles);
+        setPublished(!!r.published);
         fill(r.circles);
       })
       .catch((e) => setMsg({ text: e.message, err: true }));
@@ -111,6 +111,7 @@ export function CircleForm() {
   // 画像を見せる登録（どの日も同じ画像なので、画像のある最初の日）
   const current = mine.find((c) => c.hasImage) ?? mine[0];
   const dropped = mine.filter((c) => !days.includes(c.day)); // 前は出ると登録していたが、外した日
+  const stoppedDays = mine.filter((c) => c.status === "rejected").map((c) => c.day); // 作者が止めた日（取り消せない）
   const workList = split(works);
 
   const submit = async () => {
@@ -127,9 +128,11 @@ export function CircleForm() {
     if (dropped.length && !confirm(`${dropped.map((c) => c.day).join("・")}日目の登録を取り消します。よいですか？`)) return;
     setBusy(true);
     try {
-      let r = await api<{ circles: Mine[] }>("circle.php", {
+      // 外した日の取り消しも、いっしょに送る（1 回の送信で、全部そろって変わる）
+      const r = await api<Res>("circle.php", {
         body: {
           days: sortedDays.map((d) => ({ day: d, codes: parse(d).list })),
+          drop: dropped.map((c) => c.day),
           name: name.trim(),
           x: x.trim(),
           url: url.trim(),
@@ -140,9 +143,8 @@ export function CircleForm() {
           removeImage,
         },
       });
-      // 外した日の登録を取り消す
-      for (const c of dropped) r = await api<{ circles: Mine[] }>(`circle.php?day=${c.day}`, { method: "DELETE" });
       setMine(r.circles);
+      setPublished(!!r.published);
       fill(r.circles);
       // 作者が止めた日は、送りなおしても地図に出ない（そう書く）
       const shown = r.circles.filter((c) => c.status !== "rejected").map((c) => c.day);
@@ -150,7 +152,11 @@ export function CircleForm() {
       setMsg({
         text:
           `${sortedDays.join("・")}日目を登録しました。` +
-          (shown.length ? `${shown.join("・")}日目は地図に出ています（開いている地図は、開き直すと出ます）。` : "") +
+          (shown.length
+            ? r.published
+              ? `${shown.join("・")}日目は地図に出ています（開いている地図は、開き直すと出ます）。`
+              : "いまは作者がサークルの登録の公開を止めているので、地図に出るのは公開が始まってからです。"
+            : "") +
           (stopped.length ? `${stopped.join("・")}日目は作者が止めているので、地図に出ません。` : ""),
       });
     } catch (e) {
@@ -162,12 +168,12 @@ export function CircleForm() {
   // 登録したことを X で知らせる（登録してある内容から作る。作者が止めた日は書かない）。
   // リンクは、地図をその日・その机を選んだ状態で開く
   const shown = mine.filter((c) => c.status !== "rejected");
-  const shareUrl = shown.length
+  const shareUrl = shown.length && published
     ? "https://x.com/intent/tweet?" +
       new URLSearchParams({
         text: `即売会 3D マップに「${shown[0].name}」を登録しました！\n${shown.map((c) => `${c.day}日目 ${c.codes.join("・")}`).join(" / ")}\n`,
         url: `https://sokubai3d.textetc.net/?day=${shown[0].day}&code=${encodeURIComponent(shown[0].codes[0])}`,
-        hashtags: "即売会3Dマップ,C109,コミケ",
+        hashtags: EVENT.hashtags.join(","),
       })
         .toString()
         .replace(/\+/g, "%20") // 空白は %20 に（+ のままだと、そのまま出ることがある）
@@ -177,9 +183,9 @@ export function CircleForm() {
     if (!confirm(`登録（${mine.map((c) => c.day).join("・")}日目）をすべて取り消しますか？`)) return;
     setBusy(true);
     try {
-      let r: { circles: Mine[] } = { circles: mine };
-      for (const c of mine) r = await api<{ circles: Mine[] }>(`circle.php?day=${c.day}`, { method: "DELETE" });
+      const r = await api<Res>("circle.php?day=all", { method: "DELETE" });
       setMine(r.circles);
+      setPublished(!!r.published);
       fill(r.circles);
       setMsg({ text: "取り消しました" });
     } catch (e) {
@@ -225,6 +231,8 @@ export function CircleForm() {
                     style={{ flex: 1 }}
                     aria-pressed={days.includes(d)}
                     onClick={() => {
+                      // 作者が止めた日は外せない（取り消して出しなおすのを防ぐ）
+                      if (days.includes(d) && stoppedDays.includes(d)) return setMsg({ text: `${d}日目の登録は作者が止めているので、外せません。作者に連絡してください`, err: true });
                       setDays((l) => (l.includes(d) ? l.filter((x) => x !== d) : [...l, d]));
                       setMsg(null);
                     }}
@@ -238,14 +246,14 @@ export function CircleForm() {
                 <div className="soft" style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem", marginTop: 8 }}>
                   {mine.map((c) => (
                     <div key={c.id} className={c.status === "rejected" ? "warn" : undefined}>
-                      {c.day}日目の登録：{STATUS[c.status]}
+                      {c.day}日目の登録：{statusText(c.status, published)}
                       {c.note && `（作者から：${c.note}）`}
                     </div>
                   ))}
-                  <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>変えて送ると、すぐ地図に出ます</span>
+                  <span style={{ color: "var(--muted)", fontSize: ".8rem" }}>{published ? "変えて送ると、すぐ地図に出ます" : "変えて送ると、すぐ変わります"}</span>
                 </div>
               )}
-              {dropped.length > 0 && <p className="warn" style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem" }}>送ると、{dropped.map((c) => c.day).join("・")}日目の登録は取り消されます</p>}
+              {dropped.length > 0 && days.length > 0 && <p className="warn" style={{ padding: "6px 10px", borderRadius: 6, fontSize: ".9rem" }}>送ると、{dropped.map((c) => c.day).join("・")}日目の登録は取り消されます</p>}
 
               {sortedDays.map((d) => {
                 const { list, bad, unknown } = parse(d);
@@ -348,7 +356,7 @@ export function CircleForm() {
                 <button className="primary" disabled={busy} onClick={submit} style={{ minHeight: 46, padding: "0 22px", fontWeight: 700 }}>
                   {mine.length ? "変更を送る" : "登録する"}
                 </button>
-                {mine.length > 0 && (
+                {mine.length > 0 && !stoppedDays.length && (
                   <button disabled={busy} onClick={remove} style={{ minHeight: 46 }}>
                     登録をすべて取り消す
                   </button>
@@ -375,7 +383,8 @@ export function CircleForm() {
           @riku819979
         </a>
         ）。<br />
-        <b>消したいときは？</b> この画面の「登録をすべて取り消す」で消せます。1 日だけ消すときは、その日の選択を外して「変更を送る」を押してください。地図からもすぐに消えます。
+        <b>消したいときは？</b> この画面の「登録をすべて取り消す」で消せます。1 日だけ消すときは、その日の選択を外して「変更を送る」を押してください。地図からもすぐに消えます（作者が止めた登録は、作者に連絡してください）。<br />
+        <b>「短いあいだに何度も送られています」と出ました。</b> いたずらを防ぐため、送れるのは 1 分に 3 回・1 時間に 15 回までです。少し待ってから送ってください。
       </p>
       <p style={{ fontSize: ".85rem" }}>
         <Link href="/privacy/">プライバシーポリシー</Link>

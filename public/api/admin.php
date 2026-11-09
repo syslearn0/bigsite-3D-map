@@ -50,7 +50,14 @@ if ($action === 'role') {
   $id = (int)($b['id'] ?? 0);
   if ($id === (int)$admin['id']) fail('自分は変えられません');
   $pdo->prepare('UPDATE users SET role = ? WHERE id = ? AND role <> "admin"')->execute([$role, $id]);
-  if ($role === 'banned') $pdo->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);
+  if ($role === 'banned') {
+    $pdo->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);
+    // 止めた人のサークル登録も止める（地図からすぐ外す。アカウントを作りなおしても止めたまま）
+    circles_lock($pdo);
+    $pdo->prepare("UPDATE circles SET status = 'rejected' WHERE user_id = ?")->execute([$id]);
+    remember_circle_stop($pdo, $id);
+    write_circles_json($pdo);
+  }
   out(['ok' => true]);
 }
 
@@ -81,9 +88,24 @@ if ($action === 'revert_user') {
 }
 
 if ($action === 'circle') {
+  // 出す（approved）か止める（rejected）か。確認なしで出すので、確認待ち（pending）はもう使わない
   $status = $b['status'] ?? '';
-  if (!in_array($status, ['pending', 'approved', 'rejected'], true)) fail('status');
-  $pdo->prepare('UPDATE circles SET status = ?, note = ? WHERE id = ?')->execute([$status, mb_substr((string)($b['note'] ?? ''), 0, 300), (int)($b['id'] ?? 0)]);
+  if (!in_array($status, ['approved', 'rejected'], true)) fail('status');
+  circles_lock($pdo);
+  $id = (int)($b['id'] ?? 0);
+  $pdo->prepare('UPDATE circles SET status = ?, note = ? WHERE id = ?')->execute([$status, mb_substr((string)($b['note'] ?? ''), 0, 300), $id]);
+  $st = $pdo->prepare('SELECT user_id FROM circles WHERE id = ?');
+  $st->execute([$id]);
+  $uid = (int)$st->fetchColumn();
+  if ($uid) {
+    // 止めたら、その人を覚えておく（取り消してアカウントを作りなおしても止めたまま）。止めた登録がなくなれば忘れる
+    if ($status === 'rejected') remember_circle_stop($pdo, $uid);
+    else {
+      $st = $pdo->prepare("SELECT COUNT(*) FROM circles WHERE user_id = ? AND status = 'rejected'");
+      $st->execute([$uid]);
+      if (!(int)$st->fetchColumn()) forget_circle_stop($pdo, $uid);
+    }
+  }
   // 止めたものはすぐ外し、戻したものはすぐ出す（サークルの登録は確認なしで出るので、公開中の一覧をいつも書きなおす）
   write_circles_json($pdo);
   out(['ok' => true]);
@@ -91,6 +113,7 @@ if ($action === 'circle') {
 
 if ($action === 'delete_circle') {
   // サークル登録を消す（いたずらの登録など。消すと、同じ配置番号をほかの人が登録できる）
+  circles_lock($pdo);
   $st = $pdo->prepare('SELECT image FROM circles WHERE id = ?');
   $st->execute([(int)($b['id'] ?? 0)]);
   if ($r = $st->fetch()) {

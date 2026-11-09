@@ -9,6 +9,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
   if ($u['role'] === 'admin') fail('作者のアカウントは消せません');
   $pdo = db();
   $id = (int)$u['id'];
+  circles_lock($pdo);
+  // 作者が止めた登録があれば、止めたことを覚えておく（アカウントを作りなおしても止めたまま）
+  $st = $pdo->prepare("SELECT COUNT(*) FROM circles WHERE user_id = ? AND status = 'rejected'");
+  $st->execute([$id]);
+  if ((int)$st->fetchColumn()) remember_circle_stop($pdo, $id);
   $st = $pdo->prepare('SELECT image FROM circles WHERE user_id = ?');
   $st->execute([$id]);
   foreach ($st->fetchAll() as $r) remove_circle_image($r['image']);

@@ -25,7 +25,7 @@ import { hallAt, makeSteady, type Where } from "@/lib/locate";
 import { buildGrid, findPath, type Grid, type NavVenue } from "@/lib/nav";
 import { planTour, stopDist, type Stop } from "@/lib/tour";
 import { loadCircles, PUB_KEYS, refreshPublishedAndReload, type Circle } from "@/lib/published";
-import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
+import { DESK_D, DESK_L, expandBooths, islandEnds, lineLength, lineNums, normCode, SAMPLE_GENRES, wallLabelSpots, type Booth, type Line } from "@/lib/layout";
 
 // 会場の 3D。見方は3つ：上から（2D の地図のように）・3D（ぐるっと回せる）・歩く（一人称）。
 // ホールの位置関係は OSM の緯度経度のまま。机の配置は見本（C109 の本当の配置ではない）。
@@ -3833,7 +3833,7 @@ export function VenueView() {
   useEffect(() => {
     const q = new URLSearchParams(location.search);
     const d = Number(q.get("day"));
-    const i = codeIndex.get(q.get("code") ?? "");
+    const i = codeIndex.get(normCode(q.get("code") ?? ""));
     requestAnimationFrame(() => {
       if ((DAYS as readonly number[]).includes(d)) setDay(d as Day);
       if (i !== undefined) select(i);
