@@ -489,8 +489,9 @@ function CircleCard({ c }: { c: Circle }) {
   return (
     <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
       {c.image && (
+        // 64px で出すので、小さい画像（160px）を使う（なければ大きい画像）。大きい画像は、机を押して広げたときだけ読む
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={imgUrl(c.image)} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
+        <img src={imgUrl(c.thumb || c.image)} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
       )}
       <div style={{ minWidth: 0, fontSize: ".9rem" }}>
         <div style={{ fontWeight: 700 }}>{c.name}</div>
