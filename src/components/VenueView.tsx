@@ -19,7 +19,7 @@ import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
 import { DOOR_H, DOOR_W, edgeGaps, edgeShared, type WallOpening } from "@/lib/walls";
 import { decodeChecklist, readChecklist, type Checklist } from "@/lib/checklist";
-import { EVENT } from "@/lib/event";
+import { EVENT, dateLabel, dayStarted, todayJst } from "@/lib/event";
 import { addCorridors, buildRails, moveOnRails, nearestOnRails, railPoint, type Corridors, type RailPos, type Rails } from "@/lib/rails";
 import corridorsJson from "@/data/corridors.json";
 import { search, type Hit } from "@/lib/search";
@@ -631,10 +631,19 @@ export function VenueView() {
   const notes = notesByDay[day];
   // 「行った」にできるのは、★ 行きたい・◆ 候補の印がある机だけ（ユーザーの指示）。印を外した机の「行った」は出さない
   // （保存はそのまま残すので、同じ日にまた印をつけると戻る）
+  // 「✓ 行った」は、その日の当日になってから出す（ユーザーの指示）。開いたまま日をまたいでも出るように、1 分ごとに日付を見なおす
+  const [today, setToday] = useState("");
+  useEffect(() => {
+    const tick = () => setToday(todayJst());
+    tick();
+    const t = setInterval(tick, 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const canVisit = today !== "" && dayStarted(day, today);
   const visitedAll = visitedByDay[day];
   const visited = useMemo(() => Object.fromEntries(Object.entries(visitedAll).filter(([c]) => marks[c])), [visitedAll, marks]);
   const toggleVisited = (code: string) => {
-    if (!marks[code]) return;
+    if (!marks[code] || !canVisit) return;
     setVisitedByDay((all) => {
       const n = { ...all[day] };
       if (n[code]) delete n[code];
@@ -4398,7 +4407,7 @@ export function VenueView() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong>
                 印をつけたサークル<span style={{ whiteSpace: "nowrap" }}>（{day}日目）</span>
-                {mode === "plan" && marked > 0 && <span style={{ fontWeight: 400, fontSize: ".85rem", marginLeft: 6, whiteSpace: "nowrap" }}>✓ 行った {markedDone}/{marked}</span>}
+                {mode === "plan" && canVisit && marked > 0 && <span style={{ fontWeight: 400, fontSize: ".85rem", marginLeft: 6, whiteSpace: "nowrap" }}>✓ 行った {markedDone}/{marked}</span>}
               </strong>
               <span style={{ display: "flex", gap: 6 }}>
                 <button className="chip small" onClick={startPrint}>
@@ -4419,7 +4428,7 @@ export function VenueView() {
                   （★ {yen(money.want)}・◆ {yen(money.maybe)}
                   {money.total - money.want - money.maybe > 0 ? `・印なし ${yen(money.total - money.want - money.maybe)}` : ""}）
                 </span>
-                {mode === "plan" && (
+                {mode === "plan" && canVisit && (
                   <span style={{ marginLeft: 6, whiteSpace: "nowrap" }}>
                     行った分 {yen(money.done)}・残り {yen(money.total - money.done)}
                   </span>
@@ -4491,7 +4500,7 @@ export function VenueView() {
                           {budgets[c] > 0 && <span style={{ float: "right", fontWeight: 700 }}>{yen(budgets[c])}</span>}
                           {notes[c] && <span style={{ display: "block", color: "var(--muted)", fontSize: ".8rem", whiteSpace: "normal" }}>📝 {notes[c]}</span>}
                         </button>
-                        {mode === "plan" ? (
+                        {mode === "plan" && canVisit ? (
                           <button className="chip small" style={{ minHeight: 40, minWidth: 92 }} aria-pressed={!!visited[c]} onClick={() => toggleVisited(c)}>
                             {visited[c] ? "✓ 行った" : "行った？"}
                           </button>
@@ -4630,7 +4639,7 @@ export function VenueView() {
               {mode === "plan" ? (
                 <>
                   {/* 押しやすいように 1 行まるごと使う（スマホで折り返さない） */}
-                  {selMark && (
+                  {selMark && canVisit && (
                     <button
                       style={{ flex: "1 1 100%", minHeight: 52, fontWeight: 700, fontSize: "1.1rem" }}
                       aria-pressed={!!visited[sel.code]}
@@ -4667,6 +4676,9 @@ export function VenueView() {
                 ✕
               </button>
             </div>
+            {mode === "plan" && selMark && !canVisit && today !== "" && (
+              <p style={{ fontSize: ".8rem", color: "var(--muted)", margin: "6px 0 0" }}>「✓ 行った」のボタンは、{day}日目の当日（{dateLabel(day)}）になると出ます。</p>
+            )}
             {/* メモは印をつけなくても書ける（ユーザーの指示） */}
             {/* 使うつもりの金額（円）。一覧で日ごとの合計を出す */}
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -4771,7 +4783,7 @@ export function VenueView() {
           </button>
         </div>
         <p style={{ color: "var(--muted)", fontSize: ".75rem", margin: "4px 0 0" }}>
-          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : "当日に使う・回る順を考えるモード（最初は 3D）。★・◆ の机を押して「✓ 行った」で、行った所が灰色になります"}
+          {mode === "register" ? "行きたい作品のスペースに印をつけるモード（最初は 2D）" : `当日に使う・回る順を考えるモード（最初は 3D）。当日（${dateLabel(1)}〜${dateLabel(3)}）になると、★・◆ の机を押して「✓ 行った」で、行った所が灰色になります`}
         </p>
         <>
             <h3>日</h3>
