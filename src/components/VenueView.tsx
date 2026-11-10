@@ -621,7 +621,7 @@ export function VenueView() {
     for (const d of DAYS)
       for (const code of Object.keys(marksByDay[d] ?? {})) {
         const c = circles[d][code];
-        for (const u of [c?.thumb, c?.image]) if (u) urls.add(u);
+        for (const u of [c?.thumb, c?.image, ...(c?.images ?? [])]) if (u) urls.add(u);
       }
     markedImgs.current = urls; // 見本の画像（sample:）は端末で作るので、通信なしで出せる
     if (!("serviceWorker" in navigator)) return;
@@ -641,7 +641,8 @@ export function VenueView() {
   }, []);
   const canVisit = today !== "" && dayStarted(day, today);
   const visitedAll = visitedByDay[day];
-  const visited = useMemo(() => Object.fromEntries(Object.entries(visitedAll).filter(([c]) => marks[c])), [visitedAll, marks]);
+  // 当日より前は「行った」を使わない（前に試した・ほかの端末から来た「行った」で、机が灰色のまま取り消せなくならないように。保存は残す）
+  const visited = useMemo(() => (canVisit ? Object.fromEntries(Object.entries(visitedAll).filter(([c]) => marks[c])) : {}), [visitedAll, marks, canVisit]);
   const toggleVisited = (code: string) => {
     if (!marks[code] || !canVisit) return;
     setVisitedByDay((all) => {
@@ -684,7 +685,8 @@ export function VenueView() {
           added++;
         }
       }
-      if (imp.memo && c.memo && !nextNotes[c.day][c.code]) {
+      // メモは、入れる色の行だけ（「入れない」にした色のメモは入れない）
+      if (m && imp.memo && c.memo && !nextNotes[c.day][c.code]) {
         nextNotes[c.day][c.code] = c.memo.replace(/\s+/g, " ").slice(0, 200);
         memos++;
       }
@@ -3853,11 +3855,14 @@ export function VenueView() {
     const idle = (cb: () => void) =>
       "requestIdleCallback" in window ? requestIdleCallback(cb, { timeout: 6000 }) : (setTimeout(cb, 2500) as unknown as number);
     let idleId = 0;
-    const firstWait = setTimeout(() => (idleId = idle(() => walkR())), 1500);
+    let gone = false; // 片づけたあと（この画面は捨てた）
+    const firstWait = setTimeout(() => (idleId = idle(() => !gone && walkR())), 1500);
 
     return () => {
+      gone = true;
       clearTimeout(firstWait);
       if ("cancelIdleCallback" in window) cancelIdleCallback(idleId);
+      else clearTimeout(idleId);
       cancelAnimationFrame(raf);
       ro.disconnect();
       removeEventListener("keydown", onKey);
@@ -4564,6 +4569,7 @@ export function VenueView() {
               (() => {
                 const cs = imp.list.circles;
                 const onMap = cs.filter((c) => c.day && codeIndex.has(c.code));
+                const willAdd = onMap.filter((c) => imp.colorMark[c.color]);
                 const noDay = [...new Set(cs.filter((c) => !c.day).map((c) => c.dayText || "（空）"))];
                 const offMap = cs.filter((c) => c.day && !codeIndex.has(c.code)).length;
                 const colors = Object.keys(imp.colorMark).map(Number);
@@ -4598,8 +4604,8 @@ export function VenueView() {
                       カタログのメモも入れる（メモを書いていない机だけ）
                     </label>
                     <p style={{ fontSize: ".8rem", color: "var(--muted)", margin: "6px 0" }}>すでに印のある机は、そのままにします。</p>
-                    <button className="primary" style={{ minHeight: 44, padding: "0 18px" }} disabled={!onMap.length} onClick={applyChecklist}>
-                      {onMap.length} 件を読みこむ
+                    <button className="primary" style={{ minHeight: 44, padding: "0 18px" }} disabled={!willAdd.length} onClick={applyChecklist}>
+                      {willAdd.length} 件を読みこむ
                     </button>
                   </>
                 );

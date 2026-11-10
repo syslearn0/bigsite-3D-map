@@ -105,9 +105,9 @@ $newName = fn(string $e): string => bin2hex(random_bytes(12)) . '.' . $e;
 $st = $pdo->prepare('SELECT image FROM circles WHERE user_id = ? ORDER BY day');
 $st->execute([$u['id']]);
 $srcList = [];
+// （ファイルがなくなっていても詰めない：画面の n 枚目・image.php の n と番号をそろえる）
 foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $img) {
-  $l = array_values(array_filter(img_list($img), fn($f) => is_file("$dir/$f")));
-  if ($l) {
+  if ($l = img_list($img)) {
     $srcList = $l;
     break;
   }
@@ -126,6 +126,7 @@ $readImg = function (string $data, bool $small): ?array {
 };
 // いま登録してある画像を、ファイルから読む（[大きい画像, 形, 小さい画像|null, 形|null]）
 $readOld = function (string $f) use ($dir): array {
+  if (!is_file("$dir/$f")) fail('前の画像が見つかりません。画像を選びなおしてください');
   $ts = find_thumb($dir, $f);
   return [file_get_contents("$dir/$f"), pathinfo($f, PATHINFO_EXTENSION), $ts !== '' ? file_get_contents($ts) : null, $ts !== '' ? pathinfo($ts, PATHINFO_EXTENSION) : null];
 };
@@ -153,19 +154,27 @@ if ($items !== null) {
     $imgs[] = [$big[0], $big[1], $small[0] ?? null, $small[1] ?? null];
   }
 }
-// 画像を置いて、ファイル名を「,」でつないで返す
+// 画像を置いて、ファイル名を「,」でつないで返す。書けなかったら（容量がいっぱいなど）、置いた分を消して断る
+// （まだコミットの前なので、登録も前のまま。古い画像も消さない）
 $putImgs = function (array $list) use ($dir, $newName): string {
   $names = [];
   foreach ($list as [$bin, $ext, $tb, $text]) {
     $n = $newName($ext);
-    file_put_contents("$dir/$n", $bin);
-    if ($tb !== null) file_put_contents("$dir/" . thumb_name($n, $text), $tb);
+    $ok = file_put_contents("$dir/$n", $bin) !== false;
+    if ($ok && $tb !== null) $ok = file_put_contents("$dir/" . thumb_name($n, $text), $tb) !== false;
     $names[] = $n;
+    if (!$ok) {
+      remove_circle_image(implode(',', $names));
+      fail('画像を保存できませんでした。時間をおいて、もう一度送ってください', 500);
+    }
   }
   return implode(',', $names);
 };
-// 画像を選びなおさずに新しい日を足したときは、いま登録してある画像を写す
-$copyImgs = $imgs === null && $srcList ? array_map($readOld, $srcList) : null;
+// 画像を選びなおさずに新しい日を足したときは、いま登録してある画像を写す（なくなったファイルは飛ばす。要るときだけ読む）
+$copyImgs = null;
+$copyList = function () use (&$copyImgs, $srcList, $dir, $readOld): array {
+  return $copyImgs ??= array_map($readOld, array_values(array_filter($srcList, fn($f) => is_file("$dir/$f"))));
+};
 // 取り消す日（止めた登録なら、ここで断る。まだ何も書いていない）。画像は、写し終わってから消す
 $pdo->beginTransaction();
 $droppedImages = drop_days($pdo, (int)$u['id'], $drop, true);
@@ -185,8 +194,8 @@ foreach ($days as $day => $codes) {
     // 古い画像は、書き終わってから消す
     if ($image !== '') $droppedImages[] = $image;
     $image = $putImgs($imgs);
-  } elseif ($image === '' && $copyImgs) {
-    $image = $putImgs($copyImgs);
+  } elseif ($image === '' && $srcList && $copyList()) {
+    $image = $putImgs($copyList());
   }
   // 確認なしで地図に出す。作者が止めた（rejected）登録は、送りなおしても止めたまま
   $status = ($old['status'] ?? '') === 'rejected' || (!$old && $stopped) ? 'rejected' : 'approved';

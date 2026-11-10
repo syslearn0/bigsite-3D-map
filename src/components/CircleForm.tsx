@@ -348,14 +348,22 @@ export function CircleForm() {
                         e.target.value = "";
                         if (!fs.length) return;
                         const room = MAX_PICS - pics.length;
-                        if (fs.length > room) setMsg({ text: `画像は ${MAX_PICS} 枚までなので、はじめの ${room} 枚だけ入れました`, err: true });
-                        try {
-                          const added: Pic[] = [];
-                          for (const f of fs.slice(0, room)) added.push(await shrink(f));
-                          changePics((l) => [...l, ...added]);
-                        } catch (err) {
-                          setMsg({ text: err instanceof Error ? err.message : "画像を読めませんでした", err: true });
+                        // 読めた画像だけ入れる（1 枚読めなくても、ほかは入れる）
+                        const added: Pic[] = [];
+                        const bad: string[] = [];
+                        for (const f of fs.slice(0, room)) {
+                          try {
+                            added.push(await shrink(f));
+                          } catch {
+                            bad.push(f.name);
+                          }
                         }
+                        if (added.length) changePics((l) => [...l, ...added]);
+                        const notes = [
+                          fs.length > room ? `画像は ${MAX_PICS} 枚までなので、はじめの ${room} 枚だけ選びました。` : "",
+                          bad.length ? `読めなかった画像があります（${bad.join("・")}）。別の画像を選んでください。` : "",
+                        ].join("");
+                        if (notes) setMsg({ text: notes, err: true });
                       }}
                     />
                   </label>

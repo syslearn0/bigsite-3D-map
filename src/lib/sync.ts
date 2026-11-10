@@ -10,6 +10,9 @@ type ByDay<T> = Record<Day, Record<string, T>>;
 // user：最後に合わせたアカウント。t：項目ごとに、この端末で最後に変えた時刻
 type Meta = { t: Record<string, number>; last: Flat; user?: number };
 const META_KEY = "comiket3d:sync";
+// この版が知っている項目の種類。サーバーは、ここにない種類の項目を返さず、書きこみも受けない
+// （前の版のままの端末が、知らない項目（使う金額など）を「消した」と送って、ほかの端末の分まで消さないように）
+const KINDS = "mnvp";
 
 export function flatten(marks: ByDay<string>, notes: ByDay<string>, visited: ByDay<number>, budgets?: ByDay<number>): Flat {
   const f: Flat = {};
@@ -85,7 +88,7 @@ export async function syncWith(flat: Flat, user: number): Promise<Flat | null> {
   writeMeta(m);
   const entries: Record<string, { v: string | null; t: number }> = {};
   for (const [k, t] of Object.entries(m.t)) entries[k] = { v: flat[k] ?? null, t };
-  const r = await api<{ entries: Record<string, { v: string | null; t: number }> }>("sync.php", { body: { entries } });
+  const r = await api<{ entries: Record<string, { v: string | null; t: number }> }>("sync.php", { body: { entries, kinds: KINDS } });
   const next: Flat = { ...flat };
   for (const [k, e] of Object.entries(r.entries)) {
     if (e.t < (m.t[k] ?? 0)) continue;
