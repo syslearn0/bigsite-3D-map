@@ -2840,6 +2840,21 @@ export function VenueView() {
         return;
       }
       ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+      // 歩いているときは、机の上に立てた札も押せる（札を押したら、その札の机。札の奥の机が選ばれないように）
+      if (current === "walk") {
+        const cards = [...(hallCards.get(walkHall)?.sheets ?? [])].filter((sh) => sh.mesh.visible);
+        const ch = ray.intersectObjects(cards.map((sh) => sh.mesh), false)[0];
+        if (ch && ch.faceIndex != null) {
+          const sh = cards.find((x) => x.mesh === ch.object)!;
+          const bi = sh.booths[Math.floor(ch.faceIndex / 2)];
+          // 札より手前に机があれば、そちらを選ぶ
+          const near = ray.intersectObjects([...deskMeshes.entries()].filter(([lv]) => shown(floorOf(lv))).map(([, d]) => d.mesh), false)[0];
+          if (bi !== undefined && (!near || near.distance >= ch.distance)) {
+            pick(bi);
+            return;
+          }
+        }
+      }
       const targets = [...deskMeshes.entries()].filter(([lv]) => shown(floorOf(lv))).map(([, d]) => d.mesh);
       const hit = ray.intersectObjects(targets, false)[0];
       if (hit && hit.instanceId !== undefined) {
@@ -3147,7 +3162,8 @@ export function VenueView() {
     let walkHall = "";
     // 札の絵は、64 枚ずつの小さな絵（シート）に分ける。大きな絵を 1 度に GPU へ送ると、ホールに入ったときに 1〜2 秒止まった。
     // シートは 1 コマに 1 枚ずつ送り、送るまでは出さない。画像が読めたら、そのシートだけ（0.4 秒に 1 回まで）送り直す
-    type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean; dirtyAt: number };
+    // booths：板（三角 2 つずつ）の順に、その札の机（押したときに選ぶ）
+    type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean; dirtyAt: number; booths: number[] };
     // pend：まだ画像を描いていない札（近くに来たら読む）
     type PendCard = { x: number; z: number; nx: number; nz: number; src: string; draw: (im: HTMLImageElement) => void };
     const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number; srcs: Set<string> }>();
@@ -3219,7 +3235,7 @@ export function VenueView() {
       const hall = hallById.get(hallId);
       if (!hall) return;
       const info = cardInfo.current;
-      const items: { x: number; z: number; ax: number; az: number; c: { name: string; image: string; sub: string } }[] = [];
+      const items: { x: number; z: number; ax: number; az: number; bi: number; c: { name: string; image: string; sub: string } }[] = [];
       const seen = new Set<string>();
       for (const i of hallBooths.get(hallId) ?? []) {
         const b = booths[i];
@@ -3230,7 +3246,7 @@ export function VenueView() {
         seen.add(id);
         const nb = booths[i + 1];
         const pair = !!c.name && nb?.line === b.line && nb?.num === b.num && info(nb.code)?.name === c.name;
-        items.push({ x: pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z: pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1], ax: Math.cos(b.angle), az: Math.sin(b.angle), c });
+        items.push({ x: pair ? (b.at[0] + nb.at[0]) / 2 : b.at[0], z: pair ? (b.at[1] + nb.at[1]) / 2 : b.at[1], ax: Math.cos(b.angle), az: Math.sin(b.angle), bi: i, c });
       }
       // このホールの歩く線を 4m の升目に入れておく（机ごとに会場の線を全部見ると、ホールに入るたびに 1 秒近くかかった）
       const eg = new Map<string, [number, number][]>();
@@ -3314,7 +3330,7 @@ export function VenueView() {
           }
         };
         const pos: number[] = [], uv: number[] = [], idx: number[] = [];
-        const sheet: Sheet = { mesh: null as unknown as THREE.Mesh, tex, sent: false, dirty: false, dirtyAt: 0 };
+        const sheet: Sheet = { mesh: null as unknown as THREE.Mesh, tex, sent: false, dirty: false, dirtyAt: 0, booths: [] };
         part.forEach((it, k) => {
           drawCell(k, null);
           // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
@@ -3348,6 +3364,7 @@ export function VenueView() {
           const cx = it.x + nx * 0.5, cz = it.z + nz * 0.5;
           const rx = nz * (CARD_W / 2), rz = -nx * (CARD_W / 2);
           const base = pos.length / 3;
+          sheet.booths.push(it.bi);
           pos.push(cx - rx, y0, cz - rz, cx + rx, y0, cz + rz, cx + rx, y1, cz + rz, cx - rx, y1, cz - rz);
           const u0 = ((k % SHEET_COLS) * CELL_W) / cv.width, u1 = u0 + CELL_W / cv.width;
           const v1 = 1 - (Math.floor(k / SHEET_COLS) * CELL_H) / cv.height, v0 = v1 - CELL_H / cv.height;
