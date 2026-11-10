@@ -3132,9 +3132,9 @@ export function VenueView() {
     let walkHall = "";
     // 札の絵は、64 枚ずつの小さな絵（シート）に分ける。大きな絵を 1 度に GPU へ送ると、ホールに入ったときに 1〜2 秒止まった。
     // シートは 1 コマに 1 枚ずつ送り、送るまでは出さない。画像が読めたら、そのシートだけ（0.4 秒に 1 回まで）送り直す
-    type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean };
+    type Sheet = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; sent: boolean; dirty: boolean; dirtyAt: number };
     // pend：まだ画像を描いていない札（近くに来たら読む）
-    type PendCard = { x: number; z: number; src: string; draw: (im: HTMLImageElement) => void };
+    type PendCard = { x: number; z: number; nx: number; nz: number; src: string; draw: (im: HTMLImageElement) => void };
     const hallCards = new Map<string, { sheets: Sheet[]; ver: number; used: number; pend: PendCard[]; wait: Map<string, PendCard[]>; scan: number; srcs: Set<string> }>();
     // 画像を読むのは、立っている所から IMG_NEAR m 以内の札だけ（電波があるとき。印のサークルは端末に持っているので、電波がなくても）
     const IMG_NEAR = 25;
@@ -3299,21 +3299,9 @@ export function VenueView() {
           }
         };
         const pos: number[] = [], uv: number[] = [], idx: number[] = [];
-        const sheet: Sheet = { mesh: null as unknown as THREE.Mesh, tex, sent: false, dirty: false };
+        const sheet: Sheet = { mesh: null as unknown as THREE.Mesh, tex, sent: false, dirty: false, dirtyAt: 0 };
         part.forEach((it, k) => {
           drawCell(k, null);
-          if (it.c.image)
-            entry.pend.push({
-              x: it.x,
-              z: it.z,
-              src: it.c.image,
-              draw: (im) =>
-                cardDrawQueue.push(() => {
-                  if (!sheet.mesh.parent) return; // もう捨てたシート
-                  drawCell(k, im);
-                  sheet.dirty = true;
-                }),
-            });
           // 向き：机からいちばん近い歩く線の側（通路の側）。机の列と直角の向きにそろえる
           const q = nearLine(it.x, it.z);
           let nx = q ? q[0] - it.x : 1, nz = q ? q[1] - it.z : 0;
@@ -3321,9 +3309,26 @@ export function VenueView() {
           nx -= it.ax * along;
           nz -= it.az * along;
           const nl = Math.hypot(nx, nz);
+          if (nl >= 1e-3) {
+            nx /= nl;
+            nz /= nl;
+          }
+          if (it.c.image)
+            entry.pend.push({
+              x: it.x,
+              z: it.z,
+              nx: nl >= 1e-3 ? nx : 0,
+              nz: nl >= 1e-3 ? nz : 0,
+              src: it.c.image,
+              draw: (im) =>
+                cardDrawQueue.push(() => {
+                  if (!sheet.mesh.parent) return; // もう捨てたシート
+                  drawCell(k, im);
+                  if (!sheet.dirty) sheet.dirtyAt = performance.now();
+                  sheet.dirty = true;
+                }),
+            });
           if (nl < 1e-3) return;
-          nx /= nl;
-          nz /= nl;
           // 机の通路の側のふちの上に立てる。右向き（見る人から見て）は (nz, -nx)
           const cx = it.x + nx * 0.5, cz = it.z + nz * 0.5;
           const rx = nz * (CARD_W / 2), rz = -nx * (CARD_W / 2);
@@ -3367,10 +3372,19 @@ export function VenueView() {
       if (now - e.scan > 300 && e.pend.length) {
         e.scan = now;
         const online = navigator.onLine && !atVenue.current; // 会場では、印のないサークルの画像は読まない
+        // 見えている札から読む：こちらを向いている札（島の向こう側を向いた札は見えない）・前にある札を先に。
+        // 距離だけで決めると、すぐ近くの向かいの列より、背中合わせの机の札や後ろの札が先になることがあった
+        const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
         const near = e.pend
-          .map((p) => ({ p, d: Math.hypot(p.x - cp.x, p.z - cp.z) }))
+          .map((p) => {
+            const d = Math.hypot(p.x - cp.x, p.z - cp.z);
+            const vx = cp.x - p.x, vz = cp.z - p.z;
+            const away = p.nx * vx + p.nz * vz < 0; // 札の表が、立っている所と反対を向いている
+            const behind = d > 2 && (-vx * fx - vz * fz) / d < -0.2;
+            return { p, d, k: d + (away ? 30 : 0) + (behind ? 12 : 0) };
+          })
           .filter(({ p, d }) => d <= IMG_NEAR && (online || markedImgs.current.has(p.src)) && now - (cardFail.get(p.src) ?? -1e9) > 30_000)
-          .sort((a, b) => a.d - b.d);
+          .sort((a, b) => a.k - b.k);
         for (const { p } of near) {
           if (cardImgs.get(p.src) === undefined && cardLoadQueue.length >= 12) break;
           e.pend.splice(e.pend.indexOf(p), 1);
@@ -3405,8 +3419,11 @@ export function VenueView() {
         first.dirty = false;
         first.mesh.visible = true;
       }
-      if (now - lastCardUpload < 400) return;
-      const d = e.sheets.find((sh) => sh.dirty && sh.sent && sh !== first);
+      // 画像が読めたシートは、いちばん長く待っているものから送る（前は番号の若いシートから送っていたので、
+      // そのシートに画像が次々に届くあいだ、ほかのシート（向かいの列など）が後回しになっていた）
+      if (now - lastCardUpload < 250) return;
+      let d: Sheet | undefined;
+      for (const sh of e.sheets) if (sh.dirty && sh.sent && sh !== first && (!d || sh.dirtyAt < d.dirtyAt)) d = sh;
       if (d) {
         d.tex.needsUpdate = true;
         d.dirty = false;
