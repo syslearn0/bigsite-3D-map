@@ -19,7 +19,7 @@ type Mine = { id: number; day: Day; codes: string[]; name: string; works: string
 const statusText = (s: Mine["status"], published: boolean) =>
   s === "rejected" ? "作者が止めています（地図に出ていません）" : published ? "地図に出ています" : "受け付けました（地図に出るのは、作者がサークルの登録の公開を始めてから）";
 type Res = { circles: Mine[]; published: boolean };
-const MAX_IMG = 380_000;
+const MAX_IMG = 950_000;
 // 画像は 3 枚まで。1 枚目が地図の机（歩いて見るときの札・机を押したとき）に出る
 const MAX_PICS = 3;
 // 並べた画像：いま登録してある n 枚目（keep）か、新しく選んだ画像
@@ -29,7 +29,8 @@ const split = (s: string) => [...new Set(s.split(/[,、，\n]+/).map((x) => x.tr
 
 const CODE_RE = /^[東西南]\S{1,4}-\d{2}[ab]$/u;
 
-// 画像を小さくする（長い辺 800px・webp。webp で書けないブラウザは jpeg）。380KB を超えるときは画質を下げる。
+// 画像を小さくする（長い辺 1600px・webp。webp で書けないブラウザは jpeg）。950KB を超えるときは画質を下げる
+// （机を押して広げたときに指で拡大して、お品書きの小さい文字も読めるように）。
 // あわせて、歩くときの机の札に出す小さい画像（160px の正方形。1 枚 5〜10KB）も作る
 async function shrink(file: File): Promise<{ image: string; thumb: string }> {
   const bmp = await createImageBitmap(file);
@@ -39,7 +40,7 @@ async function shrink(file: File): Promise<{ image: string; thumb: string }> {
   t.getContext("2d")!.drawImage(bmp, (T - bmp.width * k) / 2, (T - bmp.height * k) / 2, bmp.width * k, bmp.height * k);
   let thumb = t.toDataURL("image/webp", 0.72);
   if (!thumb.startsWith("data:image/webp")) thumb = t.toDataURL("image/jpeg", 0.72);
-  const scale = Math.min(1, 800 / Math.max(bmp.width, bmp.height));
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
   const c = document.createElement("canvas");
   c.width = Math.round(bmp.width * scale);
   c.height = Math.round(bmp.height * scale);

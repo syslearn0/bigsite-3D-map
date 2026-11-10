@@ -4,7 +4,7 @@
 // GET：自分の登録の一覧。
 // 同じ人は短い間に何度も送れない（rate_limit）。新しい登録・変更は作者にメールで知らせる。
 // POST {days: [{day, codes[]}]（いくつかの日をまとめて。前の形の day・codes も読む）, drop?: [day]（取り消す日）, name, works[], chars{}, x, url,
-//   images?: 3 つまで。それぞれ {data（data:image/webp;base64,… 400KB まで）, thumb?（机の札に出す小さい画像。40KB・400px まで）} か
+//   images?: 3 つまで。それぞれ {data（data:image/webp;base64,… 1MB まで・長い辺 2000px まで）, thumb?（机の札に出す小さい画像。40KB・400px まで）} か
 //   {keep: n}（いま登録してある n 枚目、0 から）。並べた順に入れ、1 枚目が地図の机に出る。images がなければ画像は今のまま
 //   （前の形の image?・thumb?・removeImage? も読む）}
 //   サークル名・作品・画像などは、送った日すべてに同じものを入れる
@@ -116,7 +116,7 @@ foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $img) {
 $readImg = function (string $data, bool $small): ?array {
   if (!preg_match('#^data:image/(webp|jpeg|png);base64,([A-Za-z0-9+/=]+)$#', $data, $m)) return null;
   $bin = base64_decode($m[2], true);
-  if ($bin === false || strlen($bin) > ($small ? 40000 : 400000)) return null;
+  if ($bin === false || strlen($bin) > ($small ? 40000 : 1000000)) return null;
   $info = @getimagesizefromstring($bin);
   $lim = $small ? 400 : 2000;
   if (!$info || $info[0] > $lim || $info[1] > $lim) return null;
@@ -148,7 +148,7 @@ if ($items !== null) {
       continue;
     }
     $big = $readImg((string)($it['data'] ?? ''), false);
-    if (!$big) fail('画像が読めないか、大きすぎます（webp・jpeg・png で 400KB まで）');
+    if (!$big) fail('画像が読めないか、大きすぎます（webp・jpeg・png で 1MB まで）');
     // 小さい画像（なくてもよい。そのときは地図が大きい画像を使う）
     $small = !empty($it['thumb']) ? $readImg((string)$it['thumb'], true) : null;
     $imgs[] = [$big[0], $big[1], $small[0] ?? null, $small[1] ?? null];

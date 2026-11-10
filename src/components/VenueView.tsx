@@ -15,6 +15,7 @@ import { charsText, DAYS, loadTags, TAGS_KEY, workColor, worksOf, type Day, type
 import { sampleTags } from "@/lib/sample-tags";
 import { fillSampleCircles, imgUrl } from "@/lib/sample-circles";
 import Tour, { type TourStep } from "./Tour";
+import { ZoomImg } from "./ZoomImg";
 import { AccountBox } from "./AccountBox";
 import { flatten, unflatten, useAccountSync } from "@/lib/sync";
 import { DOOR_H, DOOR_W, edgeGaps, edgeShared, type WallOpening } from "@/lib/walls";
@@ -4216,12 +4217,12 @@ export function VenueView() {
           style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
         >
           <div
-            // 画像が何枚かあるときは、画像の上を押しても閉じない（前・次のボタンを押しそこねて閉じないように）
-            onClick={(e) => popImg.images.length > 1 && e.stopPropagation()}
+            // 画像の上を押しても閉じない（指で拡大するとき・前・次のボタンを押しそこねたときに閉じないように）
+            onClick={(e) => e.stopPropagation()}
             style={{ background: "var(--card)", borderRadius: 14, padding: 10, boxShadow: "0 6px 24px rgba(0,0,0,.35)", textAlign: "center", maxWidth: "min(92vw, 520px)" }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={popImg.images[popImg.i]} alt="" style={{ display: "block", width: "min(80vw, 60vh, 500px)", height: "min(80vw, 60vh, 500px)", objectFit: "contain", borderRadius: 8, background: "#eee" }} />
+            {/* 指で拡大できる（画像を変えたら、元の大きさから） */}
+            <ZoomImg key={popImg.images[popImg.i]} src={popImg.images[popImg.i]} size="min(84vw, 62vh, 520px)" />
             {popImg.images.length > 1 && (
               <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, marginTop: 8 }}>
                 <button
@@ -4252,7 +4253,7 @@ export function VenueView() {
               </div>
             )}
             <div style={{ marginTop: 8, fontWeight: 700 }}>{popImg.name}</div>
-            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>{popImg.images.length > 1 ? "画像の外を押すと閉じます" : "押すと閉じます"}</div>
+            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>2 本の指で広げる（ダブルタップでも）と拡大できます。画像の外を押すと閉じます</div>
           </div>
         </div>
       )}
