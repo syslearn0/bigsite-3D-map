@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fold, search } from "../src/lib/search";
 import type { Circle } from "../src/lib/published";
 
-const circle: Circle = { day: 1, codes: ["東A-01a", "東A-01b"], name: "サンプル工房", works: ["ブルーアーカイブ"], chars: {}, x: "", url: "", image: "", thumb: "" };
+const circle: Circle = { day: 1, codes: ["東A-01a", "東A-01b"], name: "サンプル工房", works: ["ブルーアーカイブ"], chars: {}, x: "", url: "", image: "", images: [], thumb: "" };
 const codes = ["東A-01a", "東A-01b", "東A-02a", "東B-10a"];
 const tags = { "東A-01a": { works: ["ブルーアーカイブ"], chars: { ブルーアーカイブ: ["ホシノ"] } }, "東A-02a": { works: ["原神"] }, "東B-10a": { works: ["ブルーアーカイブ"] } };
 

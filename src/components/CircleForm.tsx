@@ -14,12 +14,17 @@ import { DAYS, type Day } from "@/lib/tags";
 import { EVENT } from "@/lib/event";
 import { AccountBox } from "./AccountBox";
 
-type Mine = { id: number; day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; hasImage: boolean; status: "pending" | "approved" | "rejected"; note: string; updatedAt: number };
+type Mine = { id: number; day: Day; codes: string[]; name: string; works: string[]; chars: Record<string, string[]>; x: string; url: string; hasImage: boolean; images?: number; status: "pending" | "approved" | "rejected"; note: string; updatedAt: number };
 // published：作者がサークルの登録を公開しているか（していないあいだは、受け付けても地図に出ない）
 const statusText = (s: Mine["status"], published: boolean) =>
   s === "rejected" ? "作者が止めています（地図に出ていません）" : published ? "地図に出ています" : "受け付けました（地図に出るのは、作者がサークルの登録の公開を始めてから）";
 type Res = { circles: Mine[]; published: boolean };
 const MAX_IMG = 380_000;
+// 画像は 3 枚まで。1 枚目が地図の机（歩いて見るときの札・机を押したとき）に出る
+const MAX_PICS = 3;
+// 並べた画像：いま登録してある n 枚目（keep）か、新しく選んだ画像
+type Pic = { keep: number } | { image: string; thumb: string };
+const picCount = (c?: Mine) => (c ? (c.images ?? (c.hasImage ? 1 : 0)) : 0);
 const split = (s: string) => [...new Set(s.split(/[,、，\n]+/).map((x) => x.trim()).filter(Boolean))];
 
 const CODE_RE = /^[東西南]\S{1,4}-\d{2}[ab]$/u;
@@ -59,8 +64,9 @@ export function CircleForm() {
   const [url, setUrl] = useState("");
   const [works, setWorks] = useState("");
   const [chars, setChars] = useState<Record<string, string>>({});
-  const [image, setImage] = useState<{ image: string; thumb: string } | null>(null); // 新しく選んだ画像（data URL。大・小）
-  const [removeImage, setRemoveImage] = useState(false);
+  // 画像の並び（3 枚まで）と、並びを変えたか（変えていなければ送らない。画像は今のまま）
+  const [pics, setPics] = useState<Pic[]>([]);
+  const [picsChanged, setPicsChanged] = useState(false);
   const [agree, setAgree] = useState(false);
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -89,8 +95,13 @@ export function CircleForm() {
     setUrl(m?.url ?? "");
     setWorks(m ? m.works.join("、") : "");
     setChars(m ? Object.fromEntries(Object.entries(m.chars).map(([w, l]) => [w, l.join("、")])) : {});
-    setImage(null);
-    setRemoveImage(false);
+    const cur = list.find((c) => picCount(c) > 0);
+    setPics(Array.from({ length: picCount(cur) }, (_, n) => ({ keep: n })));
+    setPicsChanged(false);
+  };
+  const changePics = (f: (p: Pic[]) => Pic[]) => {
+    setPics((p) => f(p).slice(0, MAX_PICS));
+    setPicsChanged(true);
   };
   useEffect(() => {
     if (!acct.me) return;
@@ -109,7 +120,7 @@ export function CircleForm() {
     return { list, bad: list.filter((c) => !CODE_RE.test(c)), unknown: list.filter((c) => CODE_RE.test(c) && !known.set.has(c)) };
   };
   // 画像を見せる登録（どの日も同じ画像なので、画像のある最初の日）
-  const current = mine.find((c) => c.hasImage) ?? mine[0];
+  const current = mine.find((c) => picCount(c) > 0) ?? mine[0];
   const dropped = mine.filter((c) => !days.includes(c.day)); // 前は出ると登録していたが、外した日
   const stoppedDays = mine.filter((c) => c.status === "rejected").map((c) => c.day); // 作者が止めた日（取り消せない）
   const workList = split(works);
@@ -138,9 +149,8 @@ export function CircleForm() {
           url: url.trim(),
           works: workList,
           chars: Object.fromEntries(workList.map((w) => [w, split(chars[w] ?? "")]).filter(([, l]) => l.length)),
-          image: image?.image,
-          thumb: image?.thumb,
-          removeImage,
+          // 並びを変えたときだけ送る（{keep: n} はいまの n 枚目のまま）
+          images: picsChanged ? pics.map((p) => ("keep" in p ? { keep: p.keep } : { data: p.image, thumb: p.thumb })) : undefined,
         },
       });
       setMine(r.circles);
@@ -201,7 +211,7 @@ export function CircleForm() {
         <Link href="/">地図へ</Link>
       </p>
       <p>
-        サークルの方が、配置番号・サークル名・作品・画像を入れると、すぐにこの 3D マップの机に出ます（机を押したときと、歩いて見るときに近くの机の上）。
+        サークルの方が、配置番号・サークル名・作品・画像（3 枚まで）を入れると、すぐにこの 3D マップの机に出ます（机を押したときと、歩いて見るときに近くの机の上）。
         いくつかの日に出る方は、出る日をすべて選んで、日ごとの配置番号を入れてください（まとめて 1 回で登録できます）。
       </p>
       <p style={{ color: "var(--muted)", fontSize: ".85rem" }}>
@@ -298,45 +308,57 @@ export function CircleForm() {
               ))}
 
               <label className="field">
-                画像 <small>任意・サークルカットなど。正方形に近いものが見やすいです（小さくしてから送ります）</small>
+                画像 <small>任意・3 枚まで（サークルカット・お品書きなど）。小さくしてから送ります</small>
               </label>
-              <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
-                {image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={image.image} alt="選んだ画像" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
-                ) : current?.hasImage && !removeImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={`/api/image.php?id=${current.id}&t=${current.updatedAt}`} alt="登録した画像" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
-                ) : null}
-                <label className="chip" style={{ cursor: "pointer" }}>
-                  画像を選ぶ
-                  <input
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    onChange={async (e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = "";
-                      if (!f) return;
-                      try {
-                        setImage(await shrink(f));
-                        setRemoveImage(false);
-                      } catch (err) {
-                        setMsg({ text: err instanceof Error ? err.message : "画像を読めませんでした", err: true });
-                      }
-                    }}
-                  />
-                </label>
-                {(image || (current?.hasImage && !removeImage)) && (
-                  <button
-                    className="chip"
-                    onClick={() => {
-                      setImage(null);
-                      setRemoveImage(!!current?.hasImage);
-                    }}
-                  >
-                    画像を外す
-                  </button>
+              <p style={{ fontSize: ".85rem", margin: "2px 0 6px" }}>
+                <b>地図の机に出るのは 1 枚目</b>だけです（歩いて見るときの机の札と、机を押したとき）。机を押したときは、2 枚目・3 枚目も順に見られます。1 枚目は正方形に近いものが見やすいです。
+              </p>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 4, flexWrap: "wrap" }}>
+                {pics.map((p, i) => (
+                  <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={"keep" in p ? `/api/image.php?id=${current?.id}&n=${p.keep}&t=${current?.updatedAt}` : p.image}
+                      alt={`${i + 1} 枚目`}
+                      style={{ width: 110, height: 110, objectFit: "cover", borderRadius: 8, outline: i === 0 ? "3px solid var(--accent, #2b6de8)" : "none" }}
+                    />
+                    <small style={{ fontWeight: i === 0 ? 700 : 400 }}>{i === 0 ? "1 枚目（地図に出る）" : `${i + 1} 枚目`}</small>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {i > 0 && (
+                        <button className="chip small" aria-label={`${i + 1} 枚目を前へ`} onClick={() => changePics((l) => [...l.slice(0, i - 1), l[i], l[i - 1], ...l.slice(i + 1)])}>
+                          ← 前へ
+                        </button>
+                      )}
+                      <button className="chip small" aria-label={`${i + 1} 枚目を外す`} onClick={() => changePics((l) => l.filter((_, k) => k !== i))}>
+                        外す
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {pics.length < MAX_PICS && (
+                  <label className="chip" style={{ cursor: "pointer", alignSelf: "center" }}>
+                    {pics.length ? `画像を足す（あと ${MAX_PICS - pics.length} 枚）` : "画像を選ぶ"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      hidden
+                      onChange={async (e) => {
+                        const fs = [...(e.target.files ?? [])];
+                        e.target.value = "";
+                        if (!fs.length) return;
+                        const room = MAX_PICS - pics.length;
+                        if (fs.length > room) setMsg({ text: `画像は ${MAX_PICS} 枚までなので、はじめの ${room} 枚だけ入れました`, err: true });
+                        try {
+                          const added: Pic[] = [];
+                          for (const f of fs.slice(0, room)) added.push(await shrink(f));
+                          changePics((l) => [...l, ...added]);
+                        } catch (err) {
+                          setMsg({ text: err instanceof Error ? err.message : "画像を読めませんでした", err: true });
+                        }
+                      }}
+                    />
+                  </label>
                 )}
               </div>
 
@@ -384,6 +406,7 @@ export function CircleForm() {
         </a>
         ）。<br />
         <b>消したいときは？</b> この画面の「登録をすべて取り消す」で消せます。1 日だけ消すときは、その日の選択を外して「変更を送る」を押してください。地図からもすぐに消えます（作者が止めた登録は、作者に連絡してください）。<br />
+        <b>画像は何枚まで登録できますか？</b> 3 枚までです。地図の机（歩いて見るときの札・机を押したとき）に出るのは 1 枚目です。机を押したときは、2 枚目・3 枚目も順に見られます。並びは「← 前へ」で変えられます。<br />
         <b>「短いあいだに何度も送られています」と出ました。</b> いたずらを防ぐため、送れるのは 1 分に 3 回・1 時間に 15 回までです。少し待ってから送ってください。
       </p>
       <p style={{ fontSize: ".85rem" }}>

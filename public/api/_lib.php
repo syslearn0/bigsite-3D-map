@@ -51,7 +51,7 @@ function db(): PDO {
 
 // 表がなければ作る（はじめての呼び出しのとき）
 function migrate(PDO $pdo): void {
-  $v = 4;
+  $v = 5;
   $f = private_dir() . '/schema-version';
   if (is_file($f) && (int)file_get_contents($f) >= $v) return;
   $pdo->exec("CREATE TABLE IF NOT EXISTS users (
@@ -131,6 +131,8 @@ function migrate(PDO $pdo): void {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
   // 作品 10 × キャラ 30 が入るように（TEXT の 64KB をこえることがある）
   $pdo->exec("ALTER TABLE circles MODIFY chars MEDIUMTEXT NOT NULL");
+  // 画像は 3 枚まで（ファイル名を「,」でつなぐ。1 枚目が地図の机に出る画像）
+  $pdo->exec("ALTER TABLE circles MODIFY image VARCHAR(300) NOT NULL DEFAULT ''");
   file_put_contents($f, (string)$v);
 }
 
@@ -226,22 +228,24 @@ function write_circles_json(PDO $pdo, bool $force = false): void {
   $list = [];
   // 止めた登録と、止めた人（banned）の登録は出さない
   foreach ($pdo->query("SELECT c.* FROM circles c JOIN users u ON u.id = c.user_id WHERE c.status <> 'rejected' AND u.role <> 'banned' ORDER BY c.day, c.id") as $r) {
-    $img = '';
+    // 画像（3 枚まで）。1 枚目とその小さい画像が、地図の机に出る
+    $imgs = [];
     $thumb = '';
-    $src = private_dir() . '/circles/' . basename($r['image']);
-    if ($r['image'] !== '' && is_file($src)) {
-      $img = basename($r['image']);
+    foreach (img_list($r['image']) as $img) {
+      $src = private_dir() . '/circles/' . $img;
+      if (!is_file($src)) continue;
       if (!is_file("$imgDir/$img")) copy($src, "$imgDir/$img");
       $keep[] = $img;
+      $imgs[] = "/data/circles/$img";
       $ts = find_thumb(private_dir() . '/circles', $img);
-      if ($ts !== '') {
+      if ($ts !== '' && count($imgs) === 1) {
         $thumb = basename($ts);
         if (!is_file("$imgDir/$thumb")) copy($ts, "$imgDir/$thumb");
         $keep[] = $thumb;
       }
     }
     $list[] = ['day' => (int)$r['day'], 'codes' => json_decode($r['codes'], true), 'name' => $r['name'], 'works' => json_decode($r['works'], true),
-      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $img ? "/data/circles/$img" : '',
+      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'image' => $imgs[0] ?? '', 'images' => $imgs,
       'thumb' => $thumb ? "/data/circles/$thumb" : ''];
   }
   foreach (glob("$imgDir/*") ?: [] as $f) if (!in_array(basename($f), $keep, true)) @unlink($f);
@@ -259,13 +263,18 @@ function find_thumb(string $dir, string $image): string {
   return '';
 }
 
-// 1 件のサークル登録の画像を消す（手元の分と、公開した分。小さい画像も）
+// circles.image に入っている画像のファイル名（3 枚まで。「,」でつないである。前の 1 枚だけの形も同じに読める）
+function img_list(string $s): array {
+  return array_values(array_filter(array_map('basename', explode(',', $s)), fn($x) => $x !== '' && $x !== '.'));
+}
+
+// 1 件のサークル登録の画像を消す（手元の分と、公開した分。小さい画像も。3 枚とも）
 function remove_circle_image(string $image): void {
-  if ($image === '') return;
-  foreach ([private_dir() . '/circles', site_dir() . '/data/circles'] as $dir) {
-    @unlink("$dir/" . basename($image));
-    foreach (['webp', 'jpg', 'png'] as $e) @unlink("$dir/" . thumb_name($image, $e));
-  }
+  foreach (img_list($image) as $img)
+    foreach ([private_dir() . '/circles', site_dir() . '/data/circles'] as $dir) {
+      @unlink("$dir/$img");
+      foreach (['webp', 'jpg', 'png'] as $e) @unlink("$dir/" . thumb_name($img, $e));
+    }
 }
 
 function is_admin_email(string $email): bool {

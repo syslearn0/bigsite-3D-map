@@ -64,6 +64,6 @@ export function fillSampleCircles(out: CirclesByDay, booths: { code: string }[])
       const h = hash(`${day}:${b.code}:circle`);
       if (h % 10 === 0) continue;
       const name = HEAD[h % HEAD.length] + TAIL[(h >>> 8) % TAIL.length];
-      out[day][b.code] = { day, codes: [b.code], name, works: [], chars: {}, x: "", url: "", image: `sample:${h}`, thumb: "" };
+      out[day][b.code] = { day, codes: [b.code], name, works: [], chars: {}, x: "", url: "", image: `sample:${h}`, images: [`sample:${h}`], thumb: "" };
     }
 }

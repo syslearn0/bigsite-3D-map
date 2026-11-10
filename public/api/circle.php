@@ -4,7 +4,9 @@
 // GET：自分の登録の一覧。
 // 同じ人は短い間に何度も送れない（rate_limit）。新しい登録・変更は作者にメールで知らせる。
 // POST {days: [{day, codes[]}]（いくつかの日をまとめて。前の形の day・codes も読む）, drop?: [day]（取り消す日）, name, works[], chars{}, x, url,
-//   image?（data:image/webp;base64,… 400KB まで）, thumb?（机の札に出す小さい画像。40KB・400px まで）, removeImage?}
+//   images?: 3 つまで。それぞれ {data（data:image/webp;base64,… 400KB まで）, thumb?（机の札に出す小さい画像。40KB・400px まで）} か
+//   {keep: n}（いま登録してある n 枚目、0 から）。並べた順に入れ、1 枚目が地図の机に出る。images がなければ画像は今のまま
+//   （前の形の image?・thumb?・removeImage? も読む）}
 //   サークル名・作品・画像などは、送った日すべてに同じものを入れる
 // DELETE ?day=1：その日の登録を取り消す（?day=all：すべて）。作者が止めた登録は取り消せない（取り消して出しなおすのを防ぐ）
 require __DIR__ . '/_lib.php';
@@ -22,7 +24,8 @@ function mine(PDO $pdo, int $uid): array {
   $out = [];
   foreach ($st as $r) {
     $out[] = ['id' => (int)$r['id'], 'day' => (int)$r['day'], 'codes' => json_decode($r['codes'], true), 'name' => $r['name'], 'works' => json_decode($r['works'], true),
-      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'hasImage' => $r['image'] !== '', 'status' => $r['status'], 'note' => $r['note'], 'updatedAt' => (int)$r['updated_at']];
+      'chars' => json_decode($r['chars'], true), 'x' => $r['x_account'], 'url' => $r['url'], 'hasImage' => $r['image'] !== '', 'images' => count(img_list($r['image'])),
+      'status' => $r['status'], 'note' => $r['note'], 'updatedAt' => (int)$r['updated_at']];
   }
   return $out;
 }
@@ -92,38 +95,77 @@ foreach ($days as $day => $codes) {
   foreach ($st as $r) foreach (json_decode($r['codes'], true) ?: [] as $c) if (in_array($c, $codes, true)) fail("{$day}日目の {$c} は、ほかの人が登録しています。間違いのときは作者に連絡してください", 409);
 }
 
-// 新しい画像（送った日すべてに、それぞれ別のファイルとして置く。日ごとの取り消しで、ほかの日の画像が消えないように）
-$bin = null;
-$ext = null;
-$tb = null;
-$text = null;
-if (!empty($b['image'])) {
-  if (!preg_match('#^data:image/(webp|jpeg|png);base64,([A-Za-z0-9+/=]+)$#', (string)$b['image'], $m)) fail('画像の形が読めません');
-  $bin = base64_decode($m[2], true);
-  if ($bin === false || strlen($bin) > 400000) fail('画像が大きすぎます');
-  $info = @getimagesizefromstring($bin);
-  if (!$info || $info[0] > 2000 || $info[1] > 2000) fail('画像が読めません');
-  // 拡張子は、送られてきた名のりではなく、画像の中身の形から決める
-  $ext = ['image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/png' => 'png'][$info['mime'] ?? ''] ?? null;
-  if (!$ext) fail('webp・jpeg・png の画像にしてください');
-  // 小さい画像（なくてもよい。そのときは地図が大きい画像を使う）
-  if (!empty($b['thumb']) && preg_match('#^data:image/(webp|jpeg|png);base64,([A-Za-z0-9+/=]+)$#', (string)$b['thumb'], $m)) {
-    $t = base64_decode($m[2], true);
-    $ti = $t === false ? false : @getimagesizefromstring($t);
-    $te = $ti ? (['image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/png' => 'png'][$ti['mime'] ?? ''] ?? null) : null;
-    if ($te && strlen($t) <= 40000 && $ti[0] <= 400 && $ti[1] <= 400) [$tb, $text] = [$t, $te];
-  }
-}
+// 画像（3 枚まで）。送った日すべてに、それぞれ別のファイルとして置く（日ごとの取り消しで、ほかの日の画像が消えないように）
+const MAX_IMAGES = 3;
 $dir = private_dir() . '/circles';
 if (!is_dir($dir)) mkdir($dir, 0700, true);
 // 名前は乱数だけ（だれの画像か分からないように）
 $newName = fn(string $e): string => bin2hex(random_bytes(12)) . '.' . $e;
-
-// 画像を選びなおさずに新しい日を足したときは、ほかの日の画像を写す（取り消す日の画像からも写せるよう、取り消す前に選ぶ）
+// いま登録してある画像（どの日も同じなので、画像のある最初の日の分）。取り消す日の分からも使えるよう、取り消す前に読む
 $st = $pdo->prepare('SELECT image FROM circles WHERE user_id = ? ORDER BY day');
 $st->execute([$u['id']]);
-$copyFrom = '';
-foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $img) if ($img !== '' && is_file("$dir/" . basename($img))) { $copyFrom = basename($img); break; }
+$srcList = [];
+foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $img) {
+  $l = array_values(array_filter(img_list($img), fn($f) => is_file("$dir/$f")));
+  if ($l) {
+    $srcList = $l;
+    break;
+  }
+}
+// 送られた画像の中身を読む（[中身, 形]。読めない・大きすぎるときは null）
+$readImg = function (string $data, bool $small): ?array {
+  if (!preg_match('#^data:image/(webp|jpeg|png);base64,([A-Za-z0-9+/=]+)$#', $data, $m)) return null;
+  $bin = base64_decode($m[2], true);
+  if ($bin === false || strlen($bin) > ($small ? 40000 : 400000)) return null;
+  $info = @getimagesizefromstring($bin);
+  $lim = $small ? 400 : 2000;
+  if (!$info || $info[0] > $lim || $info[1] > $lim) return null;
+  // 拡張子は、送られてきた名のりではなく、画像の中身の形から決める
+  $ext = ['image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/png' => 'png'][$info['mime'] ?? ''] ?? null;
+  return $ext ? [$bin, $ext] : null;
+};
+// いま登録してある画像を、ファイルから読む（[大きい画像, 形, 小さい画像|null, 形|null]）
+$readOld = function (string $f) use ($dir): array {
+  $ts = find_thumb($dir, $f);
+  return [file_get_contents("$dir/$f"), pathinfo($f, PATHINFO_EXTENSION), $ts !== '' ? file_get_contents($ts) : null, $ts !== '' ? pathinfo($ts, PATHINFO_EXTENSION) : null];
+};
+// $imgs：新しく入れる画像の並び。null なら画像は今のまま
+$imgs = null;
+$items = null;
+if (is_array($b['images'] ?? null)) $items = $b['images'];
+elseif (!empty($b['image'])) $items = [['data' => $b['image'], 'thumb' => $b['thumb'] ?? '']];
+elseif (!empty($b['removeImage'])) $items = [];
+if ($items !== null) {
+  if (count($items) > MAX_IMAGES) fail('画像は ' . MAX_IMAGES . ' 枚までです');
+  $imgs = [];
+  foreach ($items as $it) {
+    if (!is_array($it)) fail('画像の形が読めません');
+    if (array_key_exists('keep', $it)) {
+      $f = $srcList[(int)$it['keep']] ?? null;
+      if ($f === null) fail('前の画像が見つかりません。画像を選びなおしてください');
+      $imgs[] = $readOld($f);
+      continue;
+    }
+    $big = $readImg((string)($it['data'] ?? ''), false);
+    if (!$big) fail('画像が読めないか、大きすぎます（webp・jpeg・png で 400KB まで）');
+    // 小さい画像（なくてもよい。そのときは地図が大きい画像を使う）
+    $small = !empty($it['thumb']) ? $readImg((string)$it['thumb'], true) : null;
+    $imgs[] = [$big[0], $big[1], $small[0] ?? null, $small[1] ?? null];
+  }
+}
+// 画像を置いて、ファイル名を「,」でつないで返す
+$putImgs = function (array $list) use ($dir, $newName): string {
+  $names = [];
+  foreach ($list as [$bin, $ext, $tb, $text]) {
+    $n = $newName($ext);
+    file_put_contents("$dir/$n", $bin);
+    if ($tb !== null) file_put_contents("$dir/" . thumb_name($n, $text), $tb);
+    $names[] = $n;
+  }
+  return implode(',', $names);
+};
+// 画像を選びなおさずに新しい日を足したときは、いま登録してある画像を写す
+$copyImgs = $imgs === null && $srcList ? array_map($readOld, $srcList) : null;
 // 取り消す日（止めた登録なら、ここで断る。まだ何も書いていない）。画像は、写し終わってから消す
 $pdo->beginTransaction();
 $droppedImages = drop_days($pdo, (int)$u['id'], $drop, true);
@@ -139,19 +181,12 @@ $stopped = (bool)$st->fetchColumn();
 foreach ($days as $day => $codes) {
   $old = $olds[$day] ?? null;
   $image = $old['image'] ?? '';
-  if ($bin !== null) {
-    remove_circle_image($image);
-    $image = $newName($ext);
-    file_put_contents("$dir/$image", $bin);
-    if ($tb !== null) file_put_contents("$dir/" . thumb_name($image, $text), $tb);
-  } elseif (!empty($b['removeImage'])) {
-    remove_circle_image($image);
-    $image = '';
-  } elseif ($image === '' && $copyFrom !== '') {
-    $image = $newName(pathinfo($copyFrom, PATHINFO_EXTENSION));
-    copy("$dir/$copyFrom", "$dir/$image");
-    $ts = find_thumb($dir, $copyFrom);
-    if ($ts !== '') copy($ts, "$dir/" . thumb_name($image, pathinfo($ts, PATHINFO_EXTENSION)));
+  if ($imgs !== null) {
+    // 古い画像は、書き終わってから消す
+    if ($image !== '') $droppedImages[] = $image;
+    $image = $putImgs($imgs);
+  } elseif ($image === '' && $copyImgs) {
+    $image = $putImgs($copyImgs);
   }
   // 確認なしで地図に出す。作者が止めた（rejected）登録は、送りなおしても止めたまま
   $status = ($old['status'] ?? '') === 'rejected' || (!$old && $stopped) ? 'rejected' : 'approved';
@@ -179,7 +214,7 @@ notify_admin(
   ($works ? '作品：' . implode('・', $works) . "\n" : '') .
   ($x !== '' ? "X：@{$x}\n" : '') .
   ($url !== '' ? "URL：{$url}\n" : '') .
-  ($bin !== null ? "画像：新しい画像あり\n" : '') .
+  ($imgs !== null ? '画像：' . count($imgs) . " 枚（選びなおした）\n" : '') .
   ($stopped ? "（この人は前に止めたことがあるので、止めたままにしました）\n" : '') .
   ($published() ? '地図にすぐ出ています。' : 'サークルの登録の公開が止まっているので、地図にはまだ出ていません。') . "\n" .
   "確認・止める：https://sokubai3d.textetc.net/admin/\n"

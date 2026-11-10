@@ -543,13 +543,15 @@ export function VenueView() {
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; day: Day; total: number; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string; budget: number }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  // 机を押したとき、そのサークルが登録した画像があれば、画面のまん中に大きく出す（どの見方でも。ユーザーの指示）
-  const [popImg, setPopImg] = useState<{ image: string; name: string } | null>(null);
+  // 机を押したとき、そのサークルが登録した画像があれば、画面のまん中に大きく出す（どの見方でも。ユーザーの指示）。
+  // 画像が何枚かあれば（3 枚まで）、1 枚目から順に見られる
+  const [popImg, setPopImg] = useState<{ images: string[]; i: number; name: string } | null>(null);
   const onDeskTap = useRef<(i: number) => void>(() => {});
   useEffect(() => {
     onDeskTap.current = (i) => {
       const c = circles[day][booths[i].code];
-      setPopImg(c?.image ? { image: imgUrl(c.image), name: c.name } : null);
+      const list = c ? (c.images.length ? c.images : c.image ? [c.image] : []) : [];
+      setPopImg(c && list.length ? { images: list.map(imgUrl), i: 0, name: c.name } : null);
     };
   });
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
@@ -4198,11 +4200,44 @@ export function VenueView() {
           onClick={() => setPopImg(null)}
           style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
         >
-          <div style={{ background: "var(--card)", borderRadius: 14, padding: 10, boxShadow: "0 6px 24px rgba(0,0,0,.35)", textAlign: "center", maxWidth: "min(92vw, 520px)" }}>
+          <div
+            // 画像が何枚かあるときは、画像の上を押しても閉じない（前・次のボタンを押しそこねて閉じないように）
+            onClick={(e) => popImg.images.length > 1 && e.stopPropagation()}
+            style={{ background: "var(--card)", borderRadius: 14, padding: 10, boxShadow: "0 6px 24px rgba(0,0,0,.35)", textAlign: "center", maxWidth: "min(92vw, 520px)" }}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={popImg.image} alt="" style={{ display: "block", width: "min(80vw, 60vh, 500px)", height: "min(80vw, 60vh, 500px)", objectFit: "contain", borderRadius: 8, background: "#eee" }} />
+            <img src={popImg.images[popImg.i]} alt="" style={{ display: "block", width: "min(80vw, 60vh, 500px)", height: "min(80vw, 60vh, 500px)", objectFit: "contain", borderRadius: 8, background: "#eee" }} />
+            {popImg.images.length > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, marginTop: 8 }}>
+                <button
+                  className="chip"
+                  aria-label="前の画像"
+                  disabled={popImg.i === 0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPopImg({ ...popImg, i: popImg.i - 1 });
+                  }}
+                >
+                  ‹ 前
+                </button>
+                <span style={{ fontSize: ".9rem" }}>
+                  {popImg.i + 1} / {popImg.images.length}
+                </span>
+                <button
+                  className="chip"
+                  aria-label="次の画像"
+                  disabled={popImg.i === popImg.images.length - 1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPopImg({ ...popImg, i: popImg.i + 1 });
+                  }}
+                >
+                  次 ›
+                </button>
+              </div>
+            )}
             <div style={{ marginTop: 8, fontWeight: 700 }}>{popImg.name}</div>
-            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>押すと閉じます</div>
+            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>{popImg.images.length > 1 ? "画像の外を押すと閉じます" : "押すと閉じます"}</div>
           </div>
         </div>
       )}

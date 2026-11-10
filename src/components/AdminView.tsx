@@ -177,8 +177,22 @@ export function AdminView() {
               {circles.map((c) => (
                 <div key={c.id} style={{ display: "flex", gap: 12, padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: c.status === "rejected" ? "color-mix(in srgb, #888 16%, var(--card))" : "var(--card)" }}>
                   {c.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={`/api/image.php?id=${c.id}`} alt="" style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 6, flex: "none", background: "#eee" }} />
+                    // 画像（3 枚まで。1 枚目が地図に出る）
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: "none" }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`/api/image.php?id=${c.id}`} alt="" style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 6, background: "#eee" }} />
+                      {c.image.split(",").length > 1 && (
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {c.image
+                            .split(",")
+                            .slice(1)
+                            .map((_, n) => (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img key={n} src={`/api/image.php?id=${c.id}&n=${n + 1}`} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 4, background: "#eee" }} />
+                            ))}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div style={{ width: 96, height: 96, borderRadius: 6, background: "#eee", flex: "none", display: "grid", placeItems: "center", color: "var(--muted)", fontSize: ".8rem" }}>
                       画像なし
