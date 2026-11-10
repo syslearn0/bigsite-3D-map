@@ -740,16 +740,23 @@ export function VenueView() {
   // トイレ・救護室までの道（D-3）。いまいる所（位置）・歩いている所・選んだ机のどれかから
   const [route, setRoute] = useState<{ to: "toilet" | "aid"; length: number; from: string } | { error: string } | null>(null);
   const [routeMenu, setRouteMenu] = useState(false);
+  // 机も選んでいない・位置も使えないときに押した：次に押した机から、その道を出す（ユーザーの指示）
+  const [routeWait, setRouteWait] = useState<"toilet" | "aid" | null>(null);
   const navGrids = useRef(new Map<number, Grid>());
   const lastMe = useRef<XZ | null>(null);
   // 会場にいる（「現在地」をオンにしていて、どこかのホールから 300m 以内）。会場では、歩くときの札の画像を読まない
   // （ユーザーの指示：目の前に本物の机があるので要らない。混んだ電波も使わない）。印のサークルの画像は端末にあるので出す
   const atVenue = useRef(false);
-  const findRoute = (to: "toilet" | "aid") => {
+  // at：この机から（待っているあいだに押した机）
+  const findRoute = (to: "toilet" | "aid", at?: number) => {
     setRouteMenu(false);
     let from: XZ | null = null, level = 1, fromName = "";
     const walkAt = api.current?.walkPos() ?? null;
-    if (locOn && lastMe.current && loc?.where.hall) {
+    if (at !== undefined) {
+      from = booths[at].at;
+      level = hallById.get(booths[at].hall)!.level;
+      fromName = booths[at].code;
+    } else if (locOn && lastMe.current && loc?.where.hall) {
       from = lastMe.current;
       level = loc.where.hall.level; // いまいる（近い）ホールの階
       fromName = "いまいる所";
@@ -764,9 +771,11 @@ export function VenueView() {
       fromName = b.code;
     }
     if (!from) {
-      setRoute({ error: "机を選ぶか、「いまいる所」をオンにしてから押してください" });
+      setRouteWait(to);
+      setRoute({ error: `いまいる所の近くの机を押してください。そこから${to === "toilet" ? "いちばん近いトイレ" : "救護室"}までの道を出します` });
       return;
     }
+    setRouteWait(null);
     if (!navGrids.current.has(level))
       navGrids.current.set(
         level,
@@ -786,7 +795,15 @@ export function VenueView() {
   const clearRoute = () => {
     api.current?.showRoute(null, 1);
     setRoute(null);
+    setRouteWait(null);
   };
+  // 待っているあいだに机を押した（検索で選んだときも）：その机から道を出す
+  const onSelectBooth = useRef<(i: number) => void>(() => {});
+  useEffect(() => {
+    onSelectBooth.current = (i) => {
+      if (routeWait) findRoute(routeWait, i);
+    };
+  });
   const navGrid = (level: number) => {
     if (!navGrids.current.has(level))
       navGrids.current.set(level, buildGrid(venue as unknown as NavVenue, level, booths.filter((b) => hallById.get(b.hall)!.level === level).map((b) => b.at)));
@@ -2774,6 +2791,7 @@ export function VenueView() {
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
       setSelected(i);
+      onSelectBooth.current(i);
       setPickLine(booths[i].line);
       setPickNum(booths[i].num);
       setPickHalf(booths[i].half);
@@ -3951,6 +3969,7 @@ export function VenueView() {
   const select = useCallback(
     (i: number) => {
       setSelected(i);
+      onSelectBooth.current(i);
       const lv = hallById.get(booths[i].hall)!.level;
       setFloor(floorOf(lv));
       api.current?.focusBooth(i);
