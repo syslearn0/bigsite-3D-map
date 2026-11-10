@@ -565,3 +565,33 @@ table.admin td {
 a {
   color: var(--accent);
 }
+
+/* サークルの画像を全画面で見るとき：まわりを暗くして、画像をぽんと出す */
+@keyframes lb-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lb-pop {
+  0% { opacity: 0; transform: scale(0.82); }
+  70% { opacity: 1; transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.lb-fade { animation: lb-fade 0.18s ease-out; }
+.lb-pop { animation: lb-pop 0.24s ease-out; }
+.lb-btn {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  width: 44px;
+  height: 44px;
+  font-size: 1.4rem;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.lb-btn:disabled { opacity: 0.25; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .lb-fade, .lb-pop { animation: none; }
+}

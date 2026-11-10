@@ -486,13 +486,17 @@ const VENUE_BOX = (() => {
   return b;
 })();
 
-function CircleCard({ c }: { c: Circle }) {
+// 机を選んだときの下の欄の、サークルの情報。onOpen：画像を全画面で見る（「画像を見る」・小さい画像を押したとき）
+function CircleCard({ c, onOpen }: { c: Circle; onOpen: () => void }) {
+  const count = c.images.length || (c.image ? 1 : 0);
   return (
     <div style={{ display: "flex", gap: 10, marginTop: 8, alignItems: "center" }}>
       {c.image && (
-        // 64px で出すので、小さい画像（160px）を使う（なければ大きい画像）。大きい画像は、机を押して広げたときだけ読む
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={imgUrl(c.thumb || c.image)} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: "#eee" }} />
+        <button onClick={onOpen} aria-label="画像を全画面で見る" style={{ padding: 0, border: 0, background: "none", flex: "none", cursor: "zoom-in", lineHeight: 0 }}>
+          {/* 64px で出すので、小さい画像（160px）を使う（なければ大きい画像）。大きい画像は、全画面で見るときだけ読む */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imgUrl(c.thumb || c.image)} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, background: "#eee" }} />
+        </button>
       )}
       <div style={{ minWidth: 0, fontSize: ".9rem" }}>
         <div style={{ fontWeight: 700 }}>{c.name}</div>
@@ -509,6 +513,11 @@ function CircleCard({ c }: { c: Circle }) {
           )}
         </div>
       </div>
+      {count > 0 && (
+        <button className="chip" style={{ marginLeft: "auto", flex: "none", minHeight: 40 }} onClick={onOpen}>
+          画像を見る{count > 1 ? `（${count} 枚）` : ""}
+        </button>
+      )}
     </div>
   );
 }
@@ -545,17 +554,26 @@ export function VenueView() {
   // 印刷するときの中身（ホールごとの絵と一覧）。作ったら印刷の画面を開き、閉じたら消す
   const [print, setPrint] = useState<{ made: string; day: Day; total: number; sections: { title: string; img: string; codes: { code: string; mark: Mark | null; hall: string; note: string; budget: number }[] }[] } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  // 机を押したとき、そのサークルが登録した画像があれば、画面のまん中に大きく出す（どの見方でも。ユーザーの指示）。
-  // 画像が何枚かあれば（3 枚まで）、1 枚目から順に見られる
+  // サークルの画像を全画面で見る（ユーザーの指示：机を押しただけでは出さず、下の欄の「画像を見る」を押したとき。
+  // 全体を暗くして、画像をぽんと出す）。画像が何枚かあれば（3 枚まで）、1 枚目から順に見られる
   const [popImg, setPopImg] = useState<{ images: string[]; i: number; name: string } | null>(null);
-  const onDeskTap = useRef<(i: number) => void>(() => {});
+  const openImages = (c: Circle) => {
+    const list = c.images.length ? c.images : c.image ? [c.image] : [];
+    if (list.length) setPopImg({ images: list.map(imgUrl), i: 0, name: c.name });
+  };
+  // 全画面のあいだ：Esc で閉じる・← → で前・次
   useEffect(() => {
-    onDeskTap.current = (i) => {
-      const c = circles[day][booths[i].code];
-      const list = c ? (c.images.length ? c.images : c.image ? [c.image] : []) : [];
-      setPopImg(c && list.length ? { images: list.map(imgUrl), i: 0, name: c.name } : null);
+    if (!popImg) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPopImg(null);
+      else if (e.key === "ArrowLeft") setPopImg((p) => (p && p.i > 0 ? { ...p, i: p.i - 1 } : p));
+      else if (e.key === "ArrowRight") setPopImg((p) => (p && p.i < p.images.length - 1 ? { ...p, i: p.i + 1 } : p));
+      else return;
+      e.stopPropagation();
     };
-  });
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [popImg]);
   // 「歩く」は、立つ机を選んでから始める（選ぶまでは、いまの見方のまま案内を出す）
   const [walkPending, setWalkPending] = useState(false);
   // 歩き始める場所を選ぶあいだは、上から・3D の地図に線路（青い線）を出す（ユーザーの指示）
@@ -2755,7 +2773,6 @@ export function VenueView() {
     // ---- タップで机を選ぶ（ドラッグとは分ける） ----
     const ray = new THREE.Raycaster();
     const pick = (i: number) => {
-      onDeskTap.current(i);
       setSelected(i);
       setPickLine(booths[i].line);
       setPickNum(booths[i].num);
@@ -4227,51 +4244,56 @@ export function VenueView() {
     {/* 長押しで文字が選ばれたり、メニューが出たりしないように（入力欄は除く。globals.css の .app） */}
     <div className="app" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }} onContextMenu={(e) => e.preventDefault()}>
       {popImg && (
+        // 全画面：まわりを暗くして、画像をぽんと出す。暗い所・✕・Esc で閉じる。2 本の指・ダブルタップで拡大
         <div
           role="dialog"
           aria-label={`${popImg.name} の画像`}
+          className="lb-fade"
           onClick={() => setPopImg(null)}
-          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,.9)", display: "flex", flexDirection: "column", color: "#fff" }}
         >
-          <div
-            // 画像の上を押しても閉じない（指で拡大するとき・前・次のボタンを押しそこねたときに閉じないように）
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "var(--card)", borderRadius: 14, padding: 10, boxShadow: "0 6px 24px rgba(0,0,0,.35)", textAlign: "center", maxWidth: "min(92vw, 520px)" }}
-          >
-            {/* 指で拡大できる（画像を変えたら、元の大きさから） */}
-            <ZoomImg key={popImg.images[popImg.i]} src={popImg.images[popImg.i]} size="min(84vw, 62vh, 520px)" />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", flex: "none" }}>
+            <span style={{ fontSize: ".9rem", opacity: 0.85, minWidth: 44 }}>{popImg.images.length > 1 ? `${popImg.i + 1} / ${popImg.images.length}` : ""}</span>
+            <strong style={{ flex: 1, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{popImg.name}</strong>
+            <button className="lb-btn" aria-label="閉じる" onClick={() => setPopImg(null)}>
+              ✕
+            </button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {/* 画像を変えたら、元の大きさで、また ぽんと出す */}
+            <div key={popImg.images[popImg.i]} className="lb-pop">
+              <ZoomImg src={popImg.images[popImg.i]} width="100vw" height="calc(100dvh - 104px)" onOutside={() => setPopImg(null)} />
+            </div>
             {popImg.images.length > 1 && (
-              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, marginTop: 8 }}>
+              <>
                 <button
-                  className="chip"
+                  className="lb-btn"
                   aria-label="前の画像"
                   disabled={popImg.i === 0}
+                  style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }}
                   onClick={(e) => {
                     e.stopPropagation();
                     setPopImg({ ...popImg, i: popImg.i - 1 });
                   }}
                 >
-                  ‹ 前
+                  ‹
                 </button>
-                <span style={{ fontSize: ".9rem" }}>
-                  {popImg.i + 1} / {popImg.images.length}
-                </span>
                 <button
-                  className="chip"
+                  className="lb-btn"
                   aria-label="次の画像"
                   disabled={popImg.i === popImg.images.length - 1}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)" }}
                   onClick={(e) => {
                     e.stopPropagation();
                     setPopImg({ ...popImg, i: popImg.i + 1 });
                   }}
                 >
-                  次 ›
+                  ›
                 </button>
-              </div>
+              </>
             )}
-            <div style={{ marginTop: 8, fontWeight: 700 }}>{popImg.name}</div>
-            <div style={{ fontSize: ".8rem", color: "var(--muted)" }}>2 本の指で広げる（ダブルタップでも）と拡大できます。画像の外を押すと閉じます</div>
           </div>
+          <div style={{ flex: "none", textAlign: "center", fontSize: ".8rem", opacity: 0.7, padding: "6px 10px 12px" }}>2 本の指で広げる・ダブルタップで拡大。まわりの暗い所を押すと閉じます</div>
         </div>
       )}
       <div ref={box} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none" }}>
@@ -4657,7 +4679,7 @@ export function VenueView() {
                 </>
               )}
             </div>
-            {circles[day][sel.code] && <CircleCard c={circles[day][sel.code]} />}
+            {circles[day][sel.code] && <CircleCard c={circles[day][sel.code]} onOpen={() => openImages(circles[day][sel.code])} />}
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               {/* 当日・計画のモードでも ★ 行きたい・◆ 候補の印をつけられる（ユーザーの指示）。
                   「✓ 行った」にできるのは、印がある机だけ */}
