@@ -2796,7 +2796,8 @@ export function VenueView() {
       setPickNum(booths[i].num);
       setPickHalf(booths[i].half);
     };
-    let down: { x: number; y: number; yaw: number; pitch: number } | null = null;
+    // touch：指で動かした（スマホ）。歩くときの左右の向きを、景色をつかんで動かす向きにする
+    let down: { x: number; y: number; yaw: number; pitch: number; touch: boolean } | null = null;
     // 歩くとき：ストリートビューのように、床をダブルタップするとそこへ歩いていく
     let lastTap: { t: number; x: number; y: number } | null = null;
     const floorAt = (e: PointerEvent) => {
@@ -2819,12 +2820,14 @@ export function VenueView() {
       persp.position.z = q.at[1];
     };
     const onDown = (e: PointerEvent) => {
-      down = { x: e.clientX, y: e.clientY, yaw, pitch };
+      down = { x: e.clientX, y: e.clientY, yaw, pitch, touch: e.pointerType === "touch" };
       if (current === "walk") renderer.domElement.setPointerCapture(e.pointerId);
     };
     const onMove = (e: PointerEvent) => {
       if (!down || current !== "walk") return;
-      yaw = down.yaw - (e.clientX - down.x) * 0.005;
+      // スマホ（指）は、景色をつかんで動かす向き（右へなぞると左を向く。ユーザーの指示）。
+      // パソコン（マウス）は、これまでどおり、なぞった方を向く
+      yaw = down.yaw + (e.clientX - down.x) * (down.touch ? 0.005 : -0.005);
       // 上下には動かさない（左右の向きだけ）
     };
     const onUp = (e: PointerEvent) => {
